@@ -1,0 +1,9 @@
+{
+  "data": [
+    {
+      "id": "client-1",
+      "type": "WIRELESS",
+      "uplinkDeviceId": "device-1"
+    }
+  ]
+}

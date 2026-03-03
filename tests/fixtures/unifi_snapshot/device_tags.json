@@ -1,0 +1,9 @@
+{
+  "data": [
+    {
+      "id": "tag-1",
+      "name": "Broadcast APs",
+      "deviceIds": ["device-1"]
+    }
+  ]
+}

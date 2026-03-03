@@ -1,0 +1,9 @@
+{
+  "data": [
+    {
+      "id": "wifi-1",
+      "name": "Main WiFi",
+      "enabled": true
+    }
+  ]
+}

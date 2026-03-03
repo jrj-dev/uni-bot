@@ -1,0 +1,5 @@
+.env.local
+.DS_Store
+*.webarchive
+*.mhtml
+data/unifi/snapshots/

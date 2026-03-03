@@ -1,0 +1,9 @@
+{
+  "data": [
+    {
+      "id": "fw-policy-1",
+      "name": "Allow DNS",
+      "action": "ALLOW"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "data": [
+    {
+      "id": "network-1",
+      "name": "LAN",
+      "type": "CORPORATE"
+    }
+  ]
+}
