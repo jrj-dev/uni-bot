@@ -183,6 +183,8 @@ def resolve_site_id(args: argparse.Namespace) -> str | None:
     if not site_ref:
         raise SystemExit(f"{args.query} requires --site-id or --site-ref")
 
+    # Site references like "default" are stable enough for day-to-day use, but the
+    # API itself still expects the UUID site ID in the final request path.
     sites = load_sites(args.insecure)
     for site in sites:
         if site.get("internalReference") == site_ref:
@@ -294,6 +296,8 @@ def fetch_all_pages(
     if query_name in NON_PAGINATED_QUERIES:
         return run_json_query(path, query_items, insecure)
 
+    # When the endpoint follows the standard UniFi pagination envelope, walk pages
+    # until the reported total is exhausted and return one merged payload.
     filtered_items = [(key, value) for key, value in query_items if key not in {"offset", "limit"}]
     pages: list[dict] = []
     offset = 0

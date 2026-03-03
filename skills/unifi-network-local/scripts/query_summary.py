@@ -44,6 +44,8 @@ def require_site_id(args: argparse.Namespace) -> str:
         return args.site_id
     if not args.site_ref:
         raise SystemExit(f"{args.summary} requires --site-id or --site-ref")
+    # Summary mode shares the same convenience as named queries: resolve a human
+    # friendly site reference once, then use the UUID for all downstream calls.
     sites = rows(load_named_query("sites", insecure=args.insecure))
     for site in sites:
         if site.get("internalReference") == args.site_ref:
@@ -55,6 +57,8 @@ def require_site_id(args: argparse.Namespace) -> str:
 
 
 def load_named_query(query: str, *, site_id: str | None = None, insecure: bool) -> dict:
+    # Higher-level summaries deliberately build on the existing CLI wrapper so the
+    # request rules, pagination behavior, and auth handling stay in one place.
     cmd = [sys.executable, str(NAMED_QUERY_SCRIPT), query, "--all-pages"]
     if site_id:
         cmd.extend(["--site-id", site_id])
@@ -169,6 +173,7 @@ def summarize_firewall(site_id: str, insecure: bool) -> int:
     zone_pairs = Counter()
 
     for policy in policies:
+        # UniFi nests the action verb in an object, so flatten it here before counting.
         action = policy.get("action", {})
         action_name = action.get("type", "UNKNOWN") if isinstance(action, dict) else str(action)
         actions[action_name] += 1
