@@ -1,16 +1,26 @@
 # uni-bot
 
-`uni-bot` is a local UniFi Network troubleshooting assistant and script bundle.
+`uni-bot` is a local UniFi Network troubleshooting assistant that lets you chat with an AI about your real network data.
 
-It is designed to inspect and summarize UniFi Network state through the local integration API, using an API key and read-only queries by default.
+It includes Python scripts for querying the UniFi local integration API and a native iOS app (**Network Genius**) that wraps those capabilities into a conversational interface powered by Claude or ChatGPT.
 
 ## What It Is
 
-This repository currently centers on the `unifi-network-local` skill and helper scripts under:
+### Network Genius (iOS App)
 
-- `skills/unifi-network-local/scripts`
+A SwiftUI chat app in `NetworkGenius/` that connects to your UniFi console over your local network and feeds real data to an LLM so you can ask natural-language questions about your network.
 
-The tooling is built for:
+- On your home WiFi: queries the console directly, LLM answers with real data
+- Off-network: LLM provides general networking advice
+- Supports both Claude (Anthropic) and OpenAI as LLM providers
+- All API keys stored in iOS Keychain, never in plaintext
+- Read-only access to the UniFi console
+
+**To build:** Open `NetworkGenius/NetworkGenius.xcodeproj` in Xcode 15.4+, set your development team, and run on a device or simulator (iOS 17.0+).
+
+### Python Scripts
+
+The `unifi-network-local` skill and helper scripts under `skills/unifi-network-local/scripts/` provide the original CLI tooling:
 
 - pulling inventory and operational data from UniFi Network
 - running named queries for common resources
@@ -139,6 +149,51 @@ Generate an overview summary:
 python3 skills/unifi-network-local/scripts/query_summary.py overview --site-ref default
 ```
 
+## Network Genius iOS App
+
+### First Launch
+
+1. Open the app and enter your UniFi console URL (e.g. `https://192.168.1.1`)
+2. Enter your UniFi API key (created in UniFi Console under Settings > API)
+3. Enter your site ID (or use the "Test Connection" button to verify)
+4. Choose Claude or OpenAI and enter the corresponding API key
+5. Start chatting about your network
+
+### What You Can Ask
+
+- "How many devices are on my network?"
+- "Give me a network overview"
+- "Which AP has the most clients?"
+- "Show me my firewall policies"
+- "What WiFi networks are configured?"
+- "Are there any security concerns?"
+
+### Project Structure
+
+```
+NetworkGenius/
+├── NetworkGenius.xcodeproj
+├── NetworkGenius/
+│   ├── App/              -- @main entry point, global state
+│   ├── Models/           -- ChatMessage, UniFi types, LLM types, tool schemas
+│   ├── Services/
+│   │   ├── UniFi/        -- API client, query service, summary service
+│   │   ├── LLM/          -- Claude + OpenAI services, tool executor
+│   │   ├── KeychainHelper.swift
+│   │   └── NetworkMonitor.swift
+│   ├── ViewModels/       -- Chat and settings view models
+│   ├── Views/            -- Chat, settings, onboarding, components
+│   └── Resources/        -- Assets, system prompt
+└── NetworkGeniusTests/
+```
+
+### Requirements
+
+- Xcode 15.4+
+- iOS 17.0+ deployment target
+- A UniFi Network console with a local API key
+- A Claude or OpenAI API key
+
 ## Safety for Distribution
 
 When distributing this repository:
@@ -147,11 +202,18 @@ When distributing this repository:
 - never publish real API keys
 - avoid publishing live snapshot data from `data/unifi/snapshots/`
 - avoid publishing controller-specific identifiers (site IDs, device names, SSIDs, client info)
+- the iOS app stores all keys in the device Keychain, never in files
 
 ## Testing
 
-Run tests:
+Python tests:
 
 ```bash
 python3 -m unittest -v tests/test_unifi_network_local.py
+```
+
+iOS tests (requires Xcode):
+
+```bash
+xcodebuild test -project NetworkGenius/NetworkGenius.xcodeproj -scheme NetworkGenius -destination 'platform=iOS Simulator,name=iPhone 16'
 ```
