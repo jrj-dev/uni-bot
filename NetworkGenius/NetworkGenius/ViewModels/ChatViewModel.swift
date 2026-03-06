@@ -14,6 +14,7 @@ final class ChatViewModel: ObservableObject {
     private var toolExecutor: ToolExecutor?
     private var networkMonitor: NetworkMonitor?
     private var appState: AppState?
+    var speechService: SpeechService?
 
     private let systemPrompt: String = {
         if let url = Bundle.main.url(forResource: "SystemPrompt", withExtension: "txt"),
@@ -93,6 +94,7 @@ final class ChatViewModel: ObservableObject {
             messages.append(ChatMessage(role: .assistant, content: finalText))
             llmMessages.append(LLMMessage(role: .assistant, content: finalText))
             trimHistory()
+            speechService?.speak(finalText)
 
         } catch {
             messages.append(ChatMessage(role: .assistant, content: "Error: \(error.localizedDescription)"))

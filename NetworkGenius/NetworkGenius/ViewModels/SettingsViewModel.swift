@@ -11,6 +11,9 @@ final class SettingsViewModel: ObservableObject {
     @Published var allowSelfSignedCerts: Bool = true
     @Published var selectedProvider: LLMProvider = .claude
 
+    @Published var voiceEnabled: Bool = false
+    @Published var selectedVoiceID: String = ""
+
     @Published var connectionTestResult: String?
     @Published var isTesting = false
 
@@ -22,6 +25,8 @@ final class SettingsViewModel: ObservableObject {
         unifiAPIKey = KeychainHelper.loadString(key: .unifiAPIKey) ?? ""
         claudeAPIKey = KeychainHelper.loadString(key: .claudeAPIKey) ?? ""
         openaiAPIKey = KeychainHelper.loadString(key: .openaiAPIKey) ?? ""
+        voiceEnabled = UserDefaults.standard.bool(forKey: "voiceEnabled")
+        selectedVoiceID = UserDefaults.standard.string(forKey: "selectedVoiceID") ?? ""
     }
 
     func save(to appState: AppState) {
@@ -39,6 +44,9 @@ final class SettingsViewModel: ObservableObject {
         if !openaiAPIKey.isEmpty {
             KeychainHelper.save(key: .openaiAPIKey, string: openaiAPIKey)
         }
+
+        UserDefaults.standard.set(voiceEnabled, forKey: "voiceEnabled")
+        UserDefaults.standard.set(selectedVoiceID, forKey: "selectedVoiceID")
     }
 
     var isValid: Bool {

@@ -4,6 +4,7 @@ struct ChatView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var networkMonitor: NetworkMonitor
     @StateObject private var viewModel = ChatViewModel()
+    @StateObject private var speechService = SpeechService()
     @State private var showSettings = false
 
     var body: some View {
@@ -32,11 +33,11 @@ struct ChatView: View {
                     }
                 }
 
-                ChatInputBar(isLoading: viewModel.isLoading) { text in
+                ChatInputBar(isLoading: viewModel.isLoading, onSend: { text in
                     Task {
                         await viewModel.sendMessage(text)
                     }
-                }
+                }, speechService: speechService)
             }
             .navigationTitle("Network Genius")
             .navigationBarTitleDisplayMode(.inline)
@@ -44,7 +45,17 @@ struct ChatView: View {
                 ToolbarItem(placement: .topBarLeading) {
                     NetworkStatusBadge()
                 }
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    // Voice toggle
+                    Button {
+                        speechService.voiceEnabled.toggle()
+                        if !speechService.voiceEnabled {
+                            speechService.stopSpeaking()
+                        }
+                    } label: {
+                        Image(systemName: speechService.voiceEnabled ? "speaker.wave.2.fill" : "speaker.slash")
+                    }
+
                     Button {
                         showSettings = true
                     } label: {
@@ -52,12 +63,17 @@ struct ChatView: View {
                     }
                 }
             }
-            .sheet(isPresented: $showSettings) {
+            .sheet(isPresented: $showSettings, onDismiss: {
+                speechService.voiceEnabled = UserDefaults.standard.bool(forKey: "voiceEnabled")
+                speechService.selectedVoiceIdentifier = UserDefaults.standard.string(forKey: "selectedVoiceID") ?? ""
+            }) {
                 SettingsView()
             }
             .onAppear {
+                viewModel.speechService = speechService
                 viewModel.configure(appState: appState, networkMonitor: networkMonitor)
                 Task {
+                    await speechService.requestPermissions()
                     await networkMonitor.probeConsole(
                         baseURL: appState.consoleURL,
                         allowSelfSigned: appState.allowSelfSignedCerts

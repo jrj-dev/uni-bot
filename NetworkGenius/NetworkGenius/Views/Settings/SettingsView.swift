@@ -10,6 +10,7 @@ struct SettingsView: View {
             Form {
                 UniFiSettingsSection(viewModel: viewModel)
                 LLMSettingsSection(viewModel: viewModel)
+                VoiceSettingsSection(viewModel: viewModel)
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
