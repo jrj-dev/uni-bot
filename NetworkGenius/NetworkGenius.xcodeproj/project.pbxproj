@@ -39,6 +39,7 @@
 		A10000000000000000000030 /* SystemPrompt.txt in Resources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000030 /* SystemPrompt.txt */; };
 		A10000000000000000000031 /* SpeechService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000031 /* SpeechService.swift */; };
 		A10000000000000000000032 /* VoiceSettingsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000032 /* VoiceSettingsSection.swift */; };
+		A10000000000000000000033 /* AgentInstructions.txt in Resources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000033 /* AgentInstructions.txt */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -74,6 +75,7 @@
 		B10000000000000000000030 /* SystemPrompt.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = SystemPrompt.txt; sourceTree = "<group>"; };
 		B10000000000000000000031 /* SpeechService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechService.swift; sourceTree = "<group>"; };
 		B10000000000000000000032 /* VoiceSettingsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceSettingsSection.swift; sourceTree = "<group>"; };
+		B10000000000000000000033 /* AgentInstructions.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = AgentInstructions.txt; sourceTree = "<group>"; };
 		C10000000000000000000001 /* NetworkGenius.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NetworkGenius.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -227,6 +229,7 @@
 			children = (
 				B10000000000000000000029 /* Assets.xcassets */,
 				B10000000000000000000030 /* SystemPrompt.txt */,
+				B10000000000000000000033 /* AgentInstructions.txt */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -299,6 +302,7 @@
 			files = (
 				A10000000000000000000029 /* Assets.xcassets in Resources */,
 				A10000000000000000000030 /* SystemPrompt.txt in Resources */,
+				A10000000000000000000033 /* AgentInstructions.txt in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
