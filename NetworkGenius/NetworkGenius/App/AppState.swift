@@ -15,6 +15,7 @@ final class AppState: ObservableObject {
     @AppStorage("llmProvider") private var llmProviderRaw: String = LLMProvider.claude.rawValue
     @AppStorage("allowSelfSignedCerts") var allowSelfSignedCerts: Bool = true
     @AppStorage("shareDeviceContextWithLLM") var shareDeviceContextWithLLM: Bool = false
+    @AppStorage("hideReasoningOutput") var hideReasoningOutput: Bool = true
     @AppStorage("darkModeEnabled") var darkModeEnabled: Bool = true
     @AppStorage("grafanaLokiURL") var grafanaLokiURL: String = ""
     @AppStorage("lmStudioBaseURL") var lmStudioBaseURL: String = ""

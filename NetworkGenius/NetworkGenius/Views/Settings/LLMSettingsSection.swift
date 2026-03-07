@@ -66,6 +66,11 @@ struct LLMSettingsSection: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
+            Toggle("Hide Reasoning Output", isOn: $viewModel.hideReasoningOutput)
+            Text("For reasoning models, internal thinking is suppressed from chat and voice output.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
             VStack(alignment: .leading, spacing: 8) {
                 Button {
                     Task { await viewModel.testSelectedLLMKey() }

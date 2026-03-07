@@ -18,6 +18,7 @@ final class SettingsViewModel: ObservableObject {
     @Published var allowSelfSignedCerts: Bool = true
     @Published var selectedProvider: LLMProvider = .claude
     @Published var shareDeviceContextWithLLM: Bool = false
+    @Published var hideReasoningOutput: Bool = true
     @Published var darkModeEnabled: Bool = true
 
     @Published var voiceEnabled: Bool = false
@@ -53,6 +54,7 @@ final class SettingsViewModel: ObservableObject {
         allowSelfSignedCerts = appState.allowSelfSignedCerts
         selectedProvider = appState.llmProvider
         shareDeviceContextWithLLM = appState.shareDeviceContextWithLLM
+        hideReasoningOutput = appState.hideReasoningOutput
         darkModeEnabled = appState.darkModeEnabled
         unifiAPIKey = KeychainHelper.loadString(key: .unifiAPIKey) ?? ""
         grafanaLokiAPIKey = KeychainHelper.loadString(key: .grafanaLokiAPIKey) ?? ""
@@ -80,6 +82,7 @@ final class SettingsViewModel: ObservableObject {
         appState.allowSelfSignedCerts = allowSelfSignedCerts
         appState.llmProvider = selectedProvider
         appState.shareDeviceContextWithLLM = shareDeviceContextWithLLM
+        appState.hideReasoningOutput = hideReasoningOutput
         appState.darkModeEnabled = darkModeEnabled
 
         let normalizedUniFiKey = normalizedKey(unifiAPIKey)

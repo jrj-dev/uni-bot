@@ -102,9 +102,10 @@ final class ChatViewModel: ObservableObject {
             debugLog("Initial LLM response received (toolCalls=\(response.toolCalls.count))", category: "Chat")
 
             while !response.toolCalls.isEmpty {
+                let assistantToolText = sanitizeAssistantText(response.text ?? "")
                 let assistantMsg = LLMMessage(
                     role: .assistant,
-                    content: response.text ?? "",
+                    content: assistantToolText,
                     toolCalls: response.toolCalls
                 )
                 llmMessages.append(assistantMsg)
@@ -125,7 +126,7 @@ final class ChatViewModel: ObservableObject {
                 debugLog("Follow-up LLM response received (toolCalls=\(response.toolCalls.count))", category: "Chat")
             }
 
-            let finalText = response.text ?? ""
+            let finalText = sanitizeAssistantText(response.text ?? "")
             messages.append(ChatMessage(role: .assistant, content: finalText))
             llmMessages.append(LLMMessage(role: .assistant, content: finalText))
             trimHistory()
@@ -215,12 +216,48 @@ final class ChatViewModel: ObservableObject {
         }
 
         var systemPrompt = injectedPrefix + baseSystemPrompt
+        if appState?.llmProvider == .lmStudio, appState?.hideReasoningOutput == true {
+            systemPrompt += """
+
+            When solving tasks, reason internally. Do not output internal reasoning, chain-of-thought, scratchpad, or <think> sections. Return only concise final answers and necessary tool results.
+            """
+        }
         guard appState?.shareDeviceContextWithLLM == true else {
             return systemPrompt
         }
         let context = DeviceContextProvider.snapshot(appState: appState, networkMonitor: networkMonitor)
         systemPrompt += context.promptBlock + "\nUse this context when answering questions about this device."
         return systemPrompt
+    }
+
+    private func sanitizeAssistantText(_ text: String) -> String {
+        guard appState?.hideReasoningOutput == true else {
+            return text
+        }
+        var cleaned = text
+        let patterns: [String] = [
+            #"<think\b[^>]*>[\s\S]*?</think>"#,
+            #"<reasoning\b[^>]*>[\s\S]*?</reasoning>"#,
+            #"```thinking[\s\S]*?```"#,
+        ]
+        for pattern in patterns {
+            cleaned = cleaned.replacingRegex(pattern, with: "")
+        }
+        cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.isEmpty, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "Done."
+        }
+        return cleaned
+    }
+}
+
+private extension String {
+    func replacingRegex(_ pattern: String, with template: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return self
+        }
+        let range = NSRange(startIndex..<endIndex, in: self)
+        return regex.stringByReplacingMatches(in: self, options: [], range: range, withTemplate: template)
     }
 }
 
