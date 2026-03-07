@@ -3,3 +3,7 @@
 *.webarchive
 *.mhtml
 data/unifi/snapshots/
+
+# Xcode user-specific files
+**/xcuserdata/
+**/*.xcuserstate
