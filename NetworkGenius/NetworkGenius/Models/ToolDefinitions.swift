@@ -111,6 +111,22 @@ enum ToolCatalog {
             description: "Security posture summary: ACL rules, DNS policies, VPN, RADIUS profiles.",
             parameters: []
         ),
+        ToolDefinition(
+            name: "search_unifi_docs",
+            description: "Search official UniFi Help Center documentation for a topic.",
+            parameters: [
+                ToolParameter(name: "query", type: "string", description: "Search phrase, e.g. 'WiFi optimization' or 'firewall rules'.", required: true),
+                ToolParameter(name: "max_results", type: "integer", description: "Maximum results to return (1-8). Default is 5.", required: false),
+            ]
+        ),
+        ToolDefinition(
+            name: "get_unifi_doc",
+            description: "Fetch an official UniFi Help Center article by ID or article URL.",
+            parameters: [
+                ToolParameter(name: "article_id", type: "string", description: "Help Center article ID, e.g. '32065480092951'.", required: false),
+                ToolParameter(name: "article_url", type: "string", description: "Help Center article URL containing /articles/<id>-...", required: false),
+            ]
+        ),
     ]
 
     static func claudeToolSchemas() -> [[String: Any]] {

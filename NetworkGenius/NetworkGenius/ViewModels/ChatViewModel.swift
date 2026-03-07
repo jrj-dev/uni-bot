@@ -30,6 +30,14 @@ final class ChatViewModel: ObservableObject {
         general networking advice based on your knowledge.
         """
     }()
+    private let agentInstructions: String = {
+        guard let url = Bundle.main.url(forResource: "AgentInstructions", withExtension: "txt"),
+              let text = try? String(contentsOf: url, encoding: .utf8)
+        else {
+            return ""
+        }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }()
 
     func configure(appState: AppState, networkMonitor: NetworkMonitor) {
         self.appState = appState
@@ -134,11 +142,26 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func buildSystemPrompt() -> String {
+        let injectedPrefix: String
+        if agentInstructions.isEmpty {
+            debugLog("No AgentInstructions.txt found; context injection skipped", category: "Prompt")
+            injectedPrefix = ""
+        } else {
+            debugLog("Injecting AgentInstructions.txt (\(agentInstructions.count) chars)", category: "Prompt")
+            injectedPrefix = """
+            Agent Instructions:
+            \(agentInstructions)
+
+            """
+        }
+
+        var systemPrompt = injectedPrefix + baseSystemPrompt
         guard appState?.shareDeviceContextWithLLM == true else {
-            return baseSystemPrompt
+            return systemPrompt
         }
         let context = DeviceContextProvider.snapshot(appState: appState, networkMonitor: networkMonitor)
-        return baseSystemPrompt + context.promptBlock + "\nUse this context when answering questions about this device."
+        systemPrompt += context.promptBlock + "\nUse this context when answering questions about this device."
+        return systemPrompt
     }
 }
 
