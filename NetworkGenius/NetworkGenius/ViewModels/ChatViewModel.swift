@@ -58,7 +58,8 @@ final class ChatViewModel: ObservableObject {
         self.toolExecutor = ToolExecutor(
             queryService: queryService,
             summaryService: summaryService,
-            networkMonitor: networkMonitor
+            networkMonitor: networkMonitor,
+            lokiBaseURL: appState.grafanaLokiURL
         )
 
         switch appState.llmProvider {

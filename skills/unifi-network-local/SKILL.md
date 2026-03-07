@@ -37,6 +37,10 @@ Use the bundled script to talk to the local UniFi Network API.
 - `security_summary`: Security posture summary (ACL, DNS, VPN, RADIUS). Parameters: none.
 - `search_unifi_docs`: Search official UniFi Help Center docs. Parameters: `query` (required), `max_results` (optional, integer 1-8).
 - `get_unifi_doc`: Fetch an official UniFi Help Center article by ID or URL. Parameters: `article_id` (optional), `article_url` (optional). Provide at least one.
+- `query_unifi_logs`: Query Grafana Loki logs over a recent time range. Parameters: `query` (optional), `minutes` (optional), `limit` (optional), `direction` (optional).
+- `query_unifi_logs_instant`: Run an instant Grafana Loki query. Parameters: `query` (required), `limit` (optional).
+- `list_unifi_log_labels`: List available Loki labels. Parameters: none.
+- `list_unifi_log_label_values`: List values for one Loki label. Parameters: `label` (required).
 
 ## Work Safely
 
@@ -51,6 +55,8 @@ Set these values in the shell before making requests:
 
 - `UNIFI_BASE_URL`: Console base URL, for example `https://unifi.local`.
 - `UNIFI_API_KEY`: Local API key with the minimum required permissions.
+- `LOKI_BASE_URL`: Loki base URL, for example `http://loki.local:3100` (required for Loki queries).
+- `LOKI_API_KEY`: Optional Loki bearer token.
 
 For a reusable skill, keep your real credentials file outside the project tree, for example:
 
@@ -80,6 +86,11 @@ The integration API uses:
 - Base path: `https://<console>/proxy/network/integration`
 - Header: `X-API-KEY: <api-key>`
 - Header: `Accept: application/json`
+
+For Loki queries use:
+
+- Base path: `http://<loki>/loki/api/v1`
+- Optional header: `Authorization: Bearer <loki-api-key>`
 
 The docs show paginated list responses with `offset`, `limit`, `count`, `totalCount`, and `data`.
 
@@ -181,6 +192,22 @@ Available summaries:
 - `devices`: state, model, and firmware inventory
 - `pending-devices`: adoption backlog
 - `guest-access`: guest client count plus guest-like SSIDs
+
+Run named Loki queries:
+
+```bash
+python3 skills/unifi-network-local/scripts/loki_query.py query-range --logql '{job="unifi"}' --minutes 60 --limit 100 --direction backward
+python3 skills/unifi-network-local/scripts/loki_query.py query-instant --logql '{job="unifi"} |= "DROP"' --limit 50
+python3 skills/unifi-network-local/scripts/loki_query.py labels
+python3 skills/unifi-network-local/scripts/loki_query.py label-values --label host
+```
+
+Run UniFi Help Center documentation helpers:
+
+```bash
+python3 skills/unifi-network-local/scripts/unifi_docs.py search "firewall rules"
+python3 skills/unifi-network-local/scripts/unifi_docs.py article --article-id 32065480092951
+```
 
 ## Publishing Safety
 

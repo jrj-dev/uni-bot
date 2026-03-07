@@ -5,11 +5,18 @@ final class ToolExecutor {
     private let summaryService: UniFiSummaryService
     private let networkMonitor: NetworkMonitor
     private let docsService = UniFiDocumentationService()
+    private let lokiService: GrafanaLokiService
 
-    init(queryService: UniFiQueryService, summaryService: UniFiSummaryService, networkMonitor: NetworkMonitor) {
+    init(
+        queryService: UniFiQueryService,
+        summaryService: UniFiSummaryService,
+        networkMonitor: NetworkMonitor,
+        lokiBaseURL: String
+    ) {
         self.queryService = queryService
         self.summaryService = summaryService
         self.networkMonitor = networkMonitor
+        self.lokiService = GrafanaLokiService(baseURL: lokiBaseURL)
     }
 
     @MainActor
@@ -71,6 +78,22 @@ final class ToolExecutor {
                     articleID: toolCall.arguments["article_id"],
                     articleURL: toolCall.arguments["article_url"]
                 )
+            case "query_unifi_logs":
+                output = try await lokiService.queryRange(
+                    query: toolCall.arguments["query"],
+                    minutes: Int(toolCall.arguments["minutes"] ?? ""),
+                    limit: Int(toolCall.arguments["limit"] ?? ""),
+                    direction: toolCall.arguments["direction"]
+                )
+            case "query_unifi_logs_instant":
+                output = try await lokiService.queryInstant(
+                    query: toolCall.arguments["query"],
+                    limit: Int(toolCall.arguments["limit"] ?? "")
+                )
+            case "list_unifi_log_labels":
+                output = try await lokiService.listLabels()
+            case "list_unifi_log_label_values":
+                output = try await lokiService.labelValues(label: toolCall.arguments["label"])
             default:
                 output = "Unknown tool: \(toolCall.name)"
             }
@@ -82,6 +105,233 @@ final class ToolExecutor {
             debugLog("Tool '\(toolCall.name)' failed in \(elapsedMS)ms: \(error.localizedDescription)", category: "Tools")
             return "Error executing \(toolCall.name): \(error.localizedDescription)"
         }
+    }
+}
+
+private struct GrafanaLokiService {
+    private let baseURL: String
+
+    init(baseURL: String) {
+        self.baseURL = UniFiAPIClient.normalizeBaseURL(baseURL)
+        if self.baseURL.isEmpty {
+            debugLog("Loki service configured without base URL", category: "Logs")
+        } else {
+            let host = URL(string: self.baseURL)?.host ?? "unknown"
+            debugLog("Loki service configured (host=\(host))", category: "Logs")
+        }
+    }
+
+    func queryRange(query: String?, minutes rawMinutes: Int?, limit rawLimit: Int?, direction rawDirection: String?) async throws -> String {
+        guard !baseURL.isEmpty else {
+            debugLog("Loki query_range skipped: base URL missing", category: "Logs")
+            return "Error: Loki base URL is not configured in Settings."
+        }
+
+        let q = normalizedQuery(query)
+        let minutes = max(1, min(rawMinutes ?? 60, 1440))
+        let limit = max(1, min(rawLimit ?? 100, 500))
+        let direction = normalizedDirection(rawDirection)
+        debugLog(
+            "Loki query_range requested (minutes=\(minutes), limit=\(limit), direction=\(direction), query=\(q))",
+            category: "Logs"
+        )
+        let endNanos = unixNanos(Date())
+        let startNanos = unixNanos(Date().addingTimeInterval(-Double(minutes) * 60.0))
+
+        var components = URLComponents(string: "\(baseURL)/loki/api/v1/query_range")!
+        components.queryItems = [
+            URLQueryItem(name: "query", value: q),
+            URLQueryItem(name: "start", value: startNanos),
+            URLQueryItem(name: "end", value: endNanos),
+            URLQueryItem(name: "limit", value: String(limit)),
+            URLQueryItem(name: "direction", value: direction),
+        ]
+        guard let url = components.url else {
+            debugLog("Loki query_range URL construction failed", category: "Logs")
+            return "Error: Unable to construct Loki query_range URL."
+        }
+
+        let data = try await get(url: url)
+        return formatLogResponse(data: data, description: "Loki query_range", query: q, limit: limit)
+    }
+
+    func queryInstant(query: String?, limit rawLimit: Int?) async throws -> String {
+        guard !baseURL.isEmpty else {
+            debugLog("Loki instant query skipped: base URL missing", category: "Logs")
+            return "Error: Loki base URL is not configured in Settings."
+        }
+
+        let q = normalizedQuery(query)
+        let limit = max(1, min(rawLimit ?? 50, 500))
+        debugLog("Loki instant query requested (limit=\(limit), query=\(q))", category: "Logs")
+
+        var components = URLComponents(string: "\(baseURL)/loki/api/v1/query")!
+        components.queryItems = [
+            URLQueryItem(name: "query", value: q),
+            URLQueryItem(name: "limit", value: String(limit)),
+        ]
+        guard let url = components.url else {
+            debugLog("Loki query URL construction failed", category: "Logs")
+            return "Error: Unable to construct Loki query URL."
+        }
+
+        let data = try await get(url: url)
+        return formatLogResponse(data: data, description: "Loki instant query", query: q, limit: limit)
+    }
+
+    func listLabels() async throws -> String {
+        guard !baseURL.isEmpty else {
+            debugLog("Loki labels query skipped: base URL missing", category: "Logs")
+            return "Error: Loki base URL is not configured in Settings."
+        }
+        guard let url = URL(string: "\(baseURL)/loki/api/v1/labels") else {
+            debugLog("Loki labels URL construction failed", category: "Logs")
+            return "Error: Unable to construct Loki labels URL."
+        }
+        let data = try await get(url: url)
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let labels = json["data"] as? [String] else {
+            debugLog("Loki labels parse failed: unexpected payload shape", category: "Logs")
+            return "Error: Unexpected Loki labels response format."
+        }
+        if labels.isEmpty { return "No Loki labels found." }
+        return "Loki labels (\(labels.count)): " + labels.sorted().joined(separator: ", ")
+    }
+
+    func labelValues(label rawLabel: String?) async throws -> String {
+        guard !baseURL.isEmpty else {
+            debugLog("Loki label values query skipped: base URL missing", category: "Logs")
+            return "Error: Loki base URL is not configured in Settings."
+        }
+        let label = (rawLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !label.isEmpty else {
+            debugLog("Loki label values query skipped: empty label", category: "Logs")
+            return "Error: list_unifi_log_label_values requires a non-empty 'label'."
+        }
+        debugLog("Loki label values requested (label=\(label))", category: "Logs")
+        guard let url = URL(string: "\(baseURL)/loki/api/v1/label/\(label)/values") else {
+            debugLog("Loki label values URL construction failed", category: "Logs")
+            return "Error: Unable to construct Loki label values URL."
+        }
+        let data = try await get(url: url)
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let values = json["data"] as? [String] else {
+            debugLog("Loki label values parse failed: unexpected payload shape", category: "Logs")
+            return "Error: Unexpected Loki label values response format."
+        }
+        if values.isEmpty { return "No values found for label '\(label)'." }
+        return "Loki label '\(label)' values (\(values.count)): " + values.sorted().joined(separator: ", ")
+    }
+
+    private func get(url: URL) async throws -> Data {
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.timeoutInterval = 25
+
+        let token = (KeychainHelper.loadString(key: .grafanaLokiAPIKey) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        debugLog("Loki auth mode: \(token.isEmpty ? "none" : "bearer")", category: "Logs")
+
+        debugLog("Loki request started: \(url.absoluteString)", category: "Logs")
+        let startedAt = Date()
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let elapsedMS = Int(Date().timeIntervalSince(startedAt) * 1000)
+            if let http = response as? HTTPURLResponse {
+                let contentType = http.value(forHTTPHeaderField: "Content-Type") ?? "unknown"
+                debugLog(
+                    "Loki response HTTP \(http.statusCode) in \(elapsedMS)ms (bytes=\(data.count), contentType=\(contentType))",
+                    category: "Logs"
+                )
+                guard (200..<300).contains(http.statusCode) else {
+                    let bodyPreview = String(data: data.prefix(400), encoding: .utf8)?
+                        .replacingOccurrences(of: "\n", with: " ")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                        ?? "<non-utf8 body>"
+                    debugLog("Loki HTTP \(http.statusCode) bodyPreview=\(bodyPreview)", category: "Logs")
+                    throw LLMError.httpError(http.statusCode, String(data: data, encoding: .utf8) ?? "")
+                }
+            } else {
+                debugLog("Loki response received with non-HTTP metadata", category: "Logs")
+            }
+            return data
+        } catch {
+            let elapsedMS = Int(Date().timeIntervalSince(startedAt) * 1000)
+            let nsError = error as NSError
+            debugLog(
+                "Loki request failed in \(elapsedMS)ms domain=\(nsError.domain) code=\(nsError.code) description=\(error.localizedDescription)",
+                category: "Logs"
+            )
+            throw error
+        }
+    }
+
+    private func formatLogResponse(data: Data, description: String, query: String, limit: Int) -> String {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let root = json["data"] as? [String: Any],
+              let result = root["result"] as? [[String: Any]] else {
+            let preview = String(data: data.prefix(300), encoding: .utf8) ?? "<non-utf8 payload>"
+            debugLog("Loki parse failed for \(description): payloadPreview=\(preview)", category: "Logs")
+            return "Error: Unexpected Loki response format."
+        }
+
+        var entries: [String] = []
+        for stream in result {
+            let labels = stream["stream"] as? [String: String] ?? [:]
+            let labelText = labels
+                .sorted(by: { $0.key < $1.key })
+                .map { "\($0.key)=\($0.value)" }
+                .joined(separator: ", ")
+            let values = stream["values"] as? [[String]] ?? []
+            for pair in values {
+                guard pair.count >= 2 else { continue }
+                let timestamp = formattedUnixNanos(pair[0]) ?? pair[0]
+                let line = pair[1].trimmingCharacters(in: .whitespacesAndNewlines)
+                let compactLine = line.count > 240 ? String(line.prefix(240)) + "..." : line
+                if labelText.isEmpty {
+                    entries.append("[\(timestamp)] \(compactLine)")
+                } else {
+                    entries.append("[\(timestamp)] [\(labelText)] \(compactLine)")
+                }
+            }
+        }
+
+        if entries.isEmpty {
+            debugLog("Loki returned no log lines for query=\(query)", category: "Logs")
+            return "\(description): no log lines returned for query '\(query)'."
+        }
+
+        let selected = entries.prefix(limit)
+        return """
+        \(description) results (\(selected.count) lines, query=\(query)):
+        \(selected.joined(separator: "\n"))
+        """
+    }
+
+    private func normalizedQuery(_ rawQuery: String?) -> String {
+        let q = (rawQuery ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return q.isEmpty ? "{job=\"unifi\"}" : q
+    }
+
+    private func normalizedDirection(_ rawDirection: String?) -> String {
+        let direction = (rawDirection ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return direction == "forward" ? "forward" : "backward"
+    }
+
+    private func unixNanos(_ date: Date) -> String {
+        String(Int64(date.timeIntervalSince1970 * 1_000_000_000))
+    }
+
+    private func formattedUnixNanos(_ raw: String) -> String? {
+        guard let nanos = Double(raw) else { return nil }
+        let date = Date(timeIntervalSince1970: nanos / 1_000_000_000)
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date)
     }
 }
 

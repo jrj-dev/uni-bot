@@ -103,6 +103,8 @@ Then edit `.env.local` and set real values:
 ```dotenv
 UNIFI_BASE_URL=https://your-console-hostname-or-ip
 UNIFI_API_KEY=your-local-api-key
+LOKI_BASE_URL=http://your-loki-hostname-or-ip:3100
+LOKI_API_KEY=your-loki-api-key-if-required
 ```
 
 Optional variable used by `live_summary.py`:
@@ -136,6 +138,21 @@ Run a named query:
 
 ```bash
 python3 skills/unifi-network-local/scripts/named_query.py networks --site-ref default
+```
+
+Run Loki log queries:
+
+```bash
+python3 skills/unifi-network-local/scripts/loki_query.py query-range --logql '{job="unifi"}' --minutes 60 --limit 100
+python3 skills/unifi-network-local/scripts/loki_query.py labels
+python3 skills/unifi-network-local/scripts/loki_query.py label-values --label host
+```
+
+Search official UniFi docs:
+
+```bash
+python3 skills/unifi-network-local/scripts/unifi_docs.py search "wifi optimization"
+python3 skills/unifi-network-local/scripts/unifi_docs.py article --article-id 32065480092951
 ```
 
 Capture a troubleshooting snapshot:

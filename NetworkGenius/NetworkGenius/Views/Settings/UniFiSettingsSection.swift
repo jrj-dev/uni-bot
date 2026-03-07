@@ -22,5 +22,16 @@ struct UniFiSettingsSection: View {
 
             ConnectionTestButton(viewModel: viewModel)
         }
+
+        Section("Grafana Loki Logs") {
+            TextField("Loki Base URL", text: $viewModel.grafanaLokiURL)
+                .keyboardType(.URL)
+                .textContentType(.URL)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+
+            SecureField("Loki API Key (optional)", text: $viewModel.grafanaLokiAPIKey)
+                .textContentType(.password)
+        }
     }
 }

@@ -15,6 +15,7 @@ final class AppState: ObservableObject {
     @AppStorage("allowSelfSignedCerts") var allowSelfSignedCerts: Bool = true
     @AppStorage("shareDeviceContextWithLLM") var shareDeviceContextWithLLM: Bool = false
     @AppStorage("darkModeEnabled") var darkModeEnabled: Bool = true
+    @AppStorage("grafanaLokiURL") var grafanaLokiURL: String = ""
 
     var llmProvider: LLMProvider {
         get { LLMProvider(rawValue: llmProviderRaw) ?? .claude }

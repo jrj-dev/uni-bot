@@ -6,6 +6,8 @@ final class SettingsViewModel: ObservableObject {
     @Published var consoleURL: String = ""
     @Published var siteID: String = ""
     @Published var unifiAPIKey: String = ""
+    @Published var grafanaLokiURL: String = ""
+    @Published var grafanaLokiAPIKey: String = ""
     @Published var claudeAPIKey: String = ""
     @Published var openaiAPIKey: String = ""
     @Published var allowSelfSignedCerts: Bool = true
@@ -25,12 +27,14 @@ final class SettingsViewModel: ObservableObject {
 
     func load(from appState: AppState) {
         consoleURL = appState.consoleURL
+        grafanaLokiURL = appState.grafanaLokiURL
         siteID = appState.siteID
         allowSelfSignedCerts = appState.allowSelfSignedCerts
         selectedProvider = appState.llmProvider
         shareDeviceContextWithLLM = appState.shareDeviceContextWithLLM
         darkModeEnabled = appState.darkModeEnabled
         unifiAPIKey = KeychainHelper.loadString(key: .unifiAPIKey) ?? ""
+        grafanaLokiAPIKey = KeychainHelper.loadString(key: .grafanaLokiAPIKey) ?? ""
         claudeAPIKey = KeychainHelper.loadString(key: .claudeAPIKey) ?? ""
         openaiAPIKey = KeychainHelper.loadString(key: .openaiAPIKey) ?? ""
         voiceEnabled = UserDefaults.standard.bool(forKey: "voiceEnabled")
@@ -47,6 +51,7 @@ final class SettingsViewModel: ObservableObject {
 
     func save(to appState: AppState) {
         appState.consoleURL = UniFiAPIClient.normalizeBaseURL(consoleURL)
+        appState.grafanaLokiURL = UniFiAPIClient.normalizeBaseURL(grafanaLokiURL)
         appState.siteID = siteID.trimmingCharacters(in: .whitespacesAndNewlines)
         appState.allowSelfSignedCerts = allowSelfSignedCerts
         appState.llmProvider = selectedProvider
@@ -54,11 +59,15 @@ final class SettingsViewModel: ObservableObject {
         appState.darkModeEnabled = darkModeEnabled
 
         let normalizedUniFiKey = normalizedKey(unifiAPIKey)
+        let normalizedGrafanaLokiKey = normalizedKey(grafanaLokiAPIKey)
         let normalizedClaudeKey = normalizedKey(claudeAPIKey)
         let normalizedOpenAIKey = normalizedKey(openaiAPIKey)
 
         if !normalizedUniFiKey.isEmpty {
             KeychainHelper.save(key: .unifiAPIKey, string: normalizedUniFiKey)
+        }
+        if !normalizedGrafanaLokiKey.isEmpty {
+            KeychainHelper.save(key: .grafanaLokiAPIKey, string: normalizedGrafanaLokiKey)
         }
         if !normalizedClaudeKey.isEmpty {
             KeychainHelper.save(key: .claudeAPIKey, string: normalizedClaudeKey)

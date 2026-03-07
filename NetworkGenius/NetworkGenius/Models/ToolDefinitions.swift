@@ -127,6 +127,36 @@ enum ToolCatalog {
                 ToolParameter(name: "article_url", type: "string", description: "Help Center article URL containing /articles/<id>-...", required: false),
             ]
         ),
+        ToolDefinition(
+            name: "query_unifi_logs",
+            description: "Query Grafana Loki UniFi logs over a recent time range.",
+            parameters: [
+                ToolParameter(name: "query", type: "string", description: "Loki query, e.g. {job=\"unifi\"} |= \"DROP\". Default: {job=\"unifi\"}.", required: false),
+                ToolParameter(name: "minutes", type: "integer", description: "How far back to search in minutes (1-1440). Default: 60.", required: false),
+                ToolParameter(name: "limit", type: "integer", description: "Maximum log lines to return (1-500). Default: 100.", required: false),
+                ToolParameter(name: "direction", type: "string", description: "Result direction: backward or forward. Default: backward.", required: false),
+            ]
+        ),
+        ToolDefinition(
+            name: "query_unifi_logs_instant",
+            description: "Run an instant Loki query for recent matching UniFi logs.",
+            parameters: [
+                ToolParameter(name: "query", type: "string", description: "Loki query, e.g. {job=\"unifi\"} |= \"DROP\".", required: true),
+                ToolParameter(name: "limit", type: "integer", description: "Maximum log lines to return (1-500). Default: 50.", required: false),
+            ]
+        ),
+        ToolDefinition(
+            name: "list_unifi_log_labels",
+            description: "List all available label names in Loki.",
+            parameters: []
+        ),
+        ToolDefinition(
+            name: "list_unifi_log_label_values",
+            description: "List values for a specific Loki label key.",
+            parameters: [
+                ToolParameter(name: "label", type: "string", description: "Label name, e.g. host, job, level.", required: true),
+            ]
+        ),
     ]
 
     static func claudeToolSchemas() -> [[String: Any]] {
