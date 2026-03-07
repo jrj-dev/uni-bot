@@ -15,6 +15,8 @@ final class SettingsViewModel: ObservableObject {
 
     @Published var voiceEnabled: Bool = false
     @Published var selectedVoiceID: String = ""
+    @Published var ttsProvider: SpeechService.TTSProvider = .local
+    @Published var openAICloudVoice: String = "alloy"
 
     @Published var connectionTestResult: String?
     @Published var isTesting = false
@@ -33,6 +35,14 @@ final class SettingsViewModel: ObservableObject {
         openaiAPIKey = KeychainHelper.loadString(key: .openaiAPIKey) ?? ""
         voiceEnabled = UserDefaults.standard.bool(forKey: "voiceEnabled")
         selectedVoiceID = UserDefaults.standard.string(forKey: "selectedVoiceID") ?? ""
+        if let rawTTS = UserDefaults.standard.string(forKey: "ttsProvider"),
+           let provider = SpeechService.TTSProvider(rawValue: rawTTS)
+        {
+            ttsProvider = provider
+        } else {
+            ttsProvider = .local
+        }
+        openAICloudVoice = UserDefaults.standard.string(forKey: "openAICloudVoice") ?? "alloy"
     }
 
     func save(to appState: AppState) {
@@ -59,6 +69,8 @@ final class SettingsViewModel: ObservableObject {
 
         UserDefaults.standard.set(voiceEnabled, forKey: "voiceEnabled")
         UserDefaults.standard.set(selectedVoiceID, forKey: "selectedVoiceID")
+        UserDefaults.standard.set(ttsProvider.rawValue, forKey: "ttsProvider")
+        UserDefaults.standard.set(openAICloudVoice, forKey: "openAICloudVoice")
     }
 
     var isValid: Bool {

@@ -3,11 +3,10 @@ import SwiftUI
 struct ChatView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var networkMonitor: NetworkMonitor
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var viewModel = ChatViewModel()
     @StateObject private var speechService = SpeechService()
-    @StateObject private var logStore = DebugLogStore.shared
     @State private var showSettings = false
-    @State private var showLogs = false
 
     var body: some View {
         NavigationStack {
@@ -45,46 +44,34 @@ struct ChatView: View {
                     Task {
                         await viewModel.sendMessage(text)
                     }
+                }, onOpenSettings: {
+                    showSettings = true
                 }, speechService: speechService)
             }
-            .navigationTitle("Network Genius")
+            .navigationTitle("NetworkGenius")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    NetworkStatusBadge()
-                }
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button {
-                        showLogs = true
-                    } label: {
-                        Image(systemName: "terminal")
-                    }
-
-                    // Voice toggle
-                    Button {
-                        speechService.voiceEnabled.toggle()
-                        if !speechService.voiceEnabled {
-                            speechService.stopSpeaking()
-                        }
-                    } label: {
-                        Image(systemName: speechService.voiceEnabled ? "speaker.wave.2.fill" : "speaker.slash")
-                    }
-
-                    Button {
-                        showSettings = true
-                    } label: {
-                        Image(systemName: "gear")
+                ToolbarItem(placement: .principal) {
+                    VStack(spacing: 2) {
+                        Text("NetworkGenius UniFi WiFi")
+                            .font(.headline)
+                        NetworkStatusBadge()
                     }
                 }
             }
             .sheet(isPresented: $showSettings, onDismiss: {
                 speechService.voiceEnabled = UserDefaults.standard.bool(forKey: "voiceEnabled")
                 speechService.selectedVoiceIdentifier = UserDefaults.standard.string(forKey: "selectedVoiceID") ?? ""
+                if let rawProvider = UserDefaults.standard.string(forKey: "ttsProvider"),
+                   let provider = SpeechService.TTSProvider(rawValue: rawProvider)
+                {
+                    speechService.ttsProvider = provider
+                } else {
+                    speechService.ttsProvider = .local
+                }
+                speechService.openAICloudVoice = UserDefaults.standard.string(forKey: "openAICloudVoice") ?? "alloy"
             }) {
                 SettingsView()
-            }
-            .sheet(isPresented: $showLogs) {
-                DebugLogSheetView(logStore: logStore)
             }
             .onAppear {
                 debugLog("Chat view appeared", category: "UI")
@@ -100,46 +87,41 @@ struct ChatView: View {
                     await viewModel.showValidatedIntroIfNeeded()
                 }
             }
-        }
-    }
-}
-
-private struct DebugLogSheetView: View {
-    @ObservedObject var logStore: DebugLogStore
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            List(logStore.entries.reversed()) { entry in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("[\(entry.category)] \(entry.message)")
-                        .font(.caption)
-                        .textSelection(.enabled)
-                    Text(Self.timeFormatter.string(from: entry.timestamp))
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.vertical, 2)
-            }
-            .navigationTitle("Debug Logs")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Clear") {
-                        logStore.clear()
-                    }
-                    .disabled(logStore.entries.isEmpty)
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
+            .task {
+                while !Task.isCancelled {
+                    await networkMonitor.probeConsole(
+                        baseURL: appState.consoleURL,
+                        allowSelfSigned: appState.allowSelfSignedCerts
+                    )
+                    try? await Task.sleep(nanoseconds: 10_000_000_000)
                 }
             }
+            .onChange(of: scenePhase) { _, phase in
+                guard phase == .active else { return }
+                Task {
+                    debugLog("App became active; re-probing console reachability", category: "UI")
+                    await networkMonitor.probeConsole(
+                        baseURL: appState.consoleURL,
+                        allowSelfSigned: appState.allowSelfSignedCerts
+                    )
+                }
+            }
+            .onChange(of: networkMonitor.isWiFiConnected) { _, _ in
+                Task {
+                    await networkMonitor.probeConsole(
+                        baseURL: appState.consoleURL,
+                        allowSelfSigned: appState.allowSelfSignedCerts
+                    )
+                }
+            }
+            .onChange(of: networkMonitor.isVPNConnected) { _, _ in
+                Task {
+                    await networkMonitor.probeConsole(
+                        baseURL: appState.consoleURL,
+                        allowSelfSigned: appState.allowSelfSignedCerts
+                    )
+                }
+            }
         }
     }
-
-    private static let timeFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "HH:mm:ss.SSS"
-        return f
-    }()
 }

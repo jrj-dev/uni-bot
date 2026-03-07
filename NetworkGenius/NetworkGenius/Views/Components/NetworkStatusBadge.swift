@@ -8,9 +8,20 @@ struct NetworkStatusBadge: View {
             Circle()
                 .fill(networkMonitor.isOnNetwork ? .green : .gray)
                 .frame(width: 8, height: 8)
-            Text(networkMonitor.isOnNetwork ? "On Network" : "Off Network")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+            Text(statusText)
+                .font(.caption)
+                .foregroundStyle(networkMonitor.isOnNetwork ? .green : .secondary)
         }
+    }
+
+    private var statusText: String {
+        guard networkMonitor.isOnNetwork else { return "Network: Offline" }
+        if networkMonitor.isVPNConnected {
+            return "Network: Connected via VPN"
+        }
+        if networkMonitor.isWiFiConnected {
+            return "Network: Connected via Wi-Fi"
+        }
+        return "Network: Connected"
     }
 }
