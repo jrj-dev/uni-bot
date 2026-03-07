@@ -1,0 +1,22 @@
+version: "3.9"
+
+services:
+  unifi-alarm-webhook:
+    image: local/unifi-alarm-webhook:latest
+    ports:
+      - target: 8787
+        published: 8787
+        protocol: tcp
+        mode: host
+    environment:
+      LOKI_BASE_URL: ${LOKI_BASE_URL}
+      LOKI_API_KEY: ${LOKI_API_KEY}
+      UNIFI_ALARM_WEBHOOK_BIND: 0.0.0.0
+      UNIFI_ALARM_WEBHOOK_PORT: 8787
+      UNIFI_ALARM_WEBHOOK_PATH: ${UNIFI_ALARM_WEBHOOK_PATH:-/webhook/unifi/alarm}
+      UNIFI_ALARM_WEBHOOK_SECRET: ${UNIFI_ALARM_WEBHOOK_SECRET}
+      UNIFI_ALARM_LOKI_JOB: ${UNIFI_ALARM_LOKI_JOB:-unifi_alarm_manager}
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure

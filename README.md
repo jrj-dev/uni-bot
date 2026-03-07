@@ -54,6 +54,7 @@ This repo contains two parts:
   - `enabled` toggle only
   - dry-run default
   - explicit confirmation token for apply
+- UniFi Alarm Manager webhook receiver (`unifi_alarm_webhook_receiver.py`) that forwards alarms to Loki.
 
 ## Project Layout
 
@@ -88,6 +89,11 @@ LM_STUDIO_MODEL=
 UNIFI_GUARD_ALLOWED_ACL_RULE_IDS=
 UNIFI_GUARD_ALLOWED_FIREWALL_POLICY_IDS=
 UNIFI_GUARD_ALLOWED_DNS_POLICY_IDS=
+UNIFI_ALARM_WEBHOOK_BIND=0.0.0.0
+UNIFI_ALARM_WEBHOOK_PORT=8787
+UNIFI_ALARM_WEBHOOK_PATH=/webhook/unifi/alarm
+UNIFI_ALARM_WEBHOOK_SECRET=
+UNIFI_ALARM_LOKI_JOB=unifi_alarm_manager
 ```
 
 Load env vars:
@@ -173,6 +179,29 @@ python3 skills/unifi-network-local/scripts/guarded_policy_toggle.py \
   --apply \
   --confirm-token <TOKEN_FROM_DRY_RUN> \
   --insecure
+```
+
+UniFi Alarm webhook receiver (host process):
+
+```bash
+python3 skills/unifi-network-local/scripts/unifi_alarm_webhook_receiver.py
+```
+
+It listens on `UNIFI_ALARM_WEBHOOK_BIND:UNIFI_ALARM_WEBHOOK_PORT` and forwards inbound JSON alarms to Loki at `LOKI_BASE_URL/loki/api/v1/push`.
+
+Docker stack deployment (local machine):
+
+```bash
+# Build local image
+docker build -t local/unifi-alarm-webhook:latest -f skills/unifi-network-local/deploy/unifi-alarm-webhook/Dockerfile .
+
+# Export env vars (or source .env.local)
+set -a
+. ./.env.local
+set +a
+
+# Deploy stack
+docker stack deploy -c skills/unifi-network-local/deploy/unifi-alarm-webhook/stack.yml unifi-tools
 ```
 
 ## Testing

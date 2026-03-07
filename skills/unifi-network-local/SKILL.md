@@ -67,6 +67,11 @@ Set these values in the shell before making requests:
 - `UNIFI_GUARD_ALLOWED_ACL_RULE_IDS`: Comma-separated ACL rule IDs that guarded writes may toggle.
 - `UNIFI_GUARD_ALLOWED_FIREWALL_POLICY_IDS`: Comma-separated firewall policy IDs that guarded writes may toggle.
 - `UNIFI_GUARD_ALLOWED_DNS_POLICY_IDS`: Comma-separated DNS policy IDs that guarded writes may toggle.
+- `UNIFI_ALARM_WEBHOOK_BIND`: Bind address for webhook receiver. Default `0.0.0.0`.
+- `UNIFI_ALARM_WEBHOOK_PORT`: Webhook receiver port. Default `8787`.
+- `UNIFI_ALARM_WEBHOOK_PATH`: Webhook path. Default `/webhook/unifi/alarm`.
+- `UNIFI_ALARM_WEBHOOK_SECRET`: Optional shared secret required on inbound webhook requests.
+- `UNIFI_ALARM_LOKI_JOB`: Loki `job` label for alarm events. Default `unifi_alarm_manager`.
 
 For a reusable skill, keep your real credentials file outside the project tree, for example:
 
@@ -236,6 +241,19 @@ Run a local LM Studio model (local network / VPN only):
 python3 skills/unifi-network-local/scripts/lmstudio_chat.py --list-models
 python3 skills/unifi-network-local/scripts/lmstudio_chat.py "Summarize top network risks from these events: <paste logs>"
 python3 skills/unifi-network-local/scripts/lmstudio_chat.py --model meta-llama-3-8b-instruct "Summarize top network risks from these events: <paste logs>"
+```
+
+Run UniFi Alarm Manager webhook receiver and forward to Loki:
+
+```bash
+python3 skills/unifi-network-local/scripts/unifi_alarm_webhook_receiver.py
+```
+
+Deploy webhook receiver to local Docker stack:
+
+```bash
+docker build -t local/unifi-alarm-webhook:latest -f skills/unifi-network-local/deploy/unifi-alarm-webhook/Dockerfile .
+docker stack deploy -c skills/unifi-network-local/deploy/unifi-alarm-webhook/stack.yml unifi-tools
 ```
 
 ## Publishing Safety
