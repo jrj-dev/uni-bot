@@ -16,6 +16,7 @@ final class ChatViewModel: ObservableObject {
     private var networkMonitor: NetworkMonitor?
     private var appState: AppState?
     var speechService: SpeechService?
+    private var startupValidationAttempted = false
 
     private let baseSystemPrompt: String = {
         if let url = Bundle.main.url(forResource: "SystemPrompt", withExtension: "txt"),
@@ -121,6 +122,37 @@ final class ChatViewModel: ObservableObject {
         } catch {
             debugLog("Chat request failed: \(error.localizedDescription)", category: "Chat")
             messages.append(ChatMessage(role: .assistant, content: "Error: \(error.localizedDescription)"))
+        }
+    }
+
+    func showValidatedIntroIfNeeded() async {
+        guard !startupValidationAttempted else { return }
+        startupValidationAttempted = true
+
+        guard messages.isEmpty, llmMessages.isEmpty else { return }
+        guard let llmService else { return }
+        guard let appState, appState.hasLLMKey else {
+            messages.append(ChatMessage(role: .assistant, content: "I’m not ready yet. Please add a valid AI provider API key in Settings."))
+            debugLog("Startup intro skipped: missing LLM key", category: "Chat")
+            return
+        }
+
+        let systemPrompt = buildSystemPrompt()
+        let probeMessage = LLMMessage(
+            role: .user,
+            content: "Connectivity check. Reply with 'ok'."
+        )
+
+        do {
+            _ = try await llmService.sendMessages([probeMessage], tools: [], systemPrompt: systemPrompt)
+            let intro = "Hi, I’m NetworkGenius (UniFi WiFi Edition). I can help troubleshoot your UniFi network. What issue are you seeing?"
+            messages.append(ChatMessage(role: .assistant, content: intro))
+            llmMessages.append(LLMMessage(role: .assistant, content: intro))
+            debugLog("Startup LLM connectivity check succeeded; intro shown", category: "Chat")
+        } catch {
+            let errorText = "I can’t reach the selected AI provider right now. Check your API key, quota, and internet connection, then try again."
+            messages.append(ChatMessage(role: .assistant, content: errorText))
+            debugLog("Startup LLM connectivity check failed: \(error.localizedDescription)", category: "Chat")
         }
     }
 

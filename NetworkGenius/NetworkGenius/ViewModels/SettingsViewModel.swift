@@ -11,6 +11,7 @@ final class SettingsViewModel: ObservableObject {
     @Published var allowSelfSignedCerts: Bool = true
     @Published var selectedProvider: LLMProvider = .claude
     @Published var shareDeviceContextWithLLM: Bool = false
+    @Published var darkModeEnabled: Bool = true
 
     @Published var voiceEnabled: Bool = false
     @Published var selectedVoiceID: String = ""
@@ -26,6 +27,7 @@ final class SettingsViewModel: ObservableObject {
         allowSelfSignedCerts = appState.allowSelfSignedCerts
         selectedProvider = appState.llmProvider
         shareDeviceContextWithLLM = appState.shareDeviceContextWithLLM
+        darkModeEnabled = appState.darkModeEnabled
         unifiAPIKey = KeychainHelper.loadString(key: .unifiAPIKey) ?? ""
         claudeAPIKey = KeychainHelper.loadString(key: .claudeAPIKey) ?? ""
         openaiAPIKey = KeychainHelper.loadString(key: .openaiAPIKey) ?? ""
@@ -39,6 +41,7 @@ final class SettingsViewModel: ObservableObject {
         appState.allowSelfSignedCerts = allowSelfSignedCerts
         appState.llmProvider = selectedProvider
         appState.shareDeviceContextWithLLM = shareDeviceContextWithLLM
+        appState.darkModeEnabled = darkModeEnabled
 
         let normalizedUniFiKey = normalizedKey(unifiAPIKey)
         let normalizedClaudeKey = normalizedKey(claudeAPIKey)

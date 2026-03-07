@@ -7,15 +7,18 @@ struct NetworkGeniusApp: App {
 
     var body: some Scene {
         WindowGroup {
-            if appState.isConfigured {
-                ChatView()
-                    .environmentObject(appState)
-                    .environmentObject(networkMonitor)
-            } else {
-                SetupView()
-                    .environmentObject(appState)
-                    .environmentObject(networkMonitor)
+            Group {
+                if appState.isConfigured {
+                    ChatView()
+                        .environmentObject(appState)
+                        .environmentObject(networkMonitor)
+                } else {
+                    SetupView()
+                        .environmentObject(appState)
+                        .environmentObject(networkMonitor)
+                }
             }
+            .preferredColorScheme(appState.darkModeEnabled ? .dark : nil)
         }
     }
 }

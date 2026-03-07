@@ -14,6 +14,7 @@ final class AppState: ObservableObject {
     @AppStorage("llmProvider") private var llmProviderRaw: String = LLMProvider.claude.rawValue
     @AppStorage("allowSelfSignedCerts") var allowSelfSignedCerts: Bool = true
     @AppStorage("shareDeviceContextWithLLM") var shareDeviceContextWithLLM: Bool = false
+    @AppStorage("darkModeEnabled") var darkModeEnabled: Bool = true
 
     var llmProvider: LLMProvider {
         get { LLMProvider(rawValue: llmProviderRaw) ?? .claude }

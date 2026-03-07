@@ -11,6 +11,9 @@ struct SettingsView: View {
                 UniFiSettingsSection(viewModel: viewModel)
                 LLMSettingsSection(viewModel: viewModel)
                 VoiceSettingsSection(viewModel: viewModel)
+                Section("Appearance") {
+                    Toggle("Dark Mode", isOn: $viewModel.darkModeEnabled)
+                }
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)

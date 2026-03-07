@@ -97,6 +97,7 @@ struct ChatView: View {
                         baseURL: appState.consoleURL,
                         allowSelfSigned: appState.allowSelfSignedCerts
                     )
+                    await viewModel.showValidatedIntroIfNeeded()
                 }
             }
         }
