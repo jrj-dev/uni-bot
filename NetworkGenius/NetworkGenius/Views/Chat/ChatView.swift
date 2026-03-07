@@ -1,12 +1,15 @@
 import SwiftUI
+import SwiftData
 
 struct ChatView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var networkMonitor: NetworkMonitor
+    @Environment(\.modelContext) private var modelContext
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var viewModel = ChatViewModel()
     @StateObject private var speechService = SpeechService()
     @State private var showSettings = false
+    @State private var showConversationList = false
 
     var body: some View {
         NavigationStack {
@@ -51,11 +54,28 @@ struct ChatView: View {
             .navigationTitle("NetworkGenius")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        Task {
+                            await viewModel.startNewChat()
+                            await viewModel.showValidatedIntroIfNeeded()
+                        }
+                    } label: {
+                        Label("New Chat", systemImage: "square.and.pencil")
+                    }
+                }
                 ToolbarItem(placement: .principal) {
                     VStack(spacing: 2) {
                         Text("NetworkGenius UniFi WiFi")
                             .font(.headline)
                         NetworkStatusBadge()
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showConversationList = true
+                    } label: {
+                        Label("Chats", systemImage: "text.bubble")
                     }
                 }
             }
@@ -76,7 +96,7 @@ struct ChatView: View {
             .onAppear {
                 debugLog("Chat view appeared", category: "UI")
                 viewModel.speechService = speechService
-                viewModel.configure(appState: appState, networkMonitor: networkMonitor)
+                viewModel.configure(appState: appState, networkMonitor: networkMonitor, modelContext: modelContext)
                 Task {
                     await speechService.requestPermissions()
                     debugLog("Probing UniFi console reachability", category: "UI")
@@ -120,6 +140,41 @@ struct ChatView: View {
                         baseURL: appState.consoleURL,
                         allowSelfSigned: appState.allowSelfSignedCerts
                     )
+                }
+            }
+            .sheet(isPresented: $showConversationList) {
+                NavigationStack {
+                    List(viewModel.conversationSummaries) { convo in
+                        Button {
+                            Task {
+                                await viewModel.loadConversation(id: convo.id)
+                                showConversationList = false
+                            }
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(convo.title)
+                                        .font(.body)
+                                        .lineLimit(1)
+                                    Text(convo.updatedAt, style: .relative)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if convo.id == viewModel.currentConversationID {
+                                    Image(systemName: "checkmark.circle.fill")
+                                        .foregroundStyle(.green)
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .navigationTitle("Chats")
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("Done") { showConversationList = false }
+                        }
+                    }
                 }
             }
         }

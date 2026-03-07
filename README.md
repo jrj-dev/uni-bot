@@ -1,122 +1,87 @@
 # uni-bot
 
-`uni-bot` is a local UniFi Network troubleshooting assistant that lets you chat with an AI about your real network data.
+Local-first network assistant for UniFi environments.
 
-It includes Python scripts for querying the UniFi local integration API and a native iOS app (**Network Genius**) that wraps those capabilities into a conversational interface powered by Claude or ChatGPT.
+This repo contains two parts:
+- `NetworkGenius/`: iOS app (SwiftUI) for chat + voice network troubleshooting.
+- `skills/unifi-network-local/`: CLI skill and scripts for direct UniFi/Loki/LM Studio workflows.
 
-## What It Is
+## Repository Capabilities
 
-### Network Genius (iOS App)
+### iOS App (`NetworkGenius`)
 
-A SwiftUI chat app in `NetworkGenius/` that connects to your UniFi console over your local network and feeds real data to an LLM so you can ask natural-language questions about your network.
+- Chat assistant with tool use against local UniFi APIs.
+- LLM providers:
+  - OpenAI
+  - Claude
+  - LM Studio (local-only)
+- Local network awareness:
+  - Detects Wi-Fi/VPN state.
+  - Restricts local-only providers/tools when off-network.
+- Voice support:
+  - Local iOS speech
+  - OpenAI neural TTS
+- Secure secret storage in iOS Keychain:
+  - UniFi key
+  - Loki key
+  - LM Studio key
+  - OpenAI key
+  - Claude key
+- Loki/Grafana tools for event logs and security/network event analysis.
+- LM Studio model loading in Settings via `/v1/models` with model picker.
+- Reasoning-output controls:
+  - Prompt instruction to keep reasoning internal for LM Studio.
+  - Optional `Hide Reasoning Output` filter for chat + TTS.
+- Sanitized debug logs (redacts API-key-like values).
 
-- On your home WiFi: queries the console directly, LLM answers with real data
-- Off-network: LLM provides general networking advice
-- Supports both Claude (Anthropic) and OpenAI as LLM providers
-- All API keys stored in iOS Keychain, never in plaintext
-- Read-only access to the UniFi console
-- Sensitive values are redacted from in-app/Xcode debug logs
+### Skill + CLI (`skills/unifi-network-local`)
 
-**To build:** Open `NetworkGenius/NetworkGenius.xcodeproj` in Xcode 15.4+, set your development team, and run on a device or simulator (iOS 17.0+).
+- Query UniFi local integration APIs (read workflows).
+- Named queries for common resources (clients/devices/firewall/VPN/etc).
+- Snapshot capture and summary workflows for offline analysis.
+- Loki query helpers:
+  - `query_range`
+  - instant query
+  - labels
+  - label values
+- UniFi docs search/fetch helper.
+- LM Studio chat helper (`lmstudio_chat.py`) with:
+  - `--list-models`
+  - explicit model selection
+  - local/no-proxy request behavior
 
-### Python Scripts
+## Project Layout
 
-The `unifi-network-local` skill and helper scripts under `skills/unifi-network-local/scripts/` provide the original CLI tooling:
+```text
+NetworkGenius/                         iOS app project
+skills/unifi-network-local/            skill docs + scripts
+tests/                                 python tests and fixtures
+.env.local.example                     local env template for scripts
+```
 
-- pulling inventory and operational data from UniFi Network
-- running named queries for common resources
-- capturing snapshot bundles for offline analysis
-- generating concise, higher-level summaries from raw API responses
+## Configuration
 
-## Current Access Mode
-
-Current default behavior is **read-only**.
-
-- `GET`, `HEAD`, and `OPTIONS` are allowed by default.
-- Write methods (`POST`, `PUT`, `PATCH`, `DELETE`) are blocked unless you explicitly pass `--allow-write` to `unifi_request.py`.
-- Operational guidance in this project is to only perform write operations with explicit user approval.
-
-## API Access and Endpoint Coverage
-
-Base URL shape:
-
-- `https://<console>/proxy/network/integration`
-
-Primary auth headers:
-
-- `X-API-Key: <api-key>`
-- `Accept: application/json`
-
-### Global read endpoints
-
-- `/proxy/network/integration/v1/sites`
-- `/proxy/network/integration/v1/pending-devices`
-- `/proxy/network/integration/v1/dpi/categories`
-- `/proxy/network/integration/v1/dpi/applications`
-- `/proxy/network/integration/v1/countries`
-
-### Site-scoped read endpoints
-
-- `/proxy/network/integration/v1/sites/{site_id}/devices`
-- `/proxy/network/integration/v1/sites/{site_id}/clients`
-- `/proxy/network/integration/v1/sites/{site_id}/networks`
-- `/proxy/network/integration/v1/sites/{site_id}/wifi/broadcasts`
-- `/proxy/network/integration/v1/sites/{site_id}/hotspot/vouchers`
-- `/proxy/network/integration/v1/sites/{site_id}/firewall/policies`
-- `/proxy/network/integration/v1/sites/{site_id}/firewall/policies/ordering`
-- `/proxy/network/integration/v1/sites/{site_id}/firewall/zones`
-- `/proxy/network/integration/v1/sites/{site_id}/acl-rules`
-- `/proxy/network/integration/v1/sites/{site_id}/acl-rules/ordering`
-- `/proxy/network/integration/v1/sites/{site_id}/dns/policies`
-- `/proxy/network/integration/v1/sites/{site_id}/traffic-matching-lists`
-- `/proxy/network/integration/v1/sites/{site_id}/device-tags`
-- `/proxy/network/integration/v1/sites/{site_id}/wans`
-- `/proxy/network/integration/v1/sites/{site_id}/vpn/servers`
-- `/proxy/network/integration/v1/sites/{site_id}/vpn/site-to-site-tunnels`
-- `/proxy/network/integration/v1/sites/{site_id}/radius/profiles`
-
-### Resource-by-ID read endpoints
-
-- `/proxy/network/integration/v1/sites/{site_id}/devices/{device_id}`
-- `/proxy/network/integration/v1/sites/{site_id}/devices/{device_id}/statistics/latest`
-- `/proxy/network/integration/v1/sites/{site_id}/clients/{client_id}`
-- `/proxy/network/integration/v1/sites/{site_id}/networks/{network_id}`
-- `/proxy/network/integration/v1/sites/{site_id}/networks/{network_id}/references`
-- `/proxy/network/integration/v1/sites/{site_id}/wifi/broadcasts/{wifi_broadcast_id}`
-- `/proxy/network/integration/v1/sites/{site_id}/hotspot/vouchers/{voucher_id}`
-- `/proxy/network/integration/v1/sites/{site_id}/firewall/policies/{firewall_policy_id}`
-- `/proxy/network/integration/v1/sites/{site_id}/firewall/zones/{firewall_zone_id}`
-- `/proxy/network/integration/v1/sites/{site_id}/acl-rules/{acl_rule_id}`
-- `/proxy/network/integration/v1/sites/{site_id}/dns/policies/{dns_policy_id}`
-- `/proxy/network/integration/v1/sites/{site_id}/traffic-matching-lists/{traffic_matching_list_id}`
-
-## Environment Setup (`.env.local`)
-
-Create a local environment file from the provided example:
+Create local env file for scripts:
 
 ```bash
 cp .env.local.example .env.local
 ```
 
-Then edit `.env.local` and set real values:
+Set values in `.env.local`:
 
 ```dotenv
-UNIFI_BASE_URL=https://your-console-hostname-or-ip
-UNIFI_API_KEY=your-local-api-key
-LOKI_BASE_URL=http://your-loki-hostname-or-ip:3100
-LOKI_API_KEY=your-loki-api-key-if-required
-LM_STUDIO_BASE_URL=http://your-lmstudio-hostname-or-ip:1234
-LM_STUDIO_API_KEY=your-lmstudio-api-key
+UNIFI_BASE_URL=https://your-unifi-console
+UNIFI_API_KEY=replace-me
+
+LOKI_BASE_URL=http://your-loki-host:3100
+LOKI_API_KEY=replace-me
+
+LM_STUDIO_BASE_URL=http://your-lmstudio-host:1234
+LM_STUDIO_API_KEY=replace-me
 LM_STUDIO_MODEL=
 ```
 
-Optional variable used by `live_summary.py`:
-
-```dotenv
-UNIFI_SITE_ID=your-site-uuid
-```
-
-Load values into your shell:
+Load env vars:
 
 ```bash
 set -a
@@ -125,25 +90,43 @@ set +a
 ```
 
 Notes:
+- Keep `.env.local` out of git.
+- `LM_STUDIO_MODEL` can be blank; select model from API/UI.
 
-- `.env.local` is for local use only and should not be committed.
-- `.env.local.example` is the template to distribute with the project.
+## iOS App Setup
 
-## Quick Start
+1. Open `NetworkGenius/NetworkGenius.xcodeproj` in Xcode.
+2. Set your signing team.
+3. Build/run on simulator or device.
+4. In app Settings:
+   - Configure UniFi URL + key.
+   - Configure preferred LLM provider + key.
+   - For LM Studio: set base URL/key, then use `Load Models` and select one.
 
-List sites:
+## Local-Network Constraints
+
+These integrations are local-only by design unless reachable over VPN:
+- UniFi local integration API
+- Loki endpoint on your LAN
+- LM Studio endpoint on your LAN
+
+If LM Studio works on desktop but not mobile:
+- Use LAN IP URL (for example `http://192.168.x.x:1234`).
+- Ensure service binds beyond localhost (`0.0.0.0` or LAN interface).
+- Allow inbound firewall rule for port `1234`.
+- Verify iPhone can open `/v1/models` in Safari on same network.
+
+## Common Script Commands
+
+UniFi:
 
 ```bash
 python3 skills/unifi-network-local/scripts/unifi_request.py GET /proxy/network/integration/v1/sites
+python3 skills/unifi-network-local/scripts/named_query.py clients --site-ref default
+python3 skills/unifi-network-local/scripts/query_summary.py overview --site-ref default
 ```
 
-Run a named query:
-
-```bash
-python3 skills/unifi-network-local/scripts/named_query.py networks --site-ref default
-```
-
-Run Loki log queries:
+Loki:
 
 ```bash
 python3 skills/unifi-network-local/scripts/loki_query.py query-range --logql '{job="unifi"}' --minutes 60 --limit 100
@@ -151,106 +134,29 @@ python3 skills/unifi-network-local/scripts/loki_query.py labels
 python3 skills/unifi-network-local/scripts/loki_query.py label-values --label host
 ```
 
-Search official UniFi docs:
-
-```bash
-python3 skills/unifi-network-local/scripts/unifi_docs.py search "wifi optimization"
-python3 skills/unifi-network-local/scripts/unifi_docs.py article --article-id 32065480092951
-```
-
-Query a local LM Studio model (local network or VPN):
+LM Studio:
 
 ```bash
 python3 skills/unifi-network-local/scripts/lmstudio_chat.py --list-models
-python3 skills/unifi-network-local/scripts/lmstudio_chat.py "Summarize likely root causes from these UniFi events: <paste>"
-python3 skills/unifi-network-local/scripts/lmstudio_chat.py --model meta-llama-3-8b-instruct "Summarize likely root causes from these UniFi events: <paste>"
+python3 skills/unifi-network-local/scripts/lmstudio_chat.py --model <model-id> "Summarize top issues"
 ```
-
-Capture a troubleshooting snapshot:
-
-```bash
-python3 skills/unifi-network-local/scripts/capture_snapshot.py --site-id <site-id>
-```
-
-Generate an overview summary:
-
-```bash
-python3 skills/unifi-network-local/scripts/query_summary.py overview --site-ref default
-```
-
-## Network Genius iOS App
-
-### First Launch
-
-1. Open the app and enter your UniFi console URL (e.g. `https://192.168.1.1`)
-2. Enter your UniFi API key (created in UniFi Console under Settings > API)
-3. Optionally enter your site ID (if omitted, the app auto-selects `default` or the first returned site)
-4. Choose Claude or OpenAI and enter the corresponding API key
-5. Start chatting about your network
-
-### Privacy and Security Notes (iOS)
-
-- UniFi, Claude, and OpenAI API keys are stored in iOS Keychain only.
-- The app never intentionally logs raw API keys; debug log output is sanitized to redact key-like values.
-- `Share Device Context With AI` is **off by default**.
-- When enabled, the app sends masked context (for example masked local IPs and masked console host) to improve responses about the current device/network.
-- Site ID values are not sent verbatim in device context; only whether a site ID is configured.
-
-### What You Can Ask
-
-- "How many devices are on my network?"
-- "Give me a network overview"
-- "Which AP has the most clients?"
-- "Show me my firewall policies"
-- "What WiFi networks are configured?"
-- "Are there any security concerns?"
-
-### Project Structure
-
-```
-NetworkGenius/
-├── NetworkGenius.xcodeproj
-├── NetworkGenius/
-│   ├── App/              -- @main entry point, global state
-│   ├── Models/           -- ChatMessage, UniFi types, LLM types, tool schemas
-│   ├── Services/
-│   │   ├── UniFi/        -- API client, query service, summary service
-│   │   ├── LLM/          -- Claude + OpenAI services, tool executor
-│   │   ├── KeychainHelper.swift
-│   │   └── NetworkMonitor.swift
-│   ├── ViewModels/       -- Chat and settings view models
-│   ├── Views/            -- Chat, settings, onboarding, components
-│   └── Resources/        -- Assets, system prompt
-└── NetworkGeniusTests/
-```
-
-### Requirements
-
-- Xcode 15.4+
-- iOS 17.0+ deployment target
-- A UniFi Network console with a local API key
-- A Claude or OpenAI API key
-
-## Safety for Distribution
-
-When distributing this repository:
-
-- keep `.env.local` out of version control
-- never publish real API keys
-- avoid publishing live snapshot data from `data/unifi/snapshots/`
-- avoid publishing controller-specific identifiers (site IDs, device names, SSIDs, client info)
-- the iOS app stores all keys in the device Keychain, never in files
 
 ## Testing
 
-Python tests:
+Python:
 
 ```bash
 python3 -m unittest -v tests/test_unifi_network_local.py
 ```
 
-iOS tests (requires Xcode):
+iOS build:
 
 ```bash
-xcodebuild test -project NetworkGenius/NetworkGenius.xcodeproj -scheme NetworkGenius -destination 'platform=iOS Simulator,name=iPhone 16'
+xcodebuild -project NetworkGenius/NetworkGenius.xcodeproj -scheme NetworkGenius -destination 'platform=iOS Simulator,name=iPhone 17' build
 ```
+
+## Security
+
+- Do not commit real secrets, snapshot exports, or local network identifiers.
+- Use Keychain for app secrets and `.env.local` for script secrets.
+- Keep local-only hostnames/IPs out of committed docs where possible.

@@ -1,7 +1,7 @@
 import Foundation
 
-struct LLMMessage {
-    enum Role: String {
+struct LLMMessage: Codable {
+    enum Role: String, Codable {
         case user, assistant, tool
     }
 
@@ -11,7 +11,7 @@ struct LLMMessage {
     var toolCalls: [LLMToolCall]?
 }
 
-struct LLMToolCall: Identifiable {
+struct LLMToolCall: Identifiable, Codable {
     let id: String
     let name: String
     let arguments: [String: String]
@@ -27,4 +27,3 @@ struct LLMResponse {
         case toolUse
     }
 }
-

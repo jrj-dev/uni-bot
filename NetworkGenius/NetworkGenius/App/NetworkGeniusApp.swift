@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 
 @main
 struct NetworkGeniusApp: App {
@@ -20,5 +21,6 @@ struct NetworkGeniusApp: App {
             }
             .preferredColorScheme(appState.darkModeEnabled ? .dark : nil)
         }
+        .modelContainer(for: [ConversationThread.self, PersistedChatMessage.self])
     }
 }

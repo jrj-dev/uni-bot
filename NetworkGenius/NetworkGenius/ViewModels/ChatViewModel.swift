@@ -1,12 +1,15 @@
 import Foundation
 import SwiftUI
 import UIKit
+import SwiftData
 
 @MainActor
 final class ChatViewModel: ObservableObject {
     @Published var messages: [ChatMessage] = []
     @Published var isLoading = false
     @Published var currentToolName: String?
+    @Published var conversationSummaries: [ConversationSummary] = []
+    @Published var currentConversationID: UUID?
 
     private var llmMessages: [LLMMessage] = []
     private let maxHistoryMessages = 20
@@ -15,6 +18,7 @@ final class ChatViewModel: ObservableObject {
     private var toolExecutor: ToolExecutor?
     private var networkMonitor: NetworkMonitor?
     private var appState: AppState?
+    private var persistenceStore: ChatPersistenceStore?
     var speechService: SpeechService?
     private var startupValidationAttempted = false
 
@@ -40,10 +44,16 @@ final class ChatViewModel: ObservableObject {
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }()
 
-    func configure(appState: AppState, networkMonitor: NetworkMonitor) {
+    func configure(appState: AppState, networkMonitor: NetworkMonitor, modelContext: ModelContext) {
         self.appState = appState
         self.networkMonitor = networkMonitor
         debugLog("ChatViewModel configured (provider=\(appState.llmProvider.rawValue), onNetwork=\(networkMonitor.isOnNetwork))", category: "Chat")
+        if persistenceStore == nil {
+            persistenceStore = ChatPersistenceStore(context: modelContext)
+            restoreMostRecentConversation()
+        } else {
+            refreshConversationSummaries()
+        }
 
         let client = UniFiAPIClient(
             baseURL: UniFiAPIClient.normalizeBaseURL(appState.consoleURL),
@@ -75,6 +85,30 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    func startNewChat() async {
+        guard let persistenceStore else { return }
+        let thread = persistenceStore.createConversation()
+        currentConversationID = thread.id
+        messages = []
+        llmMessages = []
+        isLoading = false
+        currentToolName = nil
+        startupValidationAttempted = false
+        refreshConversationSummaries()
+    }
+
+    func loadConversation(id: UUID) async {
+        guard let persistenceStore else { return }
+        guard let restored = persistenceStore.loadConversation(id: id) else { return }
+        currentConversationID = restored.id
+        messages = restored.messages
+        llmMessages = restored.llmMessages
+        startupValidationAttempted = !messages.isEmpty || !llmMessages.isEmpty
+        isLoading = false
+        currentToolName = nil
+        refreshConversationSummaries()
+    }
+
     func sendMessage(_ text: String) async {
         guard canUseSelectedLLMOnCurrentNetwork() else {
             let msg = "LM Studio is configured as a local provider and is only available on local Wi-Fi or VPN."
@@ -87,6 +121,7 @@ final class ChatViewModel: ObservableObject {
         messages.append(userMessage)
         llmMessages.append(LLMMessage(role: .user, content: text))
         trimHistory()
+        persistConversationState()
         debugLog("User message queued (\(text.count) chars)", category: "Chat")
 
         isLoading = true
@@ -130,12 +165,14 @@ final class ChatViewModel: ObservableObject {
             messages.append(ChatMessage(role: .assistant, content: finalText))
             llmMessages.append(LLMMessage(role: .assistant, content: finalText))
             trimHistory()
+            persistConversationState()
             speechService?.speak(finalText)
             debugLog("Assistant response delivered (\(finalText.count) chars)", category: "Chat")
 
         } catch {
             debugLog("Chat request failed: \(error.localizedDescription)", category: "Chat")
             messages.append(ChatMessage(role: .assistant, content: "Error: \(error.localizedDescription)"))
+            persistConversationState()
         }
     }
 
@@ -147,6 +184,7 @@ final class ChatViewModel: ObservableObject {
         guard let llmService else { return }
         guard let appState, appState.hasLLMKey else {
             messages.append(ChatMessage(role: .assistant, content: "I’m not ready yet. Please add a valid AI provider API key in Settings."))
+            persistConversationState()
             debugLog("Startup intro skipped: missing LLM key", category: "Chat")
             return
         }
@@ -160,6 +198,7 @@ final class ChatViewModel: ObservableObject {
         guard canUseSelectedLLMOnCurrentNetwork() else {
             let errorText = "LM Studio is configured as a local provider and is only available on local Wi-Fi or VPN."
             messages.append(ChatMessage(role: .assistant, content: errorText))
+            persistConversationState()
             debugLog("Startup intro skipped: LM Studio not on local Wi-Fi or VPN", category: "Chat")
             return
         }
@@ -169,10 +208,12 @@ final class ChatViewModel: ObservableObject {
             let intro = "Hi, I’m NetworkGenius (UniFi WiFi Edition). I can help troubleshoot your UniFi network. What issue are you seeing?"
             messages.append(ChatMessage(role: .assistant, content: intro))
             llmMessages.append(LLMMessage(role: .assistant, content: intro))
+            persistConversationState()
             debugLog("Startup LLM connectivity check succeeded; intro shown", category: "Chat")
         } catch {
             let errorText = "I can’t reach the selected AI provider right now. Check your API key, quota, and internet connection, then try again."
             messages.append(ChatMessage(role: .assistant, content: errorText))
+            persistConversationState()
             debugLog("Startup LLM connectivity check failed: \(error.localizedDescription)", category: "Chat")
         }
     }
@@ -249,6 +290,47 @@ final class ChatViewModel: ObservableObject {
         }
         return cleaned
     }
+
+    private func restoreMostRecentConversation() {
+        guard let persistenceStore else { return }
+        if let restored = persistenceStore.loadMostRecentConversation() {
+            currentConversationID = restored.id
+            messages = restored.messages
+            llmMessages = restored.llmMessages
+            startupValidationAttempted = !messages.isEmpty || !llmMessages.isEmpty
+        } else {
+            let thread = persistenceStore.createConversation()
+            currentConversationID = thread.id
+            startupValidationAttempted = false
+        }
+        refreshConversationSummaries()
+    }
+
+    private func refreshConversationSummaries() {
+        guard let persistenceStore else { return }
+        conversationSummaries = persistenceStore.listConversations().map {
+            ConversationSummary(id: $0.id, title: $0.title, updatedAt: $0.updatedAt)
+        }
+    }
+
+    private func persistConversationState() {
+        guard let persistenceStore else { return }
+        let thread: ConversationThread
+        if let id = currentConversationID, let existing = persistenceStore.thread(id: id) {
+            thread = existing
+        } else {
+            thread = persistenceStore.createConversation()
+            currentConversationID = thread.id
+        }
+        persistenceStore.save(thread: thread, messages: messages, llmMessages: llmMessages)
+        refreshConversationSummaries()
+    }
+}
+
+struct ConversationSummary: Identifiable {
+    let id: UUID
+    let title: String
+    let updatedAt: Date
 }
 
 private extension String {
@@ -259,6 +341,133 @@ private extension String {
         let range = NSRange(startIndex..<endIndex, in: self)
         return regex.stringByReplacingMatches(in: self, options: [], range: range, withTemplate: template)
     }
+}
+
+@MainActor
+private final class ChatPersistenceStore {
+    private let context: ModelContext
+    private let encoder = JSONEncoder()
+    private let decoder = JSONDecoder()
+
+    init(context: ModelContext) {
+        self.context = context
+    }
+
+    func listConversations() -> [ConversationThread] {
+        let descriptor = FetchDescriptor<ConversationThread>(
+            sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
+        )
+        return (try? context.fetch(descriptor)) ?? []
+    }
+
+    func loadMostRecentConversation() -> RestoredConversation? {
+        guard let thread = listConversations().first else { return nil }
+        return restoredConversation(from: thread)
+    }
+
+    func loadConversation(id: UUID) -> RestoredConversation? {
+        guard let thread = thread(id: id) else { return nil }
+        return restoredConversation(from: thread)
+    }
+
+    func thread(id: UUID) -> ConversationThread? {
+        var descriptor = FetchDescriptor<ConversationThread>(
+            predicate: #Predicate { $0.id == id }
+        )
+        descriptor.fetchLimit = 1
+        return (try? context.fetch(descriptor))?.first
+    }
+
+    @discardableResult
+    func createConversation() -> ConversationThread {
+        let thread = ConversationThread()
+        context.insert(thread)
+        try? context.save()
+        return thread
+    }
+
+    func save(thread: ConversationThread, messages: [ChatMessage], llmMessages: [LLMMessage]) {
+        thread.updatedAt = Date()
+        thread.title = title(from: messages)
+        thread.llmTranscriptData = try? encoder.encode(llmMessages)
+
+        for existing in thread.messages {
+            context.delete(existing)
+        }
+
+        let persistentMessages = messages
+            .filter { $0.role != .toolCall }
+            .map { message in
+                PersistedChatMessage(
+                    id: message.id,
+                    roleRaw: message.role.rawValue,
+                    content: message.content,
+                    timestamp: message.timestamp,
+                    toolName: message.toolName,
+                    toolCallID: message.toolCallID,
+                    thread: thread
+                )
+            }
+        thread.messages = persistentMessages
+        try? context.save()
+    }
+
+    private func restoredConversation(from thread: ConversationThread) -> RestoredConversation {
+        let uiMessages = thread.messages
+            .sorted(by: { $0.timestamp < $1.timestamp })
+            .compactMap { stored -> ChatMessage? in
+                guard let role = MessageRole(rawValue: stored.roleRaw) else { return nil }
+                return ChatMessage(
+                    id: stored.id,
+                    role: role,
+                    content: stored.content,
+                    timestamp: stored.timestamp,
+                    toolName: stored.toolName,
+                    toolCallID: stored.toolCallID
+                )
+            }
+
+        let storedLLMMessages: [LLMMessage]
+        if let data = thread.llmTranscriptData,
+           let decoded = try? decoder.decode([LLMMessage].self, from: data)
+        {
+            storedLLMMessages = decoded
+        } else {
+            storedLLMMessages = uiMessages.compactMap { message -> LLMMessage? in
+                switch message.role {
+                case .user:
+                    return LLMMessage(role: .user, content: message.content)
+                case .assistant:
+                    return LLMMessage(role: .assistant, content: message.content)
+                case .toolResult:
+                    return LLMMessage(role: .tool, content: message.content, toolCallID: message.toolCallID)
+                case .toolCall:
+                    return nil
+                }
+            }
+        }
+
+        return RestoredConversation(
+            id: thread.id,
+            messages: uiMessages,
+            llmMessages: storedLLMMessages
+        )
+    }
+
+    private func title(from messages: [ChatMessage]) -> String {
+        if let firstUser = messages.first(where: { $0.role == .user })?.content.trimmingCharacters(in: .whitespacesAndNewlines),
+           !firstUser.isEmpty
+        {
+            return String(firstUser.prefix(48))
+        }
+        return "New Chat"
+    }
+}
+
+private struct RestoredConversation {
+    let id: UUID
+    let messages: [ChatMessage]
+    let llmMessages: [LLMMessage]
 }
 
 @MainActor
