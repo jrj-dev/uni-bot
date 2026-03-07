@@ -49,6 +49,11 @@ This repo contains two parts:
   - `--list-models`
   - explicit model selection
   - local/no-proxy request behavior
+- Guarded UniFi mutation helper (`guarded_policy_toggle.py`) with:
+  - allowlisted IDs only
+  - `enabled` toggle only
+  - dry-run default
+  - explicit confirmation token for apply
 
 ## Project Layout
 
@@ -79,6 +84,10 @@ LOKI_API_KEY=replace-me
 LM_STUDIO_BASE_URL=http://your-lmstudio-host:1234
 LM_STUDIO_API_KEY=replace-me
 LM_STUDIO_MODEL=
+
+UNIFI_GUARD_ALLOWED_ACL_RULE_IDS=
+UNIFI_GUARD_ALLOWED_FIREWALL_POLICY_IDS=
+UNIFI_GUARD_ALLOWED_DNS_POLICY_IDS=
 ```
 
 Load env vars:
@@ -92,6 +101,7 @@ set +a
 Notes:
 - Keep `.env.local` out of git.
 - `LM_STUDIO_MODEL` can be blank; select model from API/UI.
+- Guard allowlists are required for any policy toggles. Empty allowlists block writes.
 
 ## iOS App Setup
 
@@ -139,6 +149,30 @@ LM Studio:
 ```bash
 python3 skills/unifi-network-local/scripts/lmstudio_chat.py --list-models
 python3 skills/unifi-network-local/scripts/lmstudio_chat.py --model <model-id> "Summarize top issues"
+```
+
+Guarded policy toggle (safe write path):
+
+```bash
+# Dry-run first (prints summary + required confirm token)
+python3 skills/unifi-network-local/scripts/guarded_policy_toggle.py \
+  --rule-type acl-rule \
+  --rule-id <allowlisted-rule-id> \
+  --site-ref default \
+  --enabled false \
+  --reason "Temporarily suspend social-media apps for kid devices" \
+  --insecure
+
+# Apply using the exact token printed by dry-run
+python3 skills/unifi-network-local/scripts/guarded_policy_toggle.py \
+  --rule-type acl-rule \
+  --rule-id <allowlisted-rule-id> \
+  --site-ref default \
+  --enabled false \
+  --reason "Temporarily suspend social-media apps for kid devices" \
+  --apply \
+  --confirm-token <TOKEN_FROM_DRY_RUN> \
+  --insecure
 ```
 
 ## Testing

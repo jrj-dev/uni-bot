@@ -50,6 +50,8 @@ Use the bundled script to talk to the local UniFi Network API.
 - Use `POST`, `PUT`, `PATCH`, or `DELETE` only after the user explicitly asks for a configuration change.
 - Confirm the exact endpoint from the local console docs before making write calls if the path is not already known.
 - Avoid printing or storing the API key in logs, patches, or committed files.
+- For app/service suspension work, use `guarded_policy_toggle.py` instead of raw write calls.
+- Guarded writes are limited to existing allowlisted IDs and only toggle `enabled`; no create/delete/replace flows.
 
 ## Required Environment
 
@@ -62,6 +64,9 @@ Set these values in the shell before making requests:
 - `LM_STUDIO_BASE_URL`: LM Studio API base URL, for example `http://lmstudio.local:1234`.
 - `LM_STUDIO_API_KEY`: LM Studio API key.
 - `LM_STUDIO_MODEL`: Optional model alias. If unset, pass `--model` when querying chat.
+- `UNIFI_GUARD_ALLOWED_ACL_RULE_IDS`: Comma-separated ACL rule IDs that guarded writes may toggle.
+- `UNIFI_GUARD_ALLOWED_FIREWALL_POLICY_IDS`: Comma-separated firewall policy IDs that guarded writes may toggle.
+- `UNIFI_GUARD_ALLOWED_DNS_POLICY_IDS`: Comma-separated DNS policy IDs that guarded writes may toggle.
 
 For a reusable skill, keep your real credentials file outside the project tree, for example:
 
@@ -77,6 +82,7 @@ set -a
 3. Use the helper script for the request.
 4. Summarize findings in plain language and call out any inferred conclusions.
 5. For configuration changes, explain the exact action before sending the write request.
+6. Prefer a dry-run first; require explicit confirmation token before apply.
 
 ## Helper Script
 
@@ -109,6 +115,16 @@ Allow a write call only when explicitly needed:
 
 ```bash
 python3 skills/unifi-network-local/scripts/unifi_request.py POST /proxy/network/integration/v1/devices/restart --json '{"device_id":"..."}' --allow-write
+```
+
+Guarded service/app suspension toggles (recommended write path):
+
+```bash
+# Dry-run (safe): inspect exact change and capture confirmation token
+python3 skills/unifi-network-local/scripts/guarded_policy_toggle.py --rule-type acl-rule --rule-id <allowlisted-rule-id> --site-ref default --enabled false --reason "Suspend selected services for approved client scope" --insecure
+
+# Apply (only with explicit token from dry-run output)
+python3 skills/unifi-network-local/scripts/guarded_policy_toggle.py --rule-type acl-rule --rule-id <allowlisted-rule-id> --site-ref default --enabled false --reason "Suspend selected services for approved client scope" --apply --confirm-token <TOKEN_FROM_DRY_RUN> --insecure
 ```
 
 Capture a standard troubleshooting snapshot for later review:
