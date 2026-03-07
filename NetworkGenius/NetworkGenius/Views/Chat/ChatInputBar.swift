@@ -12,6 +12,10 @@ struct ChatInputBar: View {
             TextField("Ask about your network...", text: $text, axis: .vertical)
                 .textFieldStyle(.plain)
                 .lineLimit(1...5)
+                .submitLabel(.send)
+                .onSubmit {
+                    sendCurrentText()
+                }
                 .padding(10)
                 .background(Color(.systemGray6), in: RoundedRectangle(cornerRadius: 20))
 
@@ -43,10 +47,7 @@ struct ChatInputBar: View {
             } else {
                 // Send button
                 Button {
-                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !trimmed.isEmpty else { return }
-                    onSend(trimmed)
-                    text = ""
+                    sendCurrentText()
                 } label: {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.title2)
@@ -62,5 +63,13 @@ struct ChatInputBar: View {
                 text = newValue
             }
         }
+    }
+
+    private func sendCurrentText() {
+        guard !isLoading else { return }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        onSend(trimmed)
+        text = ""
     }
 }

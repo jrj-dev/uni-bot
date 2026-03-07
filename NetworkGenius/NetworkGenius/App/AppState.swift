@@ -13,6 +13,7 @@ final class AppState: ObservableObject {
     @AppStorage("siteID") var siteID: String = ""
     @AppStorage("llmProvider") private var llmProviderRaw: String = LLMProvider.claude.rawValue
     @AppStorage("allowSelfSignedCerts") var allowSelfSignedCerts: Bool = true
+    @AppStorage("shareDeviceContextWithLLM") var shareDeviceContextWithLLM: Bool = false
 
     var llmProvider: LLMProvider {
         get { LLMProvider(rawValue: llmProviderRaw) ?? .claude }
@@ -21,7 +22,6 @@ final class AppState: ObservableObject {
 
     var isConfigured: Bool {
         !consoleURL.isEmpty
-            && !siteID.isEmpty
             && KeychainHelper.exists(key: .unifiAPIKey)
             && hasLLMKey
     }

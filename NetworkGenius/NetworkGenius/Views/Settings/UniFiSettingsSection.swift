@@ -14,7 +14,7 @@ struct UniFiSettingsSection: View {
             SecureField("API Key", text: $viewModel.unifiAPIKey)
                 .textContentType(.password)
 
-            TextField("Site ID", text: $viewModel.siteID)
+            TextField("Site ID (optional)", text: $viewModel.siteID)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
 

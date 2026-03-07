@@ -15,6 +15,7 @@ A SwiftUI chat app in `NetworkGenius/` that connects to your UniFi console over 
 - Supports both Claude (Anthropic) and OpenAI as LLM providers
 - All API keys stored in iOS Keychain, never in plaintext
 - Read-only access to the UniFi console
+- Sensitive values are redacted from in-app/Xcode debug logs
 
 **To build:** Open `NetworkGenius/NetworkGenius.xcodeproj` in Xcode 15.4+, set your development team, and run on a device or simulator (iOS 17.0+).
 
@@ -155,9 +156,17 @@ python3 skills/unifi-network-local/scripts/query_summary.py overview --site-ref 
 
 1. Open the app and enter your UniFi console URL (e.g. `https://192.168.1.1`)
 2. Enter your UniFi API key (created in UniFi Console under Settings > API)
-3. Enter your site ID (or use the "Test Connection" button to verify)
+3. Optionally enter your site ID (if omitted, the app auto-selects `default` or the first returned site)
 4. Choose Claude or OpenAI and enter the corresponding API key
 5. Start chatting about your network
+
+### Privacy and Security Notes (iOS)
+
+- UniFi, Claude, and OpenAI API keys are stored in iOS Keychain only.
+- The app never intentionally logs raw API keys; debug log output is sanitized to redact key-like values.
+- `Share Device Context With AI` is **off by default**.
+- When enabled, the app sends masked context (for example masked local IPs and masked console host) to improve responses about the current device/network.
+- Site ID values are not sent verbatim in device context; only whether a site ID is configured.
 
 ### What You Can Ask
 

@@ -7,38 +7,38 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		A10000000000000000000001 /* NetworkGeniusApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000001; };
-		A10000000000000000000002 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000002; };
-		A10000000000000000000003 /* ChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000003; };
-		A10000000000000000000004 /* UniFiModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000004; };
-		A10000000000000000000005 /* LLMModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000005; };
-		A10000000000000000000006 /* ToolDefinitions.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000006; };
-		A10000000000000000000007 /* KeychainHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000007; };
-		A10000000000000000000008 /* NetworkMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000008; };
-		A10000000000000000000009 /* URLSessionFactory.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000009; };
-		A10000000000000000000010 /* UniFiAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000010; };
-		A10000000000000000000011 /* UniFiQueryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000011; };
-		A10000000000000000000012 /* UniFiSummaryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000012; };
-		A10000000000000000000013 /* LLMService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000013; };
-		A10000000000000000000014 /* ClaudeLLMService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000014; };
-		A10000000000000000000015 /* OpenAILLMService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000015; };
-		A10000000000000000000016 /* ToolExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000016; };
-		A10000000000000000000017 /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000017; };
-		A10000000000000000000018 /* SettingsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000018; };
-		A10000000000000000000019 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000019; };
-		A10000000000000000000020 /* MessageBubbleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000020; };
-		A10000000000000000000021 /* ToolCallIndicatorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000021; };
-		A10000000000000000000022 /* ChatInputBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000022; };
-		A10000000000000000000023 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000023; };
-		A10000000000000000000024 /* UniFiSettingsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000024; };
-		A10000000000000000000025 /* LLMSettingsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000025; };
-		A10000000000000000000026 /* SetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000026; };
-		A10000000000000000000027 /* NetworkStatusBadge.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000027; };
-		A10000000000000000000028 /* ConnectionTestButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000028; };
-		A10000000000000000000029 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000029; };
-		A10000000000000000000030 /* SystemPrompt.txt in Resources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000030; };
-		A10000000000000000000031 /* SpeechService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000031; };
-		A10000000000000000000032 /* VoiceSettingsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000032; };
+		A10000000000000000000001 /* NetworkGeniusApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000001 /* NetworkGeniusApp.swift */; };
+		A10000000000000000000002 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000002 /* AppState.swift */; };
+		A10000000000000000000003 /* ChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000003 /* ChatMessage.swift */; };
+		A10000000000000000000004 /* UniFiModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000004 /* UniFiModels.swift */; };
+		A10000000000000000000005 /* LLMModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000005 /* LLMModels.swift */; };
+		A10000000000000000000006 /* ToolDefinitions.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000006 /* ToolDefinitions.swift */; };
+		A10000000000000000000007 /* KeychainHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000007 /* KeychainHelper.swift */; };
+		A10000000000000000000008 /* NetworkMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000008 /* NetworkMonitor.swift */; };
+		A10000000000000000000009 /* URLSessionFactory.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000009 /* URLSessionFactory.swift */; };
+		A10000000000000000000010 /* UniFiAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000010 /* UniFiAPIClient.swift */; };
+		A10000000000000000000011 /* UniFiQueryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000011 /* UniFiQueryService.swift */; };
+		A10000000000000000000012 /* UniFiSummaryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000012 /* UniFiSummaryService.swift */; };
+		A10000000000000000000013 /* LLMService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000013 /* LLMService.swift */; };
+		A10000000000000000000014 /* ClaudeLLMService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000014 /* ClaudeLLMService.swift */; };
+		A10000000000000000000015 /* OpenAILLMService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000015 /* OpenAILLMService.swift */; };
+		A10000000000000000000016 /* ToolExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000016 /* ToolExecutor.swift */; };
+		A10000000000000000000017 /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000017 /* ChatViewModel.swift */; };
+		A10000000000000000000018 /* SettingsViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000018 /* SettingsViewModel.swift */; };
+		A10000000000000000000019 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000019 /* ChatView.swift */; };
+		A10000000000000000000020 /* MessageBubbleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000020 /* MessageBubbleView.swift */; };
+		A10000000000000000000021 /* ToolCallIndicatorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000021 /* ToolCallIndicatorView.swift */; };
+		A10000000000000000000022 /* ChatInputBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000022 /* ChatInputBar.swift */; };
+		A10000000000000000000023 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000023 /* SettingsView.swift */; };
+		A10000000000000000000024 /* UniFiSettingsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000024 /* UniFiSettingsSection.swift */; };
+		A10000000000000000000025 /* LLMSettingsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000025 /* LLMSettingsSection.swift */; };
+		A10000000000000000000026 /* SetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000026 /* SetupView.swift */; };
+		A10000000000000000000027 /* NetworkStatusBadge.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000027 /* NetworkStatusBadge.swift */; };
+		A10000000000000000000028 /* ConnectionTestButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000028 /* ConnectionTestButton.swift */; };
+		A10000000000000000000029 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000029 /* Assets.xcassets */; };
+		A10000000000000000000030 /* SystemPrompt.txt in Resources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000030 /* SystemPrompt.txt */; };
+		A10000000000000000000031 /* SpeechService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000031 /* SpeechService.swift */; };
+		A10000000000000000000032 /* VoiceSettingsSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000032 /* VoiceSettingsSection.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -94,14 +94,6 @@
 				E10000000000000000000002 /* NetworkGenius */,
 				E10000000000000000000099 /* Products */,
 			);
-			sourceTree = "<group>";
-		};
-		E10000000000000000000099 /* Products */ = {
-			isa = PBXGroup;
-			children = (
-				C10000000000000000000001 /* NetworkGenius.app */,
-			);
-			name = Products;
 			sourceTree = "<group>";
 		};
 		E10000000000000000000002 /* NetworkGenius */ = {
@@ -237,6 +229,14 @@
 				B10000000000000000000030 /* SystemPrompt.txt */,
 			);
 			path = Resources;
+			sourceTree = "<group>";
+		};
+		E10000000000000000000099 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				C10000000000000000000001 /* NetworkGenius.app */,
+			);
+			name = Products;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -469,7 +469,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = GBZQ4LQV8R;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Network Genius";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
@@ -503,7 +503,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = GBZQ4LQV8R;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Network Genius";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
@@ -533,15 +533,6 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		F60000000000000000000001 /* Build configuration list for PBXProject "NetworkGenius" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				G10000000000000000000001 /* Debug */,
-				G10000000000000000000002 /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
 		F20000000000000000000001 /* Build configuration list for PBXNativeTarget "NetworkGenius" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -551,8 +542,16 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		F60000000000000000000001 /* Build configuration list for PBXProject "NetworkGenius" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				G10000000000000000000001 /* Debug */,
+				G10000000000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
-
 	};
 	rootObject = F50000000000000000000001 /* Project object */;
 }

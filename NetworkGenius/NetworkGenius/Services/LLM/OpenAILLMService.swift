@@ -4,9 +4,11 @@ final class OpenAILLMService: LLMService {
     private let model = "gpt-4o"
 
     func sendMessages(_ messages: [LLMMessage], tools: [[String: Any]], systemPrompt: String) async throws -> LLMResponse {
-        guard let apiKey = KeychainHelper.loadString(key: .openaiAPIKey) else {
+        guard let rawKey = KeychainHelper.loadString(key: .openaiAPIKey) else {
             throw LLMError.missingAPIKey
         }
+        let apiKey = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !apiKey.isEmpty else { throw LLMError.missingAPIKey }
 
         let url = URL(string: "https://api.openai.com/v1/chat/completions")!
         var request = URLRequest(url: url)
@@ -32,10 +34,16 @@ final class OpenAILLMService: LLMService {
 
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
+        let startedAt = Date()
+        debugLog("OpenAI request started (model=\(model), messages=\(openAIMessages.count), tools=\(tools.count))", category: "LLM")
         let (data, response) = try await URLSession.shared.data(for: request)
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            let body = String(data: data, encoding: .utf8) ?? ""
-            throw LLMError.httpError(http.statusCode, body)
+        if let http = response as? HTTPURLResponse {
+            let elapsedMS = Int(Date().timeIntervalSince(startedAt) * 1000)
+            debugLog("OpenAI response HTTP \(http.statusCode) in \(elapsedMS)ms", category: "LLM")
+            if !(200..<300).contains(http.statusCode) {
+                let body = String(data: data, encoding: .utf8) ?? ""
+                throw LLMError.httpError(http.statusCode, body)
+            }
         }
 
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],

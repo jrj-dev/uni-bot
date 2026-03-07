@@ -31,7 +31,7 @@ struct SetupView: View {
 
                 SecureField("API Key", text: $viewModel.unifiAPIKey)
 
-                TextField("Site ID", text: $viewModel.siteID)
+                TextField("Site ID (optional)", text: $viewModel.siteID)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
 
@@ -44,7 +44,7 @@ struct SetupView: View {
                 Button("Next") {
                     currentStep = 1
                 }
-                .disabled(viewModel.consoleURL.isEmpty || viewModel.unifiAPIKey.isEmpty || viewModel.siteID.isEmpty)
+                .disabled(viewModel.consoleURL.isEmpty || viewModel.unifiAPIKey.isEmpty)
             }
         }
     }
@@ -63,6 +63,27 @@ struct SetupView: View {
                     SecureField("Claude API Key", text: $viewModel.claudeAPIKey)
                 case .openai:
                     SecureField("OpenAI API Key", text: $viewModel.openaiAPIKey)
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Button {
+                        Task { await viewModel.testSelectedLLMKey() }
+                    } label: {
+                        HStack {
+                            if viewModel.isTestingLLMKey {
+                                ProgressView()
+                                    .controlSize(.small)
+                            }
+                            Text("Test API Key")
+                        }
+                    }
+                    .disabled(!viewModel.hasSelectedLLMKey || viewModel.isTestingLLMKey)
+
+                    if let result = viewModel.llmKeyTestResult {
+                        Text(result)
+                            .font(.caption)
+                            .foregroundStyle(result.hasPrefix("Connected") ? .green : .red)
+                    }
                 }
             }
 

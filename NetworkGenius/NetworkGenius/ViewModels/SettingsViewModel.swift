@@ -10,18 +10,22 @@ final class SettingsViewModel: ObservableObject {
     @Published var openaiAPIKey: String = ""
     @Published var allowSelfSignedCerts: Bool = true
     @Published var selectedProvider: LLMProvider = .claude
+    @Published var shareDeviceContextWithLLM: Bool = false
 
     @Published var voiceEnabled: Bool = false
     @Published var selectedVoiceID: String = ""
 
     @Published var connectionTestResult: String?
     @Published var isTesting = false
+    @Published var llmKeyTestResult: String?
+    @Published var isTestingLLMKey = false
 
     func load(from appState: AppState) {
         consoleURL = appState.consoleURL
         siteID = appState.siteID
         allowSelfSignedCerts = appState.allowSelfSignedCerts
         selectedProvider = appState.llmProvider
+        shareDeviceContextWithLLM = appState.shareDeviceContextWithLLM
         unifiAPIKey = KeychainHelper.loadString(key: .unifiAPIKey) ?? ""
         claudeAPIKey = KeychainHelper.loadString(key: .claudeAPIKey) ?? ""
         openaiAPIKey = KeychainHelper.loadString(key: .openaiAPIKey) ?? ""
@@ -30,19 +34,24 @@ final class SettingsViewModel: ObservableObject {
     }
 
     func save(to appState: AppState) {
-        appState.consoleURL = consoleURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        appState.consoleURL = UniFiAPIClient.normalizeBaseURL(consoleURL)
         appState.siteID = siteID.trimmingCharacters(in: .whitespacesAndNewlines)
         appState.allowSelfSignedCerts = allowSelfSignedCerts
         appState.llmProvider = selectedProvider
+        appState.shareDeviceContextWithLLM = shareDeviceContextWithLLM
 
-        if !unifiAPIKey.isEmpty {
-            KeychainHelper.save(key: .unifiAPIKey, string: unifiAPIKey)
+        let normalizedUniFiKey = normalizedKey(unifiAPIKey)
+        let normalizedClaudeKey = normalizedKey(claudeAPIKey)
+        let normalizedOpenAIKey = normalizedKey(openaiAPIKey)
+
+        if !normalizedUniFiKey.isEmpty {
+            KeychainHelper.save(key: .unifiAPIKey, string: normalizedUniFiKey)
         }
-        if !claudeAPIKey.isEmpty {
-            KeychainHelper.save(key: .claudeAPIKey, string: claudeAPIKey)
+        if !normalizedClaudeKey.isEmpty {
+            KeychainHelper.save(key: .claudeAPIKey, string: normalizedClaudeKey)
         }
-        if !openaiAPIKey.isEmpty {
-            KeychainHelper.save(key: .openaiAPIKey, string: openaiAPIKey)
+        if !normalizedOpenAIKey.isEmpty {
+            KeychainHelper.save(key: .openaiAPIKey, string: normalizedOpenAIKey)
         }
 
         UserDefaults.standard.set(voiceEnabled, forKey: "voiceEnabled")
@@ -50,13 +59,15 @@ final class SettingsViewModel: ObservableObject {
     }
 
     var isValid: Bool {
-        !consoleURL.isEmpty && !siteID.isEmpty && !unifiAPIKey.isEmpty && hasSelectedLLMKey
+        !UniFiAPIClient.normalizeBaseURL(consoleURL).isEmpty
+            && !normalizedKey(unifiAPIKey).isEmpty
+            && hasSelectedLLMKey
     }
 
     var hasSelectedLLMKey: Bool {
         switch selectedProvider {
-        case .claude: return !claudeAPIKey.isEmpty
-        case .openai: return !openaiAPIKey.isEmpty
+        case .claude: return !normalizedKey(claudeAPIKey).isEmpty
+        case .openai: return !normalizedKey(openaiAPIKey).isEmpty
         }
     }
 
@@ -65,7 +76,8 @@ final class SettingsViewModel: ObservableObject {
         connectionTestResult = nil
         defer { isTesting = false }
 
-        let client = UniFiAPIClient(baseURL: consoleURL, allowSelfSigned: allowSelfSignedCerts)
+        let normalizedConsoleURL = UniFiAPIClient.normalizeBaseURL(consoleURL)
+        let client = UniFiAPIClient(baseURL: normalizedConsoleURL, allowSelfSigned: allowSelfSignedCerts)
         // Temporarily save the key so the client can use it
         let hadKey = KeychainHelper.exists(key: .unifiAPIKey)
         if !unifiAPIKey.isEmpty {
@@ -85,5 +97,71 @@ final class SettingsViewModel: ObservableObject {
                 KeychainHelper.delete(key: .unifiAPIKey)
             }
         }
+    }
+
+    func testSelectedLLMKey() async {
+        isTestingLLMKey = true
+        llmKeyTestResult = nil
+        defer { isTestingLLMKey = false }
+
+        do {
+            switch selectedProvider {
+            case .claude:
+                try await testClaudeKey()
+                llmKeyTestResult = "Connected! Claude API key is valid."
+            case .openai:
+                try await testOpenAIKey()
+                llmKeyTestResult = "Connected! OpenAI API key is valid."
+            }
+        } catch let error as LLMError {
+            llmKeyTestResult = "Failed: \(error.localizedDescription)"
+        } catch {
+            llmKeyTestResult = "Failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func testOpenAIKey() async throws {
+        let apiKey = normalizedKey(openaiAPIKey)
+        guard !apiKey.isEmpty else {
+            throw LLMError.missingAPIKey
+        }
+
+        var request = URLRequest(url: URL(string: "https://api.openai.com/v1/models")!)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 20
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validateHTTP(response: response, data: data)
+    }
+
+    private func testClaudeKey() async throws {
+        let apiKey = normalizedKey(claudeAPIKey)
+        guard !apiKey.isEmpty else {
+            throw LLMError.missingAPIKey
+        }
+
+        var request = URLRequest(url: URL(string: "https://api.anthropic.com/v1/models")!)
+        request.httpMethod = "GET"
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        request.timeoutInterval = 20
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validateHTTP(response: response, data: data)
+    }
+
+    private func validateHTTP(response: URLResponse, data: Data) throws {
+        guard let http = response as? HTTPURLResponse else {
+            throw LLMError.invalidResponse("missing HTTP response")
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw LLMError.httpError(http.statusCode, body)
+        }
+    }
+
+    private func normalizedKey(_ key: String) -> String {
+        key.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

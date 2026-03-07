@@ -14,6 +14,7 @@ final class SpeechService: ObservableObject {
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private let audioEngine = AVAudioEngine()
+    private var hasInputTap = false
     private var synthDelegate: SynthDelegate?
 
     var selectedVoiceIdentifier: String = "" {
@@ -37,7 +38,7 @@ final class SpeechService: ObservableObject {
         voiceEnabled = UserDefaults.standard.bool(forKey: "voiceEnabled")
 
         synthDelegate = SynthDelegate { [weak self] in
-            Task { @MainActor in
+            DispatchQueue.main.async {
                 self?.isSpeaking = false
             }
         }
@@ -80,22 +81,25 @@ final class SpeechService: ObservableObject {
         let recordingFormat = inputNode.outputFormat(forBus: 0)
 
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { buffer, _ in
+            guard buffer.frameLength > 0 else { return }
             recognitionRequest.append(buffer)
         }
+        hasInputTap = true
 
         do {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
+            try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothHFP])
             try session.setActive(true, options: .notifyOthersOnDeactivation)
             audioEngine.prepare()
             try audioEngine.start()
         } catch {
+            debugLog("Speech startListening audio setup failed: \(error.localizedDescription)", category: "Speech")
             cleanupRecognition()
             return
         }
 
         recognitionTask = recognizer.recognitionTask(with: recognitionRequest) { [weak self] result, error in
-            Task { @MainActor [weak self] in
+            DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 if let result {
                     self.transcript = result.bestTranscription.formattedString
@@ -118,7 +122,10 @@ final class SpeechService: ObservableObject {
 
     private func cleanupRecognition() {
         audioEngine.stop()
-        audioEngine.inputNode.removeTap(onBus: 0)
+        if hasInputTap {
+            audioEngine.inputNode.removeTap(onBus: 0)
+            hasInputTap = false
+        }
         recognitionRequest = nil
         recognitionTask?.cancel()
         recognitionTask = nil
@@ -141,12 +148,6 @@ final class SpeechService: ObservableObject {
         } else {
             utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
         }
-
-        do {
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playback, mode: .default)
-            try session.setActive(true)
-        } catch {}
 
         isSpeaking = true
         synthesizer.speak(utterance)

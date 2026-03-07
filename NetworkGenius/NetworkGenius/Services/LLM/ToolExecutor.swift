@@ -17,48 +17,56 @@ final class ToolExecutor {
             return "Error: Not connected to the local network. Unable to query the UniFi console."
         }
 
+        let startedAt = Date()
+        debugLog("Tool '\(toolCall.name)' started", category: "Tools")
         do {
+            let output: String
             switch toolCall.name {
             case "list_devices":
-                return try await queryService.query("devices")
+                output = try await queryService.query("devices")
             case "list_clients":
-                return try await queryService.query("clients")
+                output = try await queryService.query("clients")
             case "list_networks":
-                return try await queryService.query("networks")
+                output = try await queryService.query("networks")
             case "list_wifi_broadcasts":
-                return try await queryService.query("wifi-broadcasts")
+                output = try await queryService.query("wifi-broadcasts")
             case "list_firewall_policies":
-                return try await queryService.query("firewall-policies")
+                output = try await queryService.query("firewall-policies")
             case "list_firewall_zones":
-                return try await queryService.query("firewall-zones")
+                output = try await queryService.query("firewall-zones")
             case "list_acl_rules":
-                return try await queryService.query("acl-rules")
+                output = try await queryService.query("acl-rules")
             case "list_dns_policies":
-                return try await queryService.query("dns-policies")
+                output = try await queryService.query("dns-policies")
             case "list_vpn_servers":
-                return try await queryService.query("vpn-servers")
+                output = try await queryService.query("vpn-servers")
             case "list_pending_devices":
-                return try await queryService.query("pending-devices")
+                output = try await queryService.query("pending-devices")
             case "get_device_details":
-                return try await queryService.query("device", resourceID: toolCall.arguments["device_id"])
+                output = try await queryService.query("device", resourceID: toolCall.arguments["device_id"])
             case "get_device_stats":
-                return try await queryService.query("device-stats", resourceID: toolCall.arguments["device_id"])
+                output = try await queryService.query("device-stats", resourceID: toolCall.arguments["device_id"])
             case "get_client_details":
-                return try await queryService.query("client", resourceID: toolCall.arguments["client_id"])
+                output = try await queryService.query("client", resourceID: toolCall.arguments["client_id"])
             case "network_overview":
-                return try await summaryService.summary("overview")
+                output = try await summaryService.summary("overview")
             case "clients_summary":
-                return try await summaryService.summary("clients")
+                output = try await summaryService.summary("clients")
             case "wifi_summary":
-                return try await summaryService.summary("wifi")
+                output = try await summaryService.summary("wifi")
             case "firewall_summary":
-                return try await summaryService.summary("firewall")
+                output = try await summaryService.summary("firewall")
             case "security_summary":
-                return try await summaryService.summary("security")
+                output = try await summaryService.summary("security")
             default:
-                return "Unknown tool: \(toolCall.name)"
+                output = "Unknown tool: \(toolCall.name)"
             }
+            let elapsedMS = Int(Date().timeIntervalSince(startedAt) * 1000)
+            debugLog("Tool '\(toolCall.name)' completed in \(elapsedMS)ms", category: "Tools")
+            return output
         } catch {
+            let elapsedMS = Int(Date().timeIntervalSince(startedAt) * 1000)
+            debugLog("Tool '\(toolCall.name)' failed in \(elapsedMS)ms: \(error.localizedDescription)", category: "Tools")
             return "Error executing \(toolCall.name): \(error.localizedDescription)"
         }
     }

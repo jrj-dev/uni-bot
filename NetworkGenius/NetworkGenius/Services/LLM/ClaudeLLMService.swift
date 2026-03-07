@@ -4,9 +4,11 @@ final class ClaudeLLMService: LLMService {
     private let model = "claude-sonnet-4-20250514"
 
     func sendMessages(_ messages: [LLMMessage], tools: [[String: Any]], systemPrompt: String) async throws -> LLMResponse {
-        guard let apiKey = KeychainHelper.loadString(key: .claudeAPIKey) else {
+        guard let rawKey = KeychainHelper.loadString(key: .claudeAPIKey) else {
             throw LLMError.missingAPIKey
         }
+        let apiKey = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !apiKey.isEmpty else { throw LLMError.missingAPIKey }
 
         let url = URL(string: "https://api.anthropic.com/v1/messages")!
         var request = URLRequest(url: url)
@@ -28,10 +30,16 @@ final class ClaudeLLMService: LLMService {
 
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
+        let startedAt = Date()
+        debugLog("Claude request started (model=\(model), messages=\(messages.count), tools=\(tools.count))", category: "LLM")
         let (data, response) = try await URLSession.shared.data(for: request)
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            let body = String(data: data, encoding: .utf8) ?? ""
-            throw LLMError.httpError(http.statusCode, body)
+        if let http = response as? HTTPURLResponse {
+            let elapsedMS = Int(Date().timeIntervalSince(startedAt) * 1000)
+            debugLog("Claude response HTTP \(http.statusCode) in \(elapsedMS)ms", category: "LLM")
+            if !(200..<300).contains(http.statusCode) {
+                let body = String(data: data, encoding: .utf8) ?? ""
+                throw LLMError.httpError(http.statusCode, body)
+            }
         }
 
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
