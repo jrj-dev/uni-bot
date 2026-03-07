@@ -41,6 +41,7 @@ final class SpeechService: ObservableObject {
     private var pendingCloudFallbackText: String?
     private let defaultSpeechRate: Float = 0.50
     private let openAITTSTimeoutSeconds: TimeInterval = 25
+    private let openAITTSMaxAttempts = 4
     private let openAITTSMaxCharacters = 650
     private let openAITTSRetryMaxCharacters = 220
 
@@ -295,98 +296,27 @@ final class SpeechService: ObservableObject {
             return
         }
 
-        guard let url = URL(string: "https://api.openai.com/v1/audio/speech") else {
-            pendingCloudFallbackText = nil
-            speakLocal(text)
-            return
-        }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.timeoutInterval = 30
-
-        let body: [String: Any] = [
-            "model": "gpt-4o-mini-tts",
-            "voice": openAICloudVoice,
-            "input": cloudInput,
-            "response_format": "mp3",
-        ]
         do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: body)
-            debugLog(
-                "OpenAI TTS request started (voice=\(openAICloudVoice), inputChars=\(cloudInput.count), timeout=\(Int(openAITTSTimeoutSeconds))s)",
-                category: "Speech"
-            )
-            let startedAt = Date()
-            let (data, response) = try await dataForOpenAITTS(request, timeoutSeconds: openAITTSTimeoutSeconds)
-            if Task.isCancelled {
-                debugLog("OpenAI TTS task cancelled after HTTP response", category: "Speech")
-                return
-            }
-            let elapsedMS = Int(Date().timeIntervalSince(startedAt) * 1000)
-            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            if let http = response as? HTTPURLResponse {
-                let contentType = http.value(forHTTPHeaderField: "Content-Type") ?? "unknown"
-                let requestID = http.value(forHTTPHeaderField: "x-request-id") ?? "n/a"
-                debugLog(
-                    "OpenAI TTS response HTTP \(status) in \(elapsedMS)ms (bytes=\(data.count), contentType=\(contentType), requestID=\(requestID))",
-                    category: "Speech"
-                )
-            } else {
-                debugLog(
-                    "OpenAI TTS response non-HTTP in \(elapsedMS)ms (bytes=\(data.count))",
-                    category: "Speech"
-                )
-            }
-            guard (200..<300).contains(status) else {
-                let bodyPreview = String(data: data.prefix(400), encoding: .utf8)?
-                    .replacingOccurrences(of: "\n", with: " ")
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                    ?? "<non-utf8 body>"
-                debugLog(
-                    "OpenAI TTS failed HTTP \(status) bodyPreview=\(bodyPreview); falling back to local voice",
-                    category: "Speech"
-                )
-                pendingCloudFallbackText = nil
-                speakLocal(text)
-                return
-            }
-
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playback, mode: .default, options: [.duckOthers])
-            try session.setActive(true, options: .notifyOthersOnDeactivation)
-            debugLog("OpenAI TTS audio session configured for playback", category: "Speech")
-
-            let player = try AVAudioPlayer(data: data)
-            player.delegate = playerDelegate
-            audioPlayer = player
-            player.prepareToPlay()
-            debugLog(
-                "OpenAI TTS player prepared (duration=\(String(format: "%.2f", player.duration))s, channels=\(player.numberOfChannels), rate=\(player.rate))",
-                category: "Speech"
-            )
-            isSpeaking = player.play()
-            if !isSpeaking {
-                debugLog("OpenAI TTS audio playback failed; falling back to local voice", category: "Speech")
-                pendingCloudFallbackText = nil
-                speakLocal(text)
-            } else {
-                debugLog("OpenAI TTS playback started", category: "Speech")
-            }
+            let data = try await fetchOpenAITTSAudio(apiKey: apiKey, voice: openAICloudVoice, input: cloudInput)
+            try playOpenAITTSAudio(data)
         } catch {
             if isTimeoutError(error), cloudInput.count > openAITTSRetryMaxCharacters {
                 debugLog(
                     "OpenAI TTS timed out; retrying once with shorter input (\(openAITTSRetryMaxCharacters) chars)",
                     category: "Speech"
                 )
-                await retryOpenAITTSWithShorterInput(
-                    originalText: text,
-                    apiKey: apiKey,
-                    voice: openAICloudVoice,
-                    input: String(cloudInput.prefix(openAITTSRetryMaxCharacters))
-                )
-                return
+                do {
+                    let shortInput = String(cloudInput.prefix(openAITTSRetryMaxCharacters))
+                    let data = try await fetchOpenAITTSAudio(apiKey: apiKey, voice: openAICloudVoice, input: shortInput)
+                    try playOpenAITTSAudio(data)
+                    return
+                } catch {
+                    let nsError = error as NSError
+                    debugLog(
+                        "OpenAI TTS short retry failed domain=\(nsError.domain) code=\(nsError.code) description=\(error.localizedDescription)",
+                        category: "Speech"
+                    )
+                }
             }
 
             let nsError = error as NSError
@@ -414,6 +344,111 @@ final class SpeechService: ObservableObject {
         return prefix
     }
 
+    private func fetchOpenAITTSAudio(apiKey: String, voice: String, input: String) async throws -> Data {
+        guard let url = URL(string: "https://api.openai.com/v1/audio/speech") else {
+            throw URLError(.badURL)
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = openAITTSTimeoutSeconds
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "model": "gpt-4o-mini-tts",
+            "voice": voice,
+            "input": input,
+            "response_format": "mp3",
+        ])
+
+        var attempt = 1
+        while true {
+            debugLog(
+                "OpenAI TTS request started (voice=\(voice), inputChars=\(input.count), timeout=\(Int(openAITTSTimeoutSeconds))s, attempt=\(attempt)/\(openAITTSMaxAttempts))",
+                category: "Speech"
+            )
+            let startedAt = Date()
+            do {
+                let (data, response) = try await dataForOpenAITTS(request, timeoutSeconds: openAITTSTimeoutSeconds)
+                if Task.isCancelled {
+                    debugLog("OpenAI TTS task cancelled after HTTP response", category: "Speech")
+                    throw CancellationError()
+                }
+                guard let http = response as? HTTPURLResponse else {
+                    throw URLError(.badServerResponse)
+                }
+
+                let elapsedMS = Int(Date().timeIntervalSince(startedAt) * 1000)
+                let contentType = http.value(forHTTPHeaderField: "Content-Type") ?? "unknown"
+                let requestID = http.value(forHTTPHeaderField: "x-request-id") ?? "n/a"
+                debugLog(
+                    "OpenAI TTS response HTTP \(http.statusCode) in \(elapsedMS)ms (bytes=\(data.count), contentType=\(contentType), requestID=\(requestID), attempt=\(attempt)/\(openAITTSMaxAttempts))",
+                    category: "Speech"
+                )
+
+                if (200..<300).contains(http.statusCode) {
+                    return data
+                }
+
+                if shouldRetryOpenAITTS(statusCode: http.statusCode), attempt < openAITTSMaxAttempts {
+                    let delay = openAITTSRetryDelay(statusCode: http.statusCode, headers: http.allHeaderFields, attempt: attempt)
+                    debugLog(
+                        "OpenAI TTS throttled/transient HTTP \(http.statusCode); retrying in \(String(format: "%.2f", delay))s (attempt=\(attempt + 1)/\(openAITTSMaxAttempts))",
+                        category: "Speech"
+                    )
+                    try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                    attempt += 1
+                    continue
+                }
+
+                let bodyPreview = String(data: data.prefix(400), encoding: .utf8)?
+                    .replacingOccurrences(of: "\n", with: " ")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    ?? "<non-utf8 body>"
+                throw NSError(
+                    domain: "OpenAITTSHTTP",
+                    code: http.statusCode,
+                    userInfo: [NSLocalizedDescriptionKey: "HTTP \(http.statusCode) bodyPreview=\(bodyPreview)"]
+                )
+            } catch {
+                if Task.isCancelled { throw error }
+                if isRetryableOpenAITTSNetworkError(error), attempt < openAITTSMaxAttempts {
+                    let delay = openAITTSRetryDelay(statusCode: nil, headers: [:], attempt: attempt)
+                    let nsError = error as NSError
+                    debugLog(
+                        "OpenAI TTS network error domain=\(nsError.domain) code=\(nsError.code); retrying in \(String(format: "%.2f", delay))s (attempt=\(attempt + 1)/\(openAITTSMaxAttempts))",
+                        category: "Speech"
+                    )
+                    try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                    attempt += 1
+                    continue
+                }
+                throw error
+            }
+        }
+    }
+
+    private func playOpenAITTSAudio(_ data: Data) throws {
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playback, mode: .default, options: [.duckOthers])
+        try session.setActive(true, options: .notifyOthersOnDeactivation)
+        debugLog("OpenAI TTS audio session configured for playback", category: "Speech")
+
+        let player = try AVAudioPlayer(data: data)
+        player.delegate = playerDelegate
+        audioPlayer = player
+        player.prepareToPlay()
+        debugLog(
+            "OpenAI TTS player prepared (duration=\(String(format: "%.2f", player.duration))s, channels=\(player.numberOfChannels), rate=\(player.rate))",
+            category: "Speech"
+        )
+        isSpeaking = player.play()
+        guard isSpeaking else {
+            throw NSError(domain: "OpenAITTSPlayback", code: -1, userInfo: [NSLocalizedDescriptionKey: "AVAudioPlayer.play returned false"])
+        }
+        debugLog("OpenAI TTS playback started", category: "Speech")
+    }
+
     private func dataForOpenAITTS(_ request: URLRequest, timeoutSeconds: TimeInterval) async throws -> (Data, URLResponse) {
         try await withThrowingTaskGroup(of: (Data, URLResponse).self) { group in
             group.addTask {
@@ -429,76 +464,6 @@ final class SpeechService: ObservableObject {
         }
     }
 
-    private func retryOpenAITTSWithShorterInput(
-        originalText: String,
-        apiKey: String,
-        voice: String,
-        input: String
-    ) async {
-        guard let url = URL(string: "https://api.openai.com/v1/audio/speech") else {
-            pendingCloudFallbackText = nil
-            speakLocal(originalText)
-            return
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.timeoutInterval = openAITTSTimeoutSeconds
-
-        let body: [String: Any] = [
-            "model": "gpt-4o-mini-tts",
-            "voice": voice,
-            "input": input,
-            "response_format": "mp3",
-        ]
-
-        do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: body)
-            let startedAt = Date()
-            let (data, response) = try await dataForOpenAITTS(request, timeoutSeconds: openAITTSTimeoutSeconds)
-            if Task.isCancelled { return }
-            let elapsedMS = Int(Date().timeIntervalSince(startedAt) * 1000)
-            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            debugLog(
-                "OpenAI TTS retry response HTTP \(status) in \(elapsedMS)ms (bytes=\(data.count), inputChars=\(input.count))",
-                category: "Speech"
-            )
-            guard (200..<300).contains(status) else {
-                pendingCloudFallbackText = nil
-                speakLocal(originalText)
-                return
-            }
-
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playback, mode: .default, options: [.duckOthers])
-            try session.setActive(true, options: .notifyOthersOnDeactivation)
-
-            let player = try AVAudioPlayer(data: data)
-            player.delegate = playerDelegate
-            audioPlayer = player
-            player.prepareToPlay()
-            isSpeaking = player.play()
-            if !isSpeaking {
-                pendingCloudFallbackText = nil
-                speakLocal(originalText)
-            } else {
-                debugLog("OpenAI TTS retry playback started", category: "Speech")
-            }
-        } catch {
-            let nsError = error as NSError
-            debugLog(
-                "OpenAI TTS retry failed domain=\(nsError.domain) code=\(nsError.code) description=\(error.localizedDescription); falling back to local voice",
-                category: "Speech"
-            )
-            if !Task.isCancelled {
-                pendingCloudFallbackText = nil
-                speakLocal(originalText)
-            }
-        }
-    }
-
     private func isTimeoutError(_ error: Error) -> Bool {
         let nsError = error as NSError
         if nsError.domain == NSURLErrorDomain, nsError.code == URLError.timedOut.rawValue {
@@ -508,6 +473,67 @@ final class SpeechService: ObservableObject {
             return true
         }
         return false
+    }
+
+    private func shouldRetryOpenAITTS(statusCode: Int) -> Bool {
+        statusCode == 429 || statusCode == 408 || statusCode == 500 || statusCode == 502 || statusCode == 503 || statusCode == 504
+    }
+
+    private func openAITTSRetryDelay(statusCode: Int?, headers: [AnyHashable: Any], attempt: Int) -> TimeInterval {
+        if statusCode == 429 {
+            if let retryAfter = headerValue("Retry-After", headers: headers),
+               let parsed = parseRetryAfterSeconds(retryAfter) {
+                return min(max(parsed, 0.5), 30)
+            }
+            if let reset = headerValue("x-ratelimit-reset-requests", headers: headers),
+               let parsed = parseResetDurationSeconds(reset) {
+                return min(max(parsed, 0.5), 30)
+            }
+        }
+
+        let base = min(pow(2.0, Double(attempt - 1)), 8.0)
+        let jitter = Double.random(in: 0...0.35)
+        return base + jitter
+    }
+
+    private func headerValue(_ key: String, headers: [AnyHashable: Any]) -> String? {
+        for (headerKey, value) in headers {
+            if String(describing: headerKey).caseInsensitiveCompare(key) == .orderedSame {
+                return String(describing: value)
+            }
+        }
+        return nil
+    }
+
+    private func parseRetryAfterSeconds(_ value: String) -> TimeInterval? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let seconds = Double(trimmed) { return seconds }
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss z"
+        guard let date = formatter.date(from: trimmed) else { return nil }
+        return date.timeIntervalSinceNow
+    }
+
+    private func parseResetDurationSeconds(_ value: String) -> TimeInterval? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if let seconds = Double(trimmed) { return seconds }
+        if trimmed.hasSuffix("ms"), let ms = Double(trimmed.dropLast(2)) { return ms / 1000.0 }
+        if trimmed.hasSuffix("s"), let s = Double(trimmed.dropLast(1)) { return s }
+        if trimmed.hasSuffix("m"), let m = Double(trimmed.dropLast(1)) { return m * 60 }
+        return nil
+    }
+
+    private func isRetryableOpenAITTSNetworkError(_ error: Error) -> Bool {
+        guard let urlError = error as? URLError else { return false }
+        switch urlError.code {
+        case .timedOut, .cannotFindHost, .cannotConnectToHost, .networkConnectionLost, .dnsLookupFailed, .notConnectedToInternet:
+            return true
+        default:
+            return false
+        }
     }
 
     private func defaultVoice() -> AVSpeechSynthesisVoice? {
