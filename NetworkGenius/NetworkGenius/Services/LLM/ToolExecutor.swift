@@ -94,6 +94,17 @@ final class ToolExecutor {
                 output = try await lokiService.listLabels()
             case "list_unifi_log_label_values":
                 output = try await lokiService.labelValues(label: toolCall.arguments["label"])
+            case "list_unifi_log_series":
+                output = try await lokiService.listSeries(
+                    query: toolCall.arguments["query"],
+                    minutes: Int(toolCall.arguments["minutes"] ?? ""),
+                    limit: Int(toolCall.arguments["limit"] ?? "")
+                )
+            case "get_unifi_log_stats":
+                output = try await lokiService.indexStats(
+                    query: toolCall.arguments["query"],
+                    minutes: Int(toolCall.arguments["minutes"] ?? "")
+                )
             default:
                 output = "Unknown tool: \(toolCall.name)"
             }
@@ -221,6 +232,95 @@ private struct GrafanaLokiService {
         }
         if values.isEmpty { return "No values found for label '\(label)'." }
         return "Loki label '\(label)' values (\(values.count)): " + values.sorted().joined(separator: ", ")
+    }
+
+    func listSeries(query rawQuery: String?, minutes rawMinutes: Int?, limit rawLimit: Int?) async throws -> String {
+        guard !baseURL.isEmpty else {
+            debugLog("Loki series query skipped: base URL missing", category: "Logs")
+            return "Error: Loki base URL is not configured in Settings."
+        }
+
+        let query = normalizedQuery(rawQuery)
+        let minutes = max(1, min(rawMinutes ?? 60, 1440))
+        let limit = max(1, min(rawLimit ?? 50, 200))
+        let endNanos = unixNanos(Date())
+        let startNanos = unixNanos(Date().addingTimeInterval(-Double(minutes) * 60.0))
+        debugLog("Loki series query requested (minutes=\(minutes), limit=\(limit), query=\(query))", category: "Logs")
+
+        var components = URLComponents(string: "\(baseURL)/loki/api/v1/series")!
+        components.queryItems = [
+            URLQueryItem(name: "match[]", value: query),
+            URLQueryItem(name: "start", value: startNanos),
+            URLQueryItem(name: "end", value: endNanos),
+        ]
+        guard let url = components.url else {
+            debugLog("Loki series URL construction failed", category: "Logs")
+            return "Error: Unable to construct Loki series URL."
+        }
+        let data = try await get(url: url)
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let series = json["data"] as? [[String: String]] else {
+            debugLog("Loki series parse failed: unexpected payload shape", category: "Logs")
+            return "Error: Unexpected Loki series response format."
+        }
+        if series.isEmpty {
+            return "Loki series: no streams found for query '\(query)'."
+        }
+
+        let formatted = series.prefix(limit).enumerated().map { index, labels in
+            let text = labels
+                .sorted(by: { $0.key < $1.key })
+                .map { "\($0.key)=\($0.value)" }
+                .joined(separator: ", ")
+            return "\(index + 1). \(text)"
+        }
+        return """
+        Loki series (\(min(limit, series.count)) of \(series.count), query=\(query)):
+        \(formatted.joined(separator: "\n"))
+        """
+    }
+
+    func indexStats(query rawQuery: String?, minutes rawMinutes: Int?) async throws -> String {
+        guard !baseURL.isEmpty else {
+            debugLog("Loki index stats query skipped: base URL missing", category: "Logs")
+            return "Error: Loki base URL is not configured in Settings."
+        }
+
+        let query = normalizedQuery(rawQuery)
+        let minutes = max(1, min(rawMinutes ?? 60, 1440))
+        let endNanos = unixNanos(Date())
+        let startNanos = unixNanos(Date().addingTimeInterval(-Double(minutes) * 60.0))
+        debugLog("Loki index stats requested (minutes=\(minutes), query=\(query))", category: "Logs")
+
+        var components = URLComponents(string: "\(baseURL)/loki/api/v1/index/stats")!
+        components.queryItems = [
+            URLQueryItem(name: "query", value: query),
+            URLQueryItem(name: "start", value: startNanos),
+            URLQueryItem(name: "end", value: endNanos),
+        ]
+        guard let url = components.url else {
+            debugLog("Loki index stats URL construction failed", category: "Logs")
+            return "Error: Unable to construct Loki index stats URL."
+        }
+
+        let data = try await get(url: url)
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let stats = json["data"] as? [String: Any] else {
+            debugLog("Loki index stats parse failed: unexpected payload shape", category: "Logs")
+            return "Error: Unexpected Loki index stats response format."
+        }
+
+        let streams = stats["streams"] ?? "unknown"
+        let chunks = stats["chunks"] ?? "unknown"
+        let entries = stats["entries"] ?? "unknown"
+        let bytes = stats["bytes"] ?? "unknown"
+        return """
+        Loki index stats (query=\(query), minutes=\(minutes)):
+        - streams: \(streams)
+        - chunks: \(chunks)
+        - entries: \(entries)
+        - bytes: \(bytes)
+        """
     }
 
     private func get(url: URL) async throws -> Data {

@@ -157,6 +157,23 @@ enum ToolCatalog {
                 ToolParameter(name: "label", type: "string", description: "Label name, e.g. host, job, level.", required: true),
             ]
         ),
+        ToolDefinition(
+            name: "list_unifi_log_series",
+            description: "List Loki log stream label sets for a selector over a recent time range.",
+            parameters: [
+                ToolParameter(name: "query", type: "string", description: "Log stream selector, e.g. {job=\"unifi\"}. Default: {job=\"unifi\"}.", required: false),
+                ToolParameter(name: "minutes", type: "integer", description: "How far back to inspect in minutes (1-1440). Default: 60.", required: false),
+                ToolParameter(name: "limit", type: "integer", description: "Maximum series to return (1-200). Default: 50.", required: false),
+            ]
+        ),
+        ToolDefinition(
+            name: "get_unifi_log_stats",
+            description: "Get Loki index stats (streams/chunks/entries/bytes) for a selector over a recent time range.",
+            parameters: [
+                ToolParameter(name: "query", type: "string", description: "Log stream selector, e.g. {job=\"unifi\"}. Default: {job=\"unifi\"}.", required: false),
+                ToolParameter(name: "minutes", type: "integer", description: "How far back to inspect in minutes (1-1440). Default: 60.", required: false),
+            ]
+        ),
     ]
 
     static func claudeToolSchemas() -> [[String: Any]] {

@@ -41,6 +41,7 @@ Use the bundled script to talk to the local UniFi Network API.
 - `query_unifi_logs_instant`: Run an instant Grafana Loki query. Parameters: `query` (required), `limit` (optional).
 - `list_unifi_log_labels`: List available Loki labels. Parameters: none.
 - `list_unifi_log_label_values`: List values for one Loki label. Parameters: `label` (required).
+- Use Loki log tools to answer event-history questions across security detections, critical incidents, admin logins, device issues, triggers/alerts, VPN behavior, firewall policy effects, UniFi OS updates, backup activity, and user access.
 
 ## Work Safely
 
