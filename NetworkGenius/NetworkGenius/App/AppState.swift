@@ -4,6 +4,7 @@ import SwiftUI
 enum LLMProvider: String, CaseIterable, Identifiable {
     case claude = "Claude"
     case openai = "OpenAI"
+    case lmStudio = "LM Studio"
     var id: String { rawValue }
 }
 
@@ -16,6 +17,8 @@ final class AppState: ObservableObject {
     @AppStorage("shareDeviceContextWithLLM") var shareDeviceContextWithLLM: Bool = false
     @AppStorage("darkModeEnabled") var darkModeEnabled: Bool = true
     @AppStorage("grafanaLokiURL") var grafanaLokiURL: String = ""
+    @AppStorage("lmStudioBaseURL") var lmStudioBaseURL: String = ""
+    @AppStorage("lmStudioModel") var lmStudioModel: String = ""
 
     var llmProvider: LLMProvider {
         get { LLMProvider(rawValue: llmProviderRaw) ?? .claude }
@@ -32,6 +35,9 @@ final class AppState: ObservableObject {
         switch llmProvider {
         case .claude: return KeychainHelper.exists(key: .claudeAPIKey)
         case .openai: return KeychainHelper.exists(key: .openaiAPIKey)
+        case .lmStudio:
+            return KeychainHelper.exists(key: .lmStudioAPIKey)
+                && !UniFiAPIClient.normalizeBaseURL(lmStudioBaseURL).isEmpty
         }
     }
 }

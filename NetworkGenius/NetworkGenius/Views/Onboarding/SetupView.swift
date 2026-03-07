@@ -63,6 +63,15 @@ struct SetupView: View {
                     SecureField("Claude API Key", text: $viewModel.claudeAPIKey)
                 case .openai:
                     SecureField("OpenAI API Key", text: $viewModel.openaiAPIKey)
+                case .lmStudio:
+                    TextField("LM Studio Base URL (e.g. http://192.168.1.10:1234)", text: $viewModel.lmStudioBaseURL)
+                        .keyboardType(.URL)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                    TextField("LM Studio Model ID", text: $viewModel.lmStudioModel)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                    SecureField("LM Studio API Key", text: $viewModel.lmStudioAPIKey)
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
@@ -77,7 +86,7 @@ struct SetupView: View {
                             Text("Test API Key")
                         }
                     }
-                    .disabled(!viewModel.hasSelectedLLMKey || viewModel.isTestingLLMKey)
+                    .disabled(!viewModel.hasSelectedLLMConfig || viewModel.isTestingLLMKey)
 
                     if let result = viewModel.llmKeyTestResult {
                         Text(result)

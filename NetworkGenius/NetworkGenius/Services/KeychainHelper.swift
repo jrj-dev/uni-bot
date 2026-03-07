@@ -7,6 +7,7 @@ enum KeychainHelper {
         case claudeAPIKey = "claude_api_key"
         case openaiAPIKey = "openai_api_key"
         case grafanaLokiAPIKey = "grafana_loki_api_key"
+        case lmStudioAPIKey = "lmstudio_api_key"
     }
 
     @discardableResult

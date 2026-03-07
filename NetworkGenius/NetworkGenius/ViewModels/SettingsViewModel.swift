@@ -1,5 +1,7 @@
 import Foundation
 import SwiftUI
+import Darwin
+import CFNetwork
 
 @MainActor
 final class SettingsViewModel: ObservableObject {
@@ -8,6 +10,9 @@ final class SettingsViewModel: ObservableObject {
     @Published var unifiAPIKey: String = ""
     @Published var grafanaLokiURL: String = ""
     @Published var grafanaLokiAPIKey: String = ""
+    @Published var lmStudioBaseURL: String = ""
+    @Published var lmStudioModel: String = ""
+    @Published var lmStudioAPIKey: String = ""
     @Published var claudeAPIKey: String = ""
     @Published var openaiAPIKey: String = ""
     @Published var allowSelfSignedCerts: Bool = true
@@ -24,10 +29,26 @@ final class SettingsViewModel: ObservableObject {
     @Published var isTesting = false
     @Published var llmKeyTestResult: String?
     @Published var isTestingLLMKey = false
+    @Published var lmStudioModels: [String] = []
+    @Published var isLoadingLMStudioModels = false
+    @Published var lmStudioModelListResult: String?
+    private let lmStudioSession: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        config.urlCache = nil
+        config.connectionProxyDictionary = [
+            kCFNetworkProxiesHTTPEnable as String: 0,
+            "HTTPSEnable": 0,
+            kCFNetworkProxiesProxyAutoConfigEnable as String: 0,
+        ]
+        return URLSession(configuration: config)
+    }()
 
     func load(from appState: AppState) {
         consoleURL = appState.consoleURL
         grafanaLokiURL = appState.grafanaLokiURL
+        lmStudioBaseURL = appState.lmStudioBaseURL
+        lmStudioModel = appState.lmStudioModel
         siteID = appState.siteID
         allowSelfSignedCerts = appState.allowSelfSignedCerts
         selectedProvider = appState.llmProvider
@@ -35,6 +56,7 @@ final class SettingsViewModel: ObservableObject {
         darkModeEnabled = appState.darkModeEnabled
         unifiAPIKey = KeychainHelper.loadString(key: .unifiAPIKey) ?? ""
         grafanaLokiAPIKey = KeychainHelper.loadString(key: .grafanaLokiAPIKey) ?? ""
+        lmStudioAPIKey = KeychainHelper.loadString(key: .lmStudioAPIKey) ?? ""
         claudeAPIKey = KeychainHelper.loadString(key: .claudeAPIKey) ?? ""
         openaiAPIKey = KeychainHelper.loadString(key: .openaiAPIKey) ?? ""
         voiceEnabled = UserDefaults.standard.bool(forKey: "voiceEnabled")
@@ -52,6 +74,8 @@ final class SettingsViewModel: ObservableObject {
     func save(to appState: AppState) {
         appState.consoleURL = UniFiAPIClient.normalizeBaseURL(consoleURL)
         appState.grafanaLokiURL = UniFiAPIClient.normalizeBaseURL(grafanaLokiURL)
+        appState.lmStudioBaseURL = UniFiAPIClient.normalizeBaseURL(lmStudioBaseURL)
+        appState.lmStudioModel = normalizedKey(lmStudioModel)
         appState.siteID = siteID.trimmingCharacters(in: .whitespacesAndNewlines)
         appState.allowSelfSignedCerts = allowSelfSignedCerts
         appState.llmProvider = selectedProvider
@@ -60,6 +84,7 @@ final class SettingsViewModel: ObservableObject {
 
         let normalizedUniFiKey = normalizedKey(unifiAPIKey)
         let normalizedGrafanaLokiKey = normalizedKey(grafanaLokiAPIKey)
+        let normalizedLMStudioKey = normalizedKey(lmStudioAPIKey)
         let normalizedClaudeKey = normalizedKey(claudeAPIKey)
         let normalizedOpenAIKey = normalizedKey(openaiAPIKey)
 
@@ -68,6 +93,9 @@ final class SettingsViewModel: ObservableObject {
         }
         if !normalizedGrafanaLokiKey.isEmpty {
             KeychainHelper.save(key: .grafanaLokiAPIKey, string: normalizedGrafanaLokiKey)
+        }
+        if !normalizedLMStudioKey.isEmpty {
+            KeychainHelper.save(key: .lmStudioAPIKey, string: normalizedLMStudioKey)
         }
         if !normalizedClaudeKey.isEmpty {
             KeychainHelper.save(key: .claudeAPIKey, string: normalizedClaudeKey)
@@ -85,13 +113,25 @@ final class SettingsViewModel: ObservableObject {
     var isValid: Bool {
         !UniFiAPIClient.normalizeBaseURL(consoleURL).isEmpty
             && !normalizedKey(unifiAPIKey).isEmpty
-            && hasSelectedLLMKey
+            && hasSelectedLLMConfig
     }
 
     var hasSelectedLLMKey: Bool {
         switch selectedProvider {
         case .claude: return !normalizedKey(claudeAPIKey).isEmpty
         case .openai: return !normalizedKey(openaiAPIKey).isEmpty
+        case .lmStudio: return !normalizedKey(lmStudioAPIKey).isEmpty
+        }
+    }
+
+    var hasSelectedLLMConfig: Bool {
+        switch selectedProvider {
+        case .claude, .openai:
+            return hasSelectedLLMKey
+        case .lmStudio:
+            return hasSelectedLLMKey
+                && !UniFiAPIClient.normalizeBaseURL(lmStudioBaseURL).isEmpty
+                && !normalizedKey(lmStudioModel).isEmpty
         }
     }
 
@@ -136,11 +176,35 @@ final class SettingsViewModel: ObservableObject {
             case .openai:
                 try await testOpenAIKey()
                 llmKeyTestResult = "Connected! OpenAI API key is valid."
+            case .lmStudio:
+                try await testLMStudioKey()
+                llmKeyTestResult = "Connected! LM Studio API key is valid."
             }
         } catch let error as LLMError {
             llmKeyTestResult = "Failed: \(error.localizedDescription)"
         } catch {
-            llmKeyTestResult = "Failed: \(error.localizedDescription)"
+            llmKeyTestResult = "Failed: \(friendlyLMStudioError(error))"
+        }
+    }
+
+    func loadLMStudioModels() async {
+        isLoadingLMStudioModels = true
+        lmStudioModelListResult = nil
+        defer { isLoadingLMStudioModels = false }
+
+        do {
+            let models = try await fetchLMStudioModels()
+            lmStudioModels = models
+            if let first = models.first, normalizedKey(lmStudioModel).isEmpty {
+                lmStudioModel = first
+            }
+            lmStudioModelListResult = models.isEmpty
+                ? "Connected, but no loaded models were returned."
+                : "Loaded \(models.count) model(s)."
+        } catch let error as LLMError {
+            lmStudioModelListResult = "Failed: \(error.localizedDescription)"
+        } catch {
+            lmStudioModelListResult = "Failed: \(friendlyLMStudioError(error))"
         }
     }
 
@@ -175,17 +239,155 @@ final class SettingsViewModel: ObservableObject {
         try validateHTTP(response: response, data: data)
     }
 
+    private func testLMStudioKey() async throws {
+        let apiKey = normalizedKey(lmStudioAPIKey)
+        guard !apiKey.isEmpty else {
+            throw LLMError.missingAPIKey
+        }
+        let url = try lmStudioURL(path: "/v1/models")
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 20
+
+        let startedAt = Date()
+        debugLog("LM Studio models probe started (url=\(url.absoluteString))", category: "LLM")
+        let (data, response) = try await lmStudioSession.data(for: request)
+        if let http = response as? HTTPURLResponse {
+            let elapsedMS = Int(Date().timeIntervalSince(startedAt) * 1000)
+            debugLog("LM Studio models probe HTTP \(http.statusCode) in \(elapsedMS)ms", category: "LLM")
+        }
+        try validateHTTP(response: response, data: data)
+    }
+
+    private func fetchLMStudioModels() async throws -> [String] {
+        let apiKey = normalizedKey(lmStudioAPIKey)
+        guard !apiKey.isEmpty else {
+            throw LLMError.missingAPIKey
+        }
+        let url = try lmStudioURL(path: "/v1/models")
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 20
+
+        let startedAt = Date()
+        debugLog("LM Studio model list request started (url=\(url.absoluteString))", category: "LLM")
+        let (data, response) = try await lmStudioSession.data(for: request)
+        if let http = response as? HTTPURLResponse {
+            let elapsedMS = Int(Date().timeIntervalSince(startedAt) * 1000)
+            debugLog(
+                "LM Studio model list HTTP \(http.statusCode) in \(elapsedMS)ms (bytes=\(data.count))",
+                category: "LLM"
+            )
+        }
+        try validateHTTP(response: response, data: data)
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rawModels = json["data"] as? [[String: Any]] else {
+            throw LLMError.invalidResponse("LM Studio models response missing data array")
+        }
+        let ids = rawModels.compactMap { $0["id"] as? String }.sorted()
+        return Array(Set(ids)).sorted()
+    }
+
     private func validateHTTP(response: URLResponse, data: Data) throws {
         guard let http = response as? HTTPURLResponse else {
             throw LLMError.invalidResponse("missing HTTP response")
         }
         guard (200..<300).contains(http.statusCode) else {
             let body = String(data: data, encoding: .utf8) ?? ""
+            let bodyPreview = String(body.prefix(300)).replacingOccurrences(of: "\n", with: " ")
+            debugLog("LM Studio HTTP \(http.statusCode) bodyPreview=\(bodyPreview)", category: "LLM")
+            if http.statusCode == 502 {
+                throw LLMError.invalidResponse(
+                    "LM Studio returned HTTP 502 (proxy/intermediary path). Use direct LAN URL/IP and disable iCloud Private Relay / Limit IP Address Tracking for this Wi-Fi."
+                )
+            }
             throw LLMError.httpError(http.statusCode, body)
         }
     }
 
+    private func lmStudioURL(path: String) throws -> URL {
+        let normalizedBase = UniFiAPIClient.normalizeBaseURL(lmStudioBaseURL)
+        guard var components = URLComponents(string: normalizedBase) else {
+            throw LLMError.invalidResponse("LM Studio base URL is missing or invalid")
+        }
+        if let originalHost = components.host {
+            if let resolvedIP = resolvedIPv4Address(for: originalHost), resolvedIP != originalHost {
+                components.host = resolvedIP
+                debugLog("LM Studio host resolved to IP \(resolvedIP) (from \(originalHost))", category: "LLM")
+            } else if !looksLikeIPv4(originalHost) {
+                debugLog("LM Studio hostname resolution failed for '\(originalHost)'", category: "LLM")
+                throw LLMError.invalidResponse(
+                    "LM Studio host '\(originalHost)' could not be resolved on this device. Use a direct LAN IP (e.g. http://192.168.x.x:1234)."
+                )
+            }
+        }
+        components.path = path
+        guard let url = components.url else {
+            throw LLMError.invalidResponse("LM Studio base URL is missing or invalid")
+        }
+        return url
+    }
+
+    private func resolvedIPv4Address(for host: String) -> String? {
+        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.split(separator: ".").count == 4,
+           trimmed.allSatisfy({ $0.isNumber || $0 == "." }) {
+            return trimmed
+        }
+
+        var hints = addrinfo(
+            ai_flags: AI_DEFAULT,
+            ai_family: AF_INET,
+            ai_socktype: SOCK_STREAM,
+            ai_protocol: IPPROTO_TCP,
+            ai_addrlen: 0,
+            ai_canonname: nil,
+            ai_addr: nil,
+            ai_next: nil
+        )
+
+        var result: UnsafeMutablePointer<addrinfo>?
+        let status = getaddrinfo(trimmed, nil, &hints, &result)
+        guard status == 0, let first = result else {
+            return nil
+        }
+        defer { freeaddrinfo(result) }
+
+        for pointer in sequence(first: first, next: { $0.pointee.ai_next }) {
+            guard let sockaddr = pointer.pointee.ai_addr else { continue }
+            guard sockaddr.pointee.sa_family == sa_family_t(AF_INET) else { continue }
+
+            var address = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+            let ipv4 = UnsafeRawPointer(sockaddr).assumingMemoryBound(to: sockaddr_in.self)
+            var sinAddr = ipv4.pointee.sin_addr
+            let converted = withUnsafePointer(to: &sinAddr) { ptr in
+                inet_ntop(AF_INET, ptr, &address, socklen_t(INET_ADDRSTRLEN))
+            }
+            if converted != nil {
+                return String(cString: address)
+            }
+        }
+        return nil
+    }
+
+    private func looksLikeIPv4(_ host: String) -> Bool {
+        host.split(separator: ".").count == 4 && host.allSatisfy { $0.isNumber || $0 == "." }
+    }
+
     private func normalizedKey(_ key: String) -> String {
         key.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func friendlyLMStudioError(_ error: Error) -> String {
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain && nsError.code == URLError.timedOut.rawValue {
+            return "LM Studio timed out. Confirm LM Studio is running, listening on 0.0.0.0:1234 (not localhost-only), and that your phone/simulator can reach this host on the same LAN/VPN."
+        }
+        return error.localizedDescription
     }
 }

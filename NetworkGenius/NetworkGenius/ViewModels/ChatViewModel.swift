@@ -67,10 +67,22 @@ final class ChatViewModel: ObservableObject {
             self.llmService = ClaudeLLMService()
         case .openai:
             self.llmService = OpenAILLMService()
+        case .lmStudio:
+            self.llmService = LMStudioLLMService(
+                baseURL: appState.lmStudioBaseURL,
+                model: appState.lmStudioModel
+            )
         }
     }
 
     func sendMessage(_ text: String) async {
+        guard canUseSelectedLLMOnCurrentNetwork() else {
+            let msg = "LM Studio is configured as a local provider and is only available on local Wi-Fi or VPN."
+            debugLog("LM Studio request blocked: not on local Wi-Fi or VPN", category: "Chat")
+            messages.append(ChatMessage(role: .assistant, content: msg))
+            return
+        }
+
         let userMessage = ChatMessage(role: .user, content: text)
         messages.append(userMessage)
         llmMessages.append(LLMMessage(role: .user, content: text))
@@ -144,6 +156,13 @@ final class ChatViewModel: ObservableObject {
             content: "Connectivity check. Reply with 'ok'."
         )
 
+        guard canUseSelectedLLMOnCurrentNetwork() else {
+            let errorText = "LM Studio is configured as a local provider and is only available on local Wi-Fi or VPN."
+            messages.append(ChatMessage(role: .assistant, content: errorText))
+            debugLog("Startup intro skipped: LM Studio not on local Wi-Fi or VPN", category: "Chat")
+            return
+        }
+
         do {
             _ = try await llmService.sendMessages([probeMessage], tools: [], systemPrompt: systemPrompt)
             let intro = "Hi, I’m NetworkGenius (UniFi WiFi Edition). I can help troubleshoot your UniFi network. What issue are you seeing?"
@@ -164,7 +183,7 @@ final class ChatViewModel: ObservableObject {
         guard let appState else { return [] }
         switch appState.llmProvider {
         case .claude: return ToolCatalog.claudeToolSchemas()
-        case .openai: return ToolCatalog.openAIToolSchemas()
+        case .openai, .lmStudio: return ToolCatalog.openAIToolSchemas()
         }
     }
 
@@ -172,6 +191,13 @@ final class ChatViewModel: ObservableObject {
         if llmMessages.count > maxHistoryMessages {
             llmMessages = Array(llmMessages.suffix(maxHistoryMessages))
         }
+    }
+
+    private func canUseSelectedLLMOnCurrentNetwork() -> Bool {
+        guard let appState else { return true }
+        guard appState.llmProvider == .lmStudio else { return true }
+        guard let networkMonitor else { return false }
+        return networkMonitor.isWiFiConnected || networkMonitor.isVPNConnected
     }
 
     private func buildSystemPrompt() -> String {

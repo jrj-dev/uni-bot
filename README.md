@@ -105,6 +105,9 @@ UNIFI_BASE_URL=https://your-console-hostname-or-ip
 UNIFI_API_KEY=your-local-api-key
 LOKI_BASE_URL=http://your-loki-hostname-or-ip:3100
 LOKI_API_KEY=your-loki-api-key-if-required
+LM_STUDIO_BASE_URL=http://your-lmstudio-hostname-or-ip:1234
+LM_STUDIO_API_KEY=your-lmstudio-api-key
+LM_STUDIO_MODEL=
 ```
 
 Optional variable used by `live_summary.py`:
@@ -153,6 +156,14 @@ Search official UniFi docs:
 ```bash
 python3 skills/unifi-network-local/scripts/unifi_docs.py search "wifi optimization"
 python3 skills/unifi-network-local/scripts/unifi_docs.py article --article-id 32065480092951
+```
+
+Query a local LM Studio model (local network or VPN):
+
+```bash
+python3 skills/unifi-network-local/scripts/lmstudio_chat.py --list-models
+python3 skills/unifi-network-local/scripts/lmstudio_chat.py "Summarize likely root causes from these UniFi events: <paste>"
+python3 skills/unifi-network-local/scripts/lmstudio_chat.py --model meta-llama-3-8b-instruct "Summarize likely root causes from these UniFi events: <paste>"
 ```
 
 Capture a troubleshooting snapshot:

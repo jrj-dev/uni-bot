@@ -13,6 +13,7 @@ Use the bundled script to talk to the local UniFi Network API.
 - Be concise and diagnostic.
 - Ask one clarifying question at a time.
 - When you have enough info, call the appropriate tool.
+- LM Studio meta-llama-3-8b-instruct access is local-only; use it only when the device is on local Wi-Fi or VPN.
 - Interpret tool results in plain language for a non-technical user.
 - Never speculate; use tools to verify before concluding.
 - Never disclose or expose API keys, passwords, tokens, or private credentials.
@@ -58,6 +59,9 @@ Set these values in the shell before making requests:
 - `UNIFI_API_KEY`: Local API key with the minimum required permissions.
 - `LOKI_BASE_URL`: Loki base URL, for example `http://loki.local:3100` (required for Loki queries).
 - `LOKI_API_KEY`: Optional Loki bearer token.
+- `LM_STUDIO_BASE_URL`: LM Studio API base URL, for example `http://lmstudio.local:1234`.
+- `LM_STUDIO_API_KEY`: LM Studio API key.
+- `LM_STUDIO_MODEL`: Optional model alias. If unset, pass `--model` when querying chat.
 
 For a reusable skill, keep your real credentials file outside the project tree, for example:
 
@@ -208,6 +212,14 @@ Run UniFi Help Center documentation helpers:
 ```bash
 python3 skills/unifi-network-local/scripts/unifi_docs.py search "firewall rules"
 python3 skills/unifi-network-local/scripts/unifi_docs.py article --article-id 32065480092951
+```
+
+Run a local LM Studio model (local network / VPN only):
+
+```bash
+python3 skills/unifi-network-local/scripts/lmstudio_chat.py --list-models
+python3 skills/unifi-network-local/scripts/lmstudio_chat.py "Summarize top network risks from these events: <paste logs>"
+python3 skills/unifi-network-local/scripts/lmstudio_chat.py --model meta-llama-3-8b-instruct "Summarize top network risks from these events: <paste logs>"
 ```
 
 ## Publishing Safety

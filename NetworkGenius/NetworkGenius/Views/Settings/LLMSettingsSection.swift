@@ -18,6 +18,47 @@ struct LLMSettingsSection: View {
             case .openai:
                 SecureField("OpenAI API Key", text: $viewModel.openaiAPIKey)
                     .textContentType(.password)
+            case .lmStudio:
+                TextField("LM Studio Base URL", text: $viewModel.lmStudioBaseURL)
+                    .keyboardType(.URL)
+                    .textContentType(.URL)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                TextField("LM Studio Model ID", text: $viewModel.lmStudioModel)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                SecureField("LM Studio API Key", text: $viewModel.lmStudioAPIKey)
+                    .textContentType(.password)
+                Text("LM Studio is treated as local-only and should be reachable on local Wi-Fi or VPN.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Button {
+                    Task { await viewModel.loadLMStudioModels() }
+                } label: {
+                    HStack {
+                        if viewModel.isLoadingLMStudioModels {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                        Text("Load Models")
+                    }
+                }
+                .disabled(viewModel.isLoadingLMStudioModels || !viewModel.hasSelectedLLMKey || viewModel.lmStudioBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                if !viewModel.lmStudioModels.isEmpty {
+                    Picker("Loaded Models", selection: $viewModel.lmStudioModel) {
+                        ForEach(viewModel.lmStudioModels, id: \.self) { model in
+                            Text(model).tag(model)
+                        }
+                    }
+                }
+
+                if let result = viewModel.lmStudioModelListResult {
+                    Text(result)
+                        .font(.caption)
+                        .foregroundStyle(result.hasPrefix("Loaded") ? .green : .red)
+                }
             }
 
             Toggle("Share Device Context With AI", isOn: $viewModel.shareDeviceContextWithLLM)
@@ -37,7 +78,7 @@ struct LLMSettingsSection: View {
                         Text("Test API Key")
                     }
                 }
-                .disabled(!viewModel.hasSelectedLLMKey || viewModel.isTestingLLMKey)
+                .disabled(!viewModel.hasSelectedLLMConfig || viewModel.isTestingLLMKey)
 
                 if let result = viewModel.llmKeyTestResult {
                     Text(result)
