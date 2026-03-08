@@ -22,6 +22,7 @@ SECURITY_REGEX = (
     r"vpn|wireguard|ipsec|ike|geoip|country|"
     r"rogue|spoof|deauth|wpa|auth fail"
 )
+ADBLOCK_EXCLUDE_REGEX = r"(?i)dnsadblock|adblock|ad block|ads? blocked|blocklist dns"
 
 
 def parse_args() -> argparse.Namespace:
@@ -61,6 +62,11 @@ def parse_args() -> argparse.Namespace:
         "--no-security-regex",
         action="store_true",
         help="Skip built-in security regex filter.",
+    )
+    parser.add_argument(
+        "--include-adblock",
+        action="store_true",
+        help="Include adblock/DNS-adblock events (excluded by default).",
     )
     parser.add_argument(
         "--raw-logql",
@@ -110,6 +116,8 @@ def build_logql(args: argparse.Namespace) -> str:
 
     if not args.no_security_regex:
         query += f' |~ "{SECURITY_REGEX}"'
+    if not args.include_adblock:
+        query += f' |!~ "{ADBLOCK_EXCLUDE_REGEX}"'
 
     return query
 

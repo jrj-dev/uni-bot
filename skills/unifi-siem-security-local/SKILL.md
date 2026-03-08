@@ -14,6 +14,8 @@ Focused Loki skill for security-centric SIEM event investigation.
 - Defaults to current-state windows (last 30 minutes, backward/latest-first).
 - Supports historical analysis by explicitly setting `--minutes`.
 - Security-focused regex is applied by default (can be disabled with `--no-security-regex`).
+- Adblock/DNS-adblock noise (for example `dnsAdBlock`) is excluded by default.
+  Use `--include-adblock` to include those events.
 
 ## Required Environment
 
