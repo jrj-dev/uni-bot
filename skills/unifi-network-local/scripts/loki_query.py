@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import re
 import subprocess
 import sys
 
@@ -14,6 +15,7 @@ from _paths import SCRIPT_DIR
 
 REQUEST_SCRIPT = SCRIPT_DIR / "loki_request.py"
 QUERY_NAMES = ("query-range", "query-instant", "labels", "label-values")
+UNIFI_SELECTOR = '{job=~"unifi|unifi_alarm_manager|unifi_network_events"}'
 
 
 def parse_args() -> argparse.Namespace:
@@ -23,8 +25,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("query", choices=QUERY_NAMES, help="Named Loki query to execute.")
     parser.add_argument(
         "--logql",
-        default='{job="unifi"}',
-        help='LogQL expression. Default: {job="unifi"}.',
+        default=UNIFI_SELECTOR,
+        help=f"LogQL expression. UniFi scope is enforced. Default: {UNIFI_SELECTOR}.",
     )
     parser.add_argument(
         "--minutes",
@@ -60,13 +62,30 @@ def unix_nanos(timestamp: dt.datetime) -> str:
     return str(int(timestamp.timestamp() * 1_000_000_000))
 
 
+def enforce_unifi_scope(raw_logql: str) -> str:
+    query = (raw_logql or "").strip()
+    if not query:
+        return UNIFI_SELECTOR
+    if query.startswith("{"):
+        close_index = query.find("}")
+        if close_index != -1:
+            pipeline = query[close_index + 1 :].strip()
+            return f"{UNIFI_SELECTOR} {pipeline}".strip()
+    if query.startswith("|"):
+        return f"{UNIFI_SELECTOR} {query}"
+    # If caller passed plain text, treat it as contains filter.
+    escaped = re.sub(r'(["\\\\])', r"\\\1", query)
+    return f'{UNIFI_SELECTOR} |= "{escaped}"'
+
+
 def build_query_items(args: argparse.Namespace) -> list[tuple[str, str]]:
+    scoped_logql = enforce_unifi_scope(args.logql)
     query = args.query
     if query == "query-range":
         now = dt.datetime.now(tz=dt.timezone.utc)
         start = now - dt.timedelta(minutes=max(1, args.minutes))
         return [
-            ("query", args.logql),
+            ("query", scoped_logql),
             ("start", unix_nanos(start)),
             ("end", unix_nanos(now)),
             ("limit", str(max(1, args.limit))),
@@ -74,7 +93,7 @@ def build_query_items(args: argparse.Namespace) -> list[tuple[str, str]]:
         ]
     if query == "query-instant":
         return [
-            ("query", args.logql),
+            ("query", scoped_logql),
             ("limit", str(max(1, args.limit))),
         ]
     return []
@@ -123,4 +142,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

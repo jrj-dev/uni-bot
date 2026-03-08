@@ -129,9 +129,9 @@ enum ToolCatalog {
         ),
         ToolDefinition(
             name: "query_unifi_logs",
-            description: "Query Grafana Loki UniFi logs over a recent time range.",
+            description: "Query Grafana Loki logs over a recent time range, restricted to UniFi jobs only.",
             parameters: [
-                ToolParameter(name: "query", type: "string", description: "Loki query, e.g. {job=\"unifi\"} |= \"DROP\". Default: {job=\"unifi\"}.", required: false),
+                ToolParameter(name: "query", type: "string", description: "Loki query pipeline or selector+pipeline. Selector is replaced with UniFi-only scope automatically.", required: false),
                 ToolParameter(name: "minutes", type: "integer", description: "How far back to search in minutes (1-1440). Default: 60.", required: false),
                 ToolParameter(name: "limit", type: "integer", description: "Maximum log lines to return (1-500). Default: 100.", required: false),
                 ToolParameter(name: "direction", type: "string", description: "Result direction: backward or forward. Default: backward.", required: false),
@@ -139,9 +139,9 @@ enum ToolCatalog {
         ),
         ToolDefinition(
             name: "query_unifi_logs_instant",
-            description: "Run an instant Loki query for recent matching UniFi logs.",
+            description: "Run an instant Loki query for recent matching UniFi logs, restricted to UniFi jobs only.",
             parameters: [
-                ToolParameter(name: "query", type: "string", description: "Loki query, e.g. {job=\"unifi\"} |= \"DROP\".", required: true),
+                ToolParameter(name: "query", type: "string", description: "Loki query pipeline or selector+pipeline. Selector is replaced with UniFi-only scope automatically.", required: true),
                 ToolParameter(name: "limit", type: "integer", description: "Maximum log lines to return (1-500). Default: 50.", required: false),
             ]
         ),
@@ -159,18 +159,18 @@ enum ToolCatalog {
         ),
         ToolDefinition(
             name: "list_unifi_log_series",
-            description: "List Loki log stream label sets for a selector over a recent time range.",
+            description: "List Loki log stream label sets for a selector over a recent time range, restricted to UniFi jobs only.",
             parameters: [
-                ToolParameter(name: "query", type: "string", description: "Log stream selector, e.g. {job=\"unifi\"}. Default: {job=\"unifi\"}.", required: false),
+                ToolParameter(name: "query", type: "string", description: "Log stream selector or pipeline. Selector is replaced with UniFi-only scope automatically.", required: false),
                 ToolParameter(name: "minutes", type: "integer", description: "How far back to inspect in minutes (1-1440). Default: 60.", required: false),
                 ToolParameter(name: "limit", type: "integer", description: "Maximum series to return (1-200). Default: 50.", required: false),
             ]
         ),
         ToolDefinition(
             name: "get_unifi_log_stats",
-            description: "Get Loki index stats (streams/chunks/entries/bytes) for a selector over a recent time range.",
+            description: "Get Loki index stats (streams/chunks/entries/bytes) for a selector over a recent time range, restricted to UniFi jobs only.",
             parameters: [
-                ToolParameter(name: "query", type: "string", description: "Log stream selector, e.g. {job=\"unifi\"}. Default: {job=\"unifi\"}.", required: false),
+                ToolParameter(name: "query", type: "string", description: "Log stream selector or pipeline. Selector is replaced with UniFi-only scope automatically.", required: false),
                 ToolParameter(name: "minutes", type: "integer", description: "How far back to inspect in minutes (1-1440). Default: 60.", required: false),
             ]
         ),

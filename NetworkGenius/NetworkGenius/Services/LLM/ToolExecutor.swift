@@ -121,6 +121,7 @@ final class ToolExecutor {
 
 private struct GrafanaLokiService {
     private let baseURL: String
+    private let unifiSelector = "{job=~\"unifi|unifi_alarm_manager|unifi_network_events\"}"
 
     init(baseURL: String) {
         self.baseURL = UniFiAPIClient.normalizeBaseURL(baseURL)
@@ -414,7 +415,19 @@ private struct GrafanaLokiService {
 
     private func normalizedQuery(_ rawQuery: String?) -> String {
         let q = (rawQuery ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        return q.isEmpty ? "{job=\"unifi\"}" : q
+        guard !q.isEmpty else { return unifiSelector }
+
+        if q.hasPrefix("{"), let close = q.firstIndex(of: "}") {
+            let pipeline = q[q.index(after: close)...].trimmingCharacters(in: .whitespacesAndNewlines)
+            return pipeline.isEmpty ? unifiSelector : "\(unifiSelector) \(pipeline)"
+        }
+        if q.hasPrefix("|") {
+            return "\(unifiSelector) \(q)"
+        }
+        let escaped = q
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        return "\(unifiSelector) |= \"\(escaped)\""
     }
 
     private func normalizedDirection(_ rawDirection: String?) -> String {

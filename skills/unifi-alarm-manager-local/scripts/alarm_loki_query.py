@@ -86,7 +86,15 @@ def shell_quote(value: str) -> str:
 
 def build_logql(args: argparse.Namespace) -> str:
     if args.raw_logql:
-        return args.raw_logql
+        query = args.raw_logql.strip()
+        if query.startswith("{"):
+            close_index = query.find("}")
+            if close_index != -1:
+                pipeline = query[close_index + 1 :].strip()
+                return ('{job="unifi_alarm_manager"} ' + pipeline).strip()
+        if query.startswith("|"):
+            return f'{{job="unifi_alarm_manager"}} {query}'
+        return f'{{job="unifi_alarm_manager"}} |= "{shell_quote(query)}"'
 
     query = '{job="unifi_alarm_manager"}'
     terms: list[str] = []

@@ -10,7 +10,7 @@ Focused Loki skill for UniFi Alarm Manager event streams.
 ## Scope
 
 - Read-only Loki access only.
-- Always scoped to `job="unifi_alarm_manager"` unless the user explicitly provides a raw LogQL override.
+- Always scoped to `job="unifi_alarm_manager"` (raw LogQL input is normalized back into this scope).
 - Prefer narrowing with known context:
   - client name
   - client IP
