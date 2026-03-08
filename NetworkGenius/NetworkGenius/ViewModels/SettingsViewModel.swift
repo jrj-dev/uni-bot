@@ -10,6 +10,7 @@ final class SettingsViewModel: ObservableObject {
     @Published var unifiAPIKey: String = ""
     @Published var unifiSSHUsername: String = ""
     @Published var unifiSSHPrivateKey: String = ""
+    @Published var unifiSSHPassword: String = ""
     @Published var grafanaLokiURL: String = ""
     @Published var grafanaLokiAPIKey: String = ""
     @Published var lmStudioBaseURL: String = ""
@@ -69,6 +70,7 @@ final class SettingsViewModel: ObservableObject {
         unifiAPIKey = KeychainHelper.loadString(key: .unifiAPIKey) ?? ""
         unifiSSHUsername = KeychainHelper.loadString(key: .unifiSSHUsername) ?? ""
         unifiSSHPrivateKey = KeychainHelper.loadString(key: .unifiSSHPrivateKey) ?? ""
+        unifiSSHPassword = KeychainHelper.loadString(key: .unifiSSHPassword) ?? ""
         grafanaLokiAPIKey = KeychainHelper.loadString(key: .grafanaLokiAPIKey) ?? ""
         lmStudioAPIKey = KeychainHelper.loadString(key: .lmStudioAPIKey) ?? ""
         claudeAPIKey = KeychainHelper.loadString(key: .claudeAPIKey) ?? ""
@@ -100,6 +102,7 @@ final class SettingsViewModel: ObservableObject {
         let normalizedUniFiKey = normalizedKey(unifiAPIKey)
         let normalizedUniFiSSHUsername = normalizedKey(unifiSSHUsername)
         let normalizedUniFiSSHPrivateKey = unifiSSHPrivateKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedUniFiSSHPassword = normalizedKey(unifiSSHPassword)
         let normalizedGrafanaLokiKey = normalizedKey(grafanaLokiAPIKey)
         let normalizedLMStudioKey = normalizedKey(lmStudioAPIKey)
         let normalizedClaudeKey = normalizedKey(claudeAPIKey)
@@ -110,9 +113,18 @@ final class SettingsViewModel: ObservableObject {
         }
         if !normalizedUniFiSSHUsername.isEmpty {
             KeychainHelper.save(key: .unifiSSHUsername, string: normalizedUniFiSSHUsername)
+        } else {
+            KeychainHelper.delete(key: .unifiSSHUsername)
         }
         if !normalizedUniFiSSHPrivateKey.isEmpty {
             KeychainHelper.save(key: .unifiSSHPrivateKey, string: normalizedUniFiSSHPrivateKey)
+        } else {
+            KeychainHelper.delete(key: .unifiSSHPrivateKey)
+        }
+        if !normalizedUniFiSSHPassword.isEmpty {
+            KeychainHelper.save(key: .unifiSSHPassword, string: normalizedUniFiSSHPassword)
+        } else {
+            KeychainHelper.delete(key: .unifiSSHPassword)
         }
         if !normalizedGrafanaLokiKey.isEmpty {
             KeychainHelper.save(key: .grafanaLokiAPIKey, string: normalizedGrafanaLokiKey)

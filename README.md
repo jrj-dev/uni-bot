@@ -63,6 +63,7 @@ This repo contains two parts:
   - explicit confirmation token for apply
 - Client diagnostics helper (`network_client_diagnostics.py`) for ping-style probes and DNS checks.
 - Guarded UniFi SSH log helper (`guarded_unifi_ssh_logs.py`) with dry-run token + explicit apply.
+  - Supports key auth (`UNIFI_SSH_PRIVATE_KEY_PATH`/`UNIFI_SSH_PRIVATE_KEY`) or password auth (`UNIFI_SSH_PASSWORD`, requires `sshpass`).
 - UniFi Alarm Manager webhook receiver (`unifi_alarm_webhook_receiver.py`) that forwards alarms to Loki.
   - Includes Docker module at `skills/unifi-network-local/deploy/unifi-alarm-webhook/` with `Dockerfile`, `stack.yml`, and `deploy.sh`.
 - Dedicated alarm-analysis skill module (`skills/unifi-alarm-manager-local`) for Loki queries scoped to `job="unifi_siem"` with client/IP/device narrowing.
@@ -93,6 +94,7 @@ UNIFI_API_KEY=replace-me
 UNIFI_SSH_USERNAME=
 UNIFI_SSH_PRIVATE_KEY_PATH=
 UNIFI_SSH_PRIVATE_KEY=
+UNIFI_SSH_PASSWORD=
 UNIFI_SSH_APPROVAL_SECRET=
 
 LOKI_BASE_URL=http://your-loki-host:3100

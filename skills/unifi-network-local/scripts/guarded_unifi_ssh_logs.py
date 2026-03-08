@@ -95,6 +95,10 @@ def resolve_private_key_path() -> Path:
     raise SystemExit("set UNIFI_SSH_PRIVATE_KEY_PATH or UNIFI_SSH_PRIVATE_KEY")
 
 
+def resolve_password() -> str:
+    return (os.environ.get("UNIFI_SSH_PASSWORD") or "").strip()
+
+
 def main() -> int:
     args = parse_args()
     host = args.host.strip()
@@ -127,30 +131,70 @@ def main() -> int:
         raise SystemExit("invalid or expired confirm token; rerun dry-run")
 
     username = require_env("UNIFI_SSH_USERNAME")
-    key_path = resolve_private_key_path()
-    key_is_temp = not (os.environ.get("UNIFI_SSH_PRIVATE_KEY_PATH") or "").strip()
+    key_path: Path | None = None
+    key_is_temp = False
+    password = resolve_password()
+    sshpass = ""
+    key_configured = bool(
+        (os.environ.get("UNIFI_SSH_PRIVATE_KEY_PATH") or "").strip()
+        or (os.environ.get("UNIFI_SSH_PRIVATE_KEY") or "").strip()
+    )
+    if key_configured:
+        key_path = resolve_private_key_path()
+        key_is_temp = not (os.environ.get("UNIFI_SSH_PRIVATE_KEY_PATH") or "").strip()
+    if password:
+        sshpass = subprocess.run(["which", "sshpass"], capture_output=True, text=True, check=False).stdout.strip()
+        if not sshpass:
+            raise SystemExit("UNIFI_SSH_PASSWORD is set but sshpass is not installed")
 
-    ssh_cmd = [
-        "ssh",
-        "-i",
-        str(key_path),
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "StrictHostKeyChecking=accept-new",
-        "-o",
-        f"ConnectTimeout={timeout}",
-        f"{username}@{host}",
-        command,
-    ]
+    if not key_configured and not password:
+        raise SystemExit("set UNIFI_SSH_PRIVATE_KEY_PATH / UNIFI_SSH_PRIVATE_KEY or UNIFI_SSH_PASSWORD")
 
     started = time.time()
-    result = subprocess.run(ssh_cmd, capture_output=True, text=True, check=False)
+    result: subprocess.CompletedProcess[str] | None = None
+    used_method = ""
+
+    if key_configured and key_path is not None:
+        ssh_cmd = [
+            "ssh",
+            "-i",
+            str(key_path),
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            "-o",
+            f"ConnectTimeout={timeout}",
+            f"{username}@{host}",
+            command,
+        ]
+        result = subprocess.run(ssh_cmd, capture_output=True, text=True, check=False)
+        used_method = "key"
+
+    # Fallback to password if key auth failed and password is available.
+    if password and (result is None or result.returncode != 0):
+        ssh_cmd = [
+            sshpass,
+            "-p",
+            password,
+            "ssh",
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            "-o",
+            f"ConnectTimeout={timeout}",
+            f"{username}@{host}",
+            command,
+        ]
+        result = subprocess.run(ssh_cmd, capture_output=True, text=True, check=False)
+        used_method = "password"
+
+    assert result is not None
     elapsed_ms = int((time.time() - started) * 1000)
     payload = {
         "mode": "apply",
         "host": host,
         "command_id": command_id,
+        "auth_method": used_method,
         "reason": args.reason,
         "elapsed_ms": elapsed_ms,
         "exit_code": result.returncode,
@@ -160,7 +204,7 @@ def main() -> int:
     json.dump(payload, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")
 
-    if key_is_temp:
+    if key_is_temp and key_path is not None:
         try:
             key_path.unlink(missing_ok=True)
         except Exception:

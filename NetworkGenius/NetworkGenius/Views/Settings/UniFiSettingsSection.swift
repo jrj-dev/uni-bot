@@ -18,6 +18,9 @@ struct UniFiSettingsSection: View {
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
 
+            SecureField("SSH Password (optional)", text: $viewModel.unifiSSHPassword)
+                .textContentType(.password)
+
             VStack(alignment: .leading, spacing: 6) {
                 Text("SSH Private Key (optional)")
                     .font(.caption)

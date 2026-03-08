@@ -6,6 +6,7 @@ enum KeychainHelper {
         case unifiAPIKey = "unifi_api_key"
         case unifiSSHUsername = "unifi_ssh_username"
         case unifiSSHPrivateKey = "unifi_ssh_private_key"
+        case unifiSSHPassword = "unifi_ssh_password"
         case claudeAPIKey = "claude_api_key"
         case openaiAPIKey = "openai_api_key"
         case grafanaLokiAPIKey = "grafana_loki_api_key"

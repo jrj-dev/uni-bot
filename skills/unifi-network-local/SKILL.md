@@ -80,6 +80,7 @@ Set these values in the shell before making requests:
 - `UNIFI_SSH_USERNAME`: SSH username for UniFi device access (required for SSH log collection).
 - `UNIFI_SSH_PRIVATE_KEY_PATH`: Path to SSH private key file.
 - `UNIFI_SSH_PRIVATE_KEY`: SSH private key content (used when key path is not provided).
+- `UNIFI_SSH_PASSWORD`: Optional SSH password fallback when key is unavailable (requires `sshpass` on host).
 - `UNIFI_SSH_APPROVAL_SECRET`: Secret used to mint/verify guarded SSH approval tokens.
 
 For a reusable skill, keep your real credentials file outside the project tree, for example:

@@ -721,11 +721,13 @@ private struct UniFiSSHLogService {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let privateKey = (KeychainHelper.loadString(key: .unifiSSHPrivateKey) ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        let password = (KeychainHelper.loadString(key: .unifiSSHPassword) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !username.isEmpty else {
             return "Error: UniFi SSH username not configured in Settings."
         }
-        guard !privateKey.isEmpty else {
-            return "Error: UniFi SSH private key not configured in Settings."
+        guard !privateKey.isEmpty || !password.isEmpty else {
+            return "Error: Configure either UniFi SSH private key or SSH password in Settings."
         }
 
         let timeout = max(5, min(rawTimeoutSeconds ?? 15, 60))
@@ -735,6 +737,7 @@ private struct UniFiSSHLogService {
             commandID: commandID,
             command: command,
             privateKey: privateKey,
+            password: password,
             timeoutSeconds: timeout
         )
     }
@@ -745,32 +748,49 @@ private struct UniFiSSHLogService {
         commandID: String,
         command: String,
         privateKey: String,
+        password: String,
         timeoutSeconds: Int
     ) async -> String {
         #if os(macOS) || targetEnvironment(macCatalyst)
-        let tempDir = FileManager.default.temporaryDirectory
-        let keyURL = tempDir.appendingPathComponent("unifi_ssh_\(UUID().uuidString).key")
-        do {
-            try privateKey.write(to: keyURL, atomically: true, encoding: .utf8)
-            try FileManager.default.setAttributes(
-                [.posixPermissions: NSNumber(value: Int16(0o600))],
-                ofItemAtPath: keyURL.path
-            )
-        } catch {
-            return "Error: Unable to prepare temporary SSH key file."
-        }
-        defer { try? FileManager.default.removeItem(at: keyURL) }
-
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        process.arguments = [
-            "-i", keyURL.path,
-            "-o", "BatchMode=yes",
-            "-o", "StrictHostKeyChecking=accept-new",
-            "-o", "ConnectTimeout=\(timeoutSeconds)",
-            "\(username)@\(host)",
-            command,
-        ]
+        if !privateKey.isEmpty {
+            let tempDir = FileManager.default.temporaryDirectory
+            let keyURL = tempDir.appendingPathComponent("unifi_ssh_\(UUID().uuidString).key")
+            do {
+                try privateKey.write(to: keyURL, atomically: true, encoding: .utf8)
+                try FileManager.default.setAttributes(
+                    [.posixPermissions: NSNumber(value: Int16(0o600))],
+                    ofItemAtPath: keyURL.path
+                )
+            } catch {
+                return "Error: Unable to prepare temporary SSH key file."
+            }
+            defer { try? FileManager.default.removeItem(at: keyURL) }
+
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+            process.arguments = [
+                "-i", keyURL.path,
+                "-o", "BatchMode=yes",
+                "-o", "StrictHostKeyChecking=accept-new",
+                "-o", "ConnectTimeout=\(timeoutSeconds)",
+                "\(username)@\(host)",
+                command,
+            ]
+        } else {
+            let sshpassPath = "/opt/homebrew/bin/sshpass"
+            guard FileManager.default.isReadableFile(atPath: sshpassPath) else {
+                return "Error: SSH password auth requires sshpass at /opt/homebrew/bin/sshpass."
+            }
+            process.executableURL = URL(fileURLWithPath: sshpassPath)
+            process.arguments = [
+                "-p", password,
+                "/usr/bin/ssh",
+                "-o", "StrictHostKeyChecking=accept-new",
+                "-o", "ConnectTimeout=\(timeoutSeconds)",
+                "\(username)@\(host)",
+                command,
+            ]
+        }
         let outPipe = Pipe()
         let errPipe = Pipe()
         process.standardOutput = outPipe
@@ -930,13 +950,27 @@ private struct ClientDiagnosticsService {
         return await withCheckedContinuation { continuation in
             let connection = NWConnection(host: NWEndpoint.Host(host), port: nwPort, using: .tcp)
             let queue = DispatchQueue(label: "networkgenius.tcpProbe")
-            var resolved = false
-            func finish(_ result: Bool) {
-                guard !resolved else { return }
-                resolved = true
-                connection.cancel()
-                continuation.resume(returning: result)
+
+            actor OneShot {
+                private var done = false
+                func mark() -> Bool {
+                    if done { return false }
+                    done = true
+                    return true
+                }
             }
+            let oneShot = OneShot()
+
+            @Sendable func finish(_ result: Bool) {
+                // Avoid resuming the continuation more than once by coordinating via the actor.
+                Task {
+                    if await oneShot.mark() {
+                        connection.cancel()
+                        continuation.resume(returning: result)
+                    }
+                }
+            }
+
             connection.stateUpdateHandler = { state in
                 switch state {
                 case .ready:
