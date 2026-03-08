@@ -7,6 +7,8 @@ final class LMStudioLLMService: LLMService {
     private let baseURL: String
     private let session: URLSession
     private let requestTimeoutSeconds: TimeInterval = 90
+    private let preflightTimeoutSeconds: TimeInterval = 45
+    private let preflightMaxAttempts = 2
     private var preflightChecked = false
     private var effectiveModel: String = ""
     private static let lmStudioLastKnownGoodModelKey = "lmStudioLastKnownGoodModel"
@@ -296,43 +298,62 @@ final class LMStudioLLMService: LLMService {
         request.httpMethod = "GET"
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.timeoutInterval = 15
+        request.timeoutInterval = preflightTimeoutSeconds
         let startedAt = Date()
-        debugLog("LM Studio preflight models request started (url=\(modelsURL.absoluteString))", category: "LLM")
-        let (data, response) = try await session.data(for: request)
-        if let http = response as? HTTPURLResponse {
-            let elapsedMS = Int(Date().timeIntervalSince(startedAt) * 1000)
-            debugLog("LM Studio preflight models HTTP \(http.statusCode) in \(elapsedMS)ms", category: "LLM")
-            guard (200..<300).contains(http.statusCode) else {
-                let body = String(data: data, encoding: .utf8) ?? ""
-                throw LLMError.httpError(http.statusCode, body)
+        debugLog(
+            "LM Studio preflight models request started (timeout=\(Int(preflightTimeoutSeconds))s, url=\(modelsURL.absoluteString))",
+            category: "LLM"
+        )
+
+        var attempt = 1
+        while true {
+            do {
+                let (data, response) = try await session.data(for: request)
+                if let http = response as? HTTPURLResponse {
+                    let elapsedMS = Int(Date().timeIntervalSince(startedAt) * 1000)
+                    debugLog("LM Studio preflight models HTTP \(http.statusCode) in \(elapsedMS)ms", category: "LLM")
+                    guard (200..<300).contains(http.statusCode) else {
+                        let body = String(data: data, encoding: .utf8) ?? ""
+                        throw LLMError.httpError(http.statusCode, body)
+                    }
+                }
+                guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let rows = json["data"] as? [[String: Any]]
+                else {
+                    throw LLMError.invalidResponse("LM Studio preflight /v1/models returned invalid response.")
+                }
+                let modelIDs = rows.compactMap { $0["id"] as? String }.filter { !$0.isEmpty }
+                guard !modelIDs.isEmpty else {
+                    throw LLMError.invalidResponse("No LM Studio models are loaded.")
+                }
+
+                let selected = configuredModel.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !selected.isEmpty, modelIDs.contains(selected) {
+                    UserDefaults.standard.set(selected, forKey: Self.lmStudioLastKnownGoodModelKey)
+                    return selected
+                }
+                let lastGood = (UserDefaults.standard.string(forKey: Self.lmStudioLastKnownGoodModelKey) ?? "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                if !lastGood.isEmpty, modelIDs.contains(lastGood) {
+                    debugLog("LM Studio preflight selected last-known-good model: \(lastGood)", category: "LLM")
+                    return lastGood
+                }
+                let fallback = modelIDs[0]
+                debugLog("LM Studio preflight fallback model selected: \(fallback)", category: "LLM")
+                UserDefaults.standard.set(fallback, forKey: Self.lmStudioLastKnownGoodModelKey)
+                return fallback
+            } catch {
+                if (isTimeoutError(error) || isRetryableNetworkError(error)), attempt < preflightMaxAttempts {
+                    attempt += 1
+                    debugLog(
+                        "LM Studio preflight models transient failure; retrying (attempt=\(attempt)/\(preflightMaxAttempts))",
+                        category: "LLM"
+                    )
+                    continue
+                }
+                throw error
             }
         }
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let rows = json["data"] as? [[String: Any]]
-        else {
-            throw LLMError.invalidResponse("LM Studio preflight /v1/models returned invalid response.")
-        }
-        let modelIDs = rows.compactMap { $0["id"] as? String }.filter { !$0.isEmpty }
-        guard !modelIDs.isEmpty else {
-            throw LLMError.invalidResponse("No LM Studio models are loaded.")
-        }
-
-        let selected = configuredModel.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !selected.isEmpty, modelIDs.contains(selected) {
-            UserDefaults.standard.set(selected, forKey: Self.lmStudioLastKnownGoodModelKey)
-            return selected
-        }
-        let lastGood = (UserDefaults.standard.string(forKey: Self.lmStudioLastKnownGoodModelKey) ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if !lastGood.isEmpty, modelIDs.contains(lastGood) {
-            debugLog("LM Studio preflight selected last-known-good model: \(lastGood)", category: "LLM")
-            return lastGood
-        }
-        let fallback = modelIDs[0]
-        debugLog("LM Studio preflight fallback model selected: \(fallback)", category: "LLM")
-        UserDefaults.standard.set(fallback, forKey: Self.lmStudioLastKnownGoodModelKey)
-        return fallback
     }
 
     private func dataWithTimeout(for request: URLRequest, timeoutSeconds: TimeInterval) async throws -> (Data, URLResponse) {
@@ -356,5 +377,15 @@ final class LMStudioLLMService: LLMService {
         }
         let nsError = error as NSError
         return nsError.domain == NSURLErrorDomain && nsError.code == URLError.timedOut.rawValue
+    }
+
+    private func isRetryableNetworkError(_ error: Error) -> Bool {
+        guard let urlError = error as? URLError else { return false }
+        switch urlError.code {
+        case .timedOut, .cannotFindHost, .cannotConnectToHost, .networkConnectionLost, .dnsLookupFailed, .notConnectedToInternet:
+            return true
+        default:
+            return false
+        }
     }
 }
