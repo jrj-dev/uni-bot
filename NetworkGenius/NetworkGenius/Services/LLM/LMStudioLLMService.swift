@@ -6,7 +6,7 @@ final class LMStudioLLMService: LLMService {
     private let configuredModel: String
     private let baseURL: String
     private let session: URLSession
-    private let requestTimeoutSeconds: TimeInterval = 35
+    private let requestTimeoutSeconds: TimeInterval = 90
     private var preflightChecked = false
     private var effectiveModel: String = ""
     private static let lmStudioLastKnownGoodModelKey = "lmStudioLastKnownGoodModel"
@@ -20,8 +20,8 @@ final class LMStudioLLMService: LLMService {
         config.urlCache = nil
         config.connectionProxyDictionary = [:]
         config.waitsForConnectivity = false
-        config.timeoutIntervalForRequest = 15
-        config.timeoutIntervalForResource = 60
+        config.timeoutIntervalForRequest = 90
+        config.timeoutIntervalForResource = 180
         self.session = URLSession(configuration: config)
         if self.baseURL.isEmpty {
             debugLog("LM Studio service configured without base URL", category: "LLM")
