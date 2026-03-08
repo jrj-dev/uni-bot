@@ -15,15 +15,17 @@ struct ChatMessage: Identifiable {
     let timestamp: Date
     var toolName: String?
     var toolCallID: String?
+    var sendFailed: Bool
 
-    init(role: MessageRole, content: String, toolName: String? = nil, toolCallID: String? = nil) {
+    init(role: MessageRole, content: String, toolName: String? = nil, toolCallID: String? = nil, sendFailed: Bool = false) {
         self.init(
             id: UUID(),
             role: role,
             content: content,
             timestamp: Date(),
             toolName: toolName,
-            toolCallID: toolCallID
+            toolCallID: toolCallID,
+            sendFailed: sendFailed
         )
     }
 
@@ -33,7 +35,8 @@ struct ChatMessage: Identifiable {
         content: String,
         timestamp: Date,
         toolName: String? = nil,
-        toolCallID: String? = nil
+        toolCallID: String? = nil,
+        sendFailed: Bool = false
     ) {
         self.id = id
         self.role = role
@@ -41,6 +44,7 @@ struct ChatMessage: Identifiable {
         self.timestamp = timestamp
         self.toolName = toolName
         self.toolCallID = toolCallID
+        self.sendFailed = sendFailed
     }
 }
 
@@ -78,6 +82,7 @@ final class PersistedChatMessage {
     var timestamp: Date
     var toolName: String?
     var toolCallID: String?
+    var sendFailed: Bool = false
     var thread: ConversationThread?
 
     init(
@@ -87,6 +92,7 @@ final class PersistedChatMessage {
         timestamp: Date = Date(),
         toolName: String? = nil,
         toolCallID: String? = nil,
+        sendFailed: Bool = false,
         thread: ConversationThread? = nil
     ) {
         self.id = id
@@ -95,6 +101,7 @@ final class PersistedChatMessage {
         self.timestamp = timestamp
         self.toolName = toolName
         self.toolCallID = toolCallID
+        self.sendFailed = sendFailed
         self.thread = thread
     }
 }

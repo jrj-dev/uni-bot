@@ -240,6 +240,7 @@ Run a local LM Studio model (local network / VPN only):
 
 ```bash
 python3 skills/unifi-network-local/scripts/lmstudio_chat.py --list-models
+python3 skills/unifi-network-local/scripts/lmstudio_chat.py --test
 python3 skills/unifi-network-local/scripts/lmstudio_chat.py "Summarize top network risks from these events: <paste logs>"
 python3 skills/unifi-network-local/scripts/lmstudio_chat.py --model meta-llama-3-8b-instruct "Summarize top network risks from these events: <paste logs>"
 ```

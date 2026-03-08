@@ -187,6 +187,7 @@ LM Studio:
 
 ```bash
 python3 skills/unifi-network-local/scripts/lmstudio_chat.py --list-models
+python3 skills/unifi-network-local/scripts/lmstudio_chat.py --test
 python3 skills/unifi-network-local/scripts/lmstudio_chat.py --model <model-id> "Summarize top issues"
 ```
 

@@ -109,7 +109,7 @@ final class ChatViewModel: ObservableObject {
         refreshConversationSummaries()
     }
 
-    func sendMessage(_ text: String) async {
+    func sendMessage(_ text: String, retryingMessageID: UUID? = nil) async {
         guard canUseSelectedLLMOnCurrentNetwork() else {
             let msg = "LM Studio is configured as a local provider and is only available on local Wi-Fi or VPN."
             debugLog("LM Studio request blocked: not on local Wi-Fi or VPN", category: "Chat")
@@ -117,8 +117,16 @@ final class ChatViewModel: ObservableObject {
             return
         }
 
-        let userMessage = ChatMessage(role: .user, content: text)
-        messages.append(userMessage)
+        let userMessageID: UUID
+        if let retryID = retryingMessageID, let index = messages.firstIndex(where: { $0.id == retryID && $0.role == .user }) {
+            messages[index].sendFailed = false
+            userMessageID = retryID
+        } else {
+            let userMessage = ChatMessage(role: .user, content: text)
+            messages.append(userMessage)
+            userMessageID = userMessage.id
+        }
+        let llmCountBeforeSend = llmMessages.count
         llmMessages.append(LLMMessage(role: .user, content: text))
         trimHistory()
         persistConversationState()
@@ -171,9 +179,18 @@ final class ChatViewModel: ObservableObject {
 
         } catch {
             debugLog("Chat request failed: \(error.localizedDescription)", category: "Chat")
+            llmMessages = Array(llmMessages.prefix(llmCountBeforeSend))
+            markUserMessageFailed(userMessageID)
             messages.append(ChatMessage(role: .assistant, content: "Error: \(error.localizedDescription)"))
             persistConversationState()
         }
+    }
+
+    func retryMessage(_ messageID: UUID) async {
+        guard let message = messages.first(where: { $0.id == messageID && $0.role == .user && $0.sendFailed }) else {
+            return
+        }
+        await sendMessage(message.content, retryingMessageID: message.id)
     }
 
     func showValidatedIntroIfNeeded() async {
@@ -325,6 +342,13 @@ final class ChatViewModel: ObservableObject {
         persistenceStore.save(thread: thread, messages: messages, llmMessages: llmMessages)
         refreshConversationSummaries()
     }
+
+    private func markUserMessageFailed(_ messageID: UUID) {
+        guard let index = messages.firstIndex(where: { $0.id == messageID && $0.role == .user }) else {
+            return
+        }
+        messages[index].sendFailed = true
+    }
 }
 
 struct ConversationSummary: Identifiable {
@@ -405,6 +429,7 @@ private final class ChatPersistenceStore {
                     timestamp: message.timestamp,
                     toolName: message.toolName,
                     toolCallID: message.toolCallID,
+                    sendFailed: message.sendFailed,
                     thread: thread
                 )
             }
@@ -423,7 +448,8 @@ private final class ChatPersistenceStore {
                     content: stored.content,
                     timestamp: stored.timestamp,
                     toolName: stored.toolName,
-                    toolCallID: stored.toolCallID
+                    toolCallID: stored.toolCallID,
+                    sendFailed: stored.sendFailed
                 )
             }
 

@@ -33,15 +33,17 @@ final class SettingsViewModel: ObservableObject {
     @Published var lmStudioModels: [String] = []
     @Published var isLoadingLMStudioModels = false
     @Published var lmStudioModelListResult: String?
+    @Published var isTestingLMStudioChat = false
+    @Published var lmStudioChatTestResult: String?
+    private static let lmStudioLastKnownGoodModelKey = "lmStudioLastKnownGoodModel"
     private let lmStudioSession: URLSession = {
         let config = URLSessionConfiguration.default
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
         config.urlCache = nil
-        config.connectionProxyDictionary = [
-            kCFNetworkProxiesHTTPEnable as String: 0,
-            "HTTPSEnable": 0,
-            kCFNetworkProxiesProxyAutoConfigEnable as String: 0,
-        ]
+        config.connectionProxyDictionary = [:]
+        config.waitsForConnectivity = false
+        config.timeoutIntervalForRequest = 15
+        config.timeoutIntervalForResource = 30
         return URLSession(configuration: config)
     }()
 
@@ -50,6 +52,12 @@ final class SettingsViewModel: ObservableObject {
         grafanaLokiURL = appState.grafanaLokiURL
         lmStudioBaseURL = appState.lmStudioBaseURL
         lmStudioModel = appState.lmStudioModel
+        if normalizedKey(lmStudioModel).isEmpty,
+           let lastGood = UserDefaults.standard.string(forKey: Self.lmStudioLastKnownGoodModelKey),
+           !lastGood.isEmpty
+        {
+            lmStudioModel = lastGood
+        }
         siteID = appState.siteID
         allowSelfSignedCerts = appState.allowSelfSignedCerts
         selectedProvider = appState.llmProvider
@@ -198,8 +206,12 @@ final class SettingsViewModel: ObservableObject {
         do {
             let models = try await fetchLMStudioModels()
             lmStudioModels = models
-            if let first = models.first, normalizedKey(lmStudioModel).isEmpty {
+            let selected = normalizedKey(lmStudioModel)
+            if models.contains(selected), !selected.isEmpty {
+                lmStudioModel = selected
+            } else if let first = models.first {
                 lmStudioModel = first
+                UserDefaults.standard.set(first, forKey: Self.lmStudioLastKnownGoodModelKey)
             }
             lmStudioModelListResult = models.isEmpty
                 ? "Connected, but no loaded models were returned."
@@ -208,6 +220,58 @@ final class SettingsViewModel: ObservableObject {
             lmStudioModelListResult = "Failed: \(error.localizedDescription)"
         } catch {
             lmStudioModelListResult = "Failed: \(friendlyLMStudioError(error))"
+        }
+    }
+
+    func testLMStudioChat() async {
+        isTestingLMStudioChat = true
+        lmStudioChatTestResult = nil
+        defer { isTestingLMStudioChat = false }
+
+        do {
+            let model = try await resolveLMStudioModelForChat()
+            let apiKey = normalizedKey(lmStudioAPIKey)
+            guard !apiKey.isEmpty else {
+                throw LLMError.missingAPIKey
+            }
+            let url = try lmStudioURL(path: "/v1/chat/completions")
+            let payload: [String: Any] = [
+                "model": model,
+                "messages": [
+                    ["role": "user", "content": "reply with ok"],
+                ],
+            ]
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+            request.timeoutInterval = 25
+            request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+
+            debugLog("LM Studio chat test started (model=\(model), url=\(url.absoluteString))", category: "LLM")
+            let startedAt = Date()
+            let (data, response) = try await lmStudioSession.data(for: request)
+            if let http = response as? HTTPURLResponse {
+                let elapsedMS = Int(Date().timeIntervalSince(startedAt) * 1000)
+                debugLog("LM Studio chat test HTTP \(http.statusCode) in \(elapsedMS)ms", category: "LLM")
+            }
+            try validateHTTP(response: response, data: data)
+
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let choices = json["choices"] as? [[String: Any]],
+                  let first = choices.first,
+                  let message = first["message"] as? [String: Any],
+                  let content = message["content"] as? String
+            else {
+                throw LLMError.invalidResponse("LM Studio chat test returned an unexpected response format.")
+            }
+
+            UserDefaults.standard.set(model, forKey: Self.lmStudioLastKnownGoodModelKey)
+            lmStudioChatTestResult = "Connected! LM Studio responded: \(content.trimmingCharacters(in: .whitespacesAndNewlines))"
+        } catch let error as LLMError {
+            lmStudioChatTestResult = "Failed: \(error.localizedDescription)"
+        } catch {
+            lmStudioChatTestResult = "Failed: \(friendlyLMStudioError(error))"
         }
     }
 
@@ -262,6 +326,24 @@ final class SettingsViewModel: ObservableObject {
             debugLog("LM Studio models probe HTTP \(http.statusCode) in \(elapsedMS)ms", category: "LLM")
         }
         try validateHTTP(response: response, data: data)
+    }
+
+    private func resolveLMStudioModelForChat() async throws -> String {
+        let selected = normalizedKey(lmStudioModel)
+        let models = try await fetchLMStudioModels()
+        lmStudioModels = models
+        if models.isEmpty {
+            throw LLMError.invalidResponse("No LM Studio models are loaded.")
+        }
+        if !selected.isEmpty, models.contains(selected) {
+            UserDefaults.standard.set(selected, forKey: Self.lmStudioLastKnownGoodModelKey)
+            return selected
+        }
+        let fallback = models[0]
+        lmStudioModel = fallback
+        UserDefaults.standard.set(fallback, forKey: Self.lmStudioLastKnownGoodModelKey)
+        debugLog("LM Studio model fallback selected for chat test: \(fallback)", category: "LLM")
+        return fallback
     }
 
     private func fetchLMStudioModels() async throws -> [String] {

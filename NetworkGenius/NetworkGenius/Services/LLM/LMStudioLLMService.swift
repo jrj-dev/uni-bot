@@ -3,29 +3,31 @@ import Darwin
 import CFNetwork
 
 final class LMStudioLLMService: LLMService {
-    private let model: String
+    private let configuredModel: String
     private let baseURL: String
     private let session: URLSession
     private let requestTimeoutSeconds: TimeInterval = 35
+    private var preflightChecked = false
+    private var effectiveModel: String = ""
+    private static let lmStudioLastKnownGoodModelKey = "lmStudioLastKnownGoodModel"
+    private static var hostResolutionCache: [String: String] = [:]
 
     init(baseURL: String, model: String) {
         self.baseURL = UniFiAPIClient.normalizeBaseURL(baseURL)
-        self.model = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.configuredModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
         let config = URLSessionConfiguration.default
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
         config.urlCache = nil
-        // Local providers should bypass system proxies when possible.
-        config.connectionProxyDictionary = [
-            kCFNetworkProxiesHTTPEnable as String: 0,
-            "HTTPSEnable": 0,
-            kCFNetworkProxiesProxyAutoConfigEnable as String: 0,
-        ]
+        config.connectionProxyDictionary = [:]
+        config.waitsForConnectivity = false
+        config.timeoutIntervalForRequest = 15
+        config.timeoutIntervalForResource = 60
         self.session = URLSession(configuration: config)
         if self.baseURL.isEmpty {
             debugLog("LM Studio service configured without base URL", category: "LLM")
         } else {
             let host = URL(string: self.baseURL)?.host ?? "unknown"
-            debugLog("LM Studio service configured (host=\(host), model=\(self.model))", category: "LLM")
+            debugLog("LM Studio service configured (host=\(host), model=\(self.configuredModel))", category: "LLM")
         }
     }
 
@@ -33,33 +35,23 @@ final class LMStudioLLMService: LLMService {
         guard !baseURL.isEmpty else {
             throw LLMError.invalidResponse("LM Studio base URL is not configured.")
         }
-        guard !model.isEmpty else {
-            throw LLMError.invalidResponse("LM Studio model is not set. Load models in Settings and select one.")
-        }
         guard let rawKey = KeychainHelper.loadString(key: .lmStudioAPIKey) else {
             throw LLMError.missingAPIKey
         }
         let apiKey = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !apiKey.isEmpty else { throw LLMError.missingAPIKey }
 
-        guard var components = URLComponents(string: baseURL) else {
-            throw LLMError.invalidResponse("Invalid LM Studio base URL.")
+        if !preflightChecked {
+            let resolvedModel = try await preflightModelSelection(apiKey: apiKey)
+            effectiveModel = resolvedModel
+            preflightChecked = true
         }
-        if let originalHost = components.host {
-            if let resolvedIP = resolvedIPv4Address(for: originalHost), resolvedIP != originalHost {
-                components.host = resolvedIP
-                debugLog("LM Studio host resolved to IP \(resolvedIP) (from \(originalHost))", category: "LLM")
-            } else if !looksLikeIPv4(originalHost) {
-                debugLog("LM Studio hostname resolution failed for '\(originalHost)'", category: "LLM")
-                throw LLMError.invalidResponse(
-                    "LM Studio host '\(originalHost)' could not be resolved on this device. Use a direct LAN IP (e.g. http://192.168.x.x:1234)."
-                )
-            }
+
+        let requestModel = effectiveModel.isEmpty ? configuredModel : effectiveModel
+        guard !requestModel.isEmpty else {
+            throw LLMError.invalidResponse("LM Studio model is not set. Load models in Settings and select one.")
         }
-        components.path = "/v1/chat/completions"
-        guard let url = components.url else {
-            throw LLMError.invalidResponse("Invalid LM Studio base URL.")
-        }
+        let url = try lmStudioURL(path: "/v1/chat/completions")
 
         var lmMessages: [[String: Any]] = [
             ["role": "system", "content": systemPrompt],
@@ -72,6 +64,7 @@ final class LMStudioLLMService: LLMService {
             return try await executeRequest(
                 url: url,
                 apiKey: apiKey,
+                model: requestModel,
                 lmMessages: lmMessages,
                 tools: tools
             )
@@ -84,6 +77,7 @@ final class LMStudioLLMService: LLMService {
                 return try await executeRequest(
                     url: url,
                     apiKey: apiKey,
+                    model: requestModel,
                     lmMessages: lmMessages,
                     tools: []
                 )
@@ -100,6 +94,7 @@ final class LMStudioLLMService: LLMService {
     private func executeRequest(
         url: URL,
         apiKey: String,
+        model: String,
         lmMessages: [[String: Any]],
         tools: [[String: Any]]
     ) async throws -> LLMResponse {
@@ -171,6 +166,7 @@ final class LMStudioLLMService: LLMService {
                 }
             }
 
+            UserDefaults.standard.set(model, forKey: Self.lmStudioLastKnownGoodModelKey)
             return LLMResponse(
                 text: text,
                 toolCalls: toolCalls,
@@ -267,6 +263,76 @@ final class LMStudioLLMService: LLMService {
 
     private func looksLikeIPv4(_ host: String) -> Bool {
         host.split(separator: ".").count == 4 && host.allSatisfy { $0.isNumber || $0 == "." }
+    }
+
+    private func lmStudioURL(path: String) throws -> URL {
+        guard var components = URLComponents(string: baseURL) else {
+            throw LLMError.invalidResponse("Invalid LM Studio base URL.")
+        }
+        if let originalHost = components.host {
+            if let cached = Self.hostResolutionCache[originalHost] {
+                components.host = cached
+            } else if let resolvedIP = resolvedIPv4Address(for: originalHost), resolvedIP != originalHost {
+                components.host = resolvedIP
+                Self.hostResolutionCache[originalHost] = resolvedIP
+                debugLog("LM Studio host resolved to IP \(resolvedIP) (from \(originalHost))", category: "LLM")
+            } else if !looksLikeIPv4(originalHost) {
+                debugLog("LM Studio hostname resolution failed for '\(originalHost)'", category: "LLM")
+                throw LLMError.invalidResponse(
+                    "LM Studio host '\(originalHost)' could not be resolved on this device. Use a direct LAN IP (e.g. http://192.168.x.x:1234)."
+                )
+            }
+        }
+        components.path = path
+        guard let url = components.url else {
+            throw LLMError.invalidResponse("Invalid LM Studio base URL.")
+        }
+        return url
+    }
+
+    private func preflightModelSelection(apiKey: String) async throws -> String {
+        let modelsURL = try lmStudioURL(path: "/v1/models")
+        var request = URLRequest(url: modelsURL)
+        request.httpMethod = "GET"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 15
+        let startedAt = Date()
+        debugLog("LM Studio preflight models request started (url=\(modelsURL.absoluteString))", category: "LLM")
+        let (data, response) = try await session.data(for: request)
+        if let http = response as? HTTPURLResponse {
+            let elapsedMS = Int(Date().timeIntervalSince(startedAt) * 1000)
+            debugLog("LM Studio preflight models HTTP \(http.statusCode) in \(elapsedMS)ms", category: "LLM")
+            guard (200..<300).contains(http.statusCode) else {
+                let body = String(data: data, encoding: .utf8) ?? ""
+                throw LLMError.httpError(http.statusCode, body)
+            }
+        }
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rows = json["data"] as? [[String: Any]]
+        else {
+            throw LLMError.invalidResponse("LM Studio preflight /v1/models returned invalid response.")
+        }
+        let modelIDs = rows.compactMap { $0["id"] as? String }.filter { !$0.isEmpty }
+        guard !modelIDs.isEmpty else {
+            throw LLMError.invalidResponse("No LM Studio models are loaded.")
+        }
+
+        let selected = configuredModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !selected.isEmpty, modelIDs.contains(selected) {
+            UserDefaults.standard.set(selected, forKey: Self.lmStudioLastKnownGoodModelKey)
+            return selected
+        }
+        let lastGood = (UserDefaults.standard.string(forKey: Self.lmStudioLastKnownGoodModelKey) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !lastGood.isEmpty, modelIDs.contains(lastGood) {
+            debugLog("LM Studio preflight selected last-known-good model: \(lastGood)", category: "LLM")
+            return lastGood
+        }
+        let fallback = modelIDs[0]
+        debugLog("LM Studio preflight fallback model selected: \(fallback)", category: "LLM")
+        UserDefaults.standard.set(fallback, forKey: Self.lmStudioLastKnownGoodModelKey)
+        return fallback
     }
 
     private func dataWithTimeout(for request: URLRequest, timeoutSeconds: TimeInterval) async throws -> (Data, URLResponse) {

@@ -18,7 +18,14 @@ struct ChatView: View {
                     ScrollView {
                         LazyVStack(spacing: 12) {
                             ForEach(viewModel.messages) { message in
-                                MessageBubbleView(message: message)
+                                MessageBubbleView(
+                                    message: message,
+                                    canRetry: !viewModel.isLoading
+                                ) {
+                                    Task {
+                                        await viewModel.retryMessage(message.id)
+                                    }
+                                }
                                     .id(message.id)
                             }
                             if viewModel.isLoading {

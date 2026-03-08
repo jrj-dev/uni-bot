@@ -2,6 +2,8 @@ import SwiftUI
 
 struct MessageBubbleView: View {
     let message: ChatMessage
+    var canRetry: Bool = false
+    var onRetry: (() -> Void)? = nil
 
     var body: some View {
         HStack {
@@ -21,6 +23,22 @@ struct MessageBubbleView: View {
                         .background(backgroundColor)
                         .foregroundStyle(foregroundColor)
                         .clipShape(RoundedRectangle(cornerRadius: 16))
+                }
+
+                if message.role == .user, message.sendFailed {
+                    Button {
+                        onRetry?()
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                            Text(canRetry ? "Not sent. Tap to retry." : "Not sent.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!canRetry || onRetry == nil)
                 }
             }
             .frame(maxWidth: 300, alignment: message.role == .user ? .trailing : .leading)

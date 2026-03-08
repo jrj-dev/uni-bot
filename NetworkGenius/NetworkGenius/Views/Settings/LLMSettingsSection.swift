@@ -59,6 +59,29 @@ struct LLMSettingsSection: View {
                         .font(.caption)
                         .foregroundStyle(result.hasPrefix("Loaded") ? .green : .red)
                 }
+
+                Button {
+                    Task { await viewModel.testLMStudioChat() }
+                } label: {
+                    HStack {
+                        if viewModel.isTestingLMStudioChat {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                        Text("Test Local LLM")
+                    }
+                }
+                .disabled(
+                    viewModel.isTestingLMStudioChat
+                        || !viewModel.hasSelectedLLMKey
+                        || viewModel.lmStudioBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                )
+
+                if let result = viewModel.lmStudioChatTestResult {
+                    Text(result)
+                        .font(.caption)
+                        .foregroundStyle(result.hasPrefix("Connected") ? .green : .red)
+                }
             }
 
             Toggle("Share Device Context With AI", isOn: $viewModel.shareDeviceContextWithLLM)

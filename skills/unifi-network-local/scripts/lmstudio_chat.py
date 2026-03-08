@@ -58,6 +58,11 @@ def parse_args() -> argparse.Namespace:
         help="List loaded model ids from /v1/models and exit.",
     )
     parser.add_argument(
+        "--test",
+        action="store_true",
+        help="Run a quick local LLM test prompt ('reply with ok') and exit.",
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="Print request diagnostics to stderr.",
@@ -124,15 +129,65 @@ def main() -> int:
             sys.stdout.write("\n")
         return 0
 
+    def fetch_model_ids() -> list[str]:
+        url = f"{base_url}/v1/models"
+        request = urllib.request.Request(
+            url=url,
+            method="GET",
+            headers={
+                "Accept": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+        )
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(
+            request,
+            timeout=args.timeout,
+            context=context_for(args.insecure),
+        ) as response:
+            data = json.loads(response.read().decode("utf-8", errors="replace"))
+        models = []
+        for item in data.get("data", []):
+            model_id = item.get("id")
+            if isinstance(model_id, str) and model_id:
+                models.append(model_id)
+        return sorted(set(models))
+
+    if args.test and not args.prompt:
+        args.prompt = "reply with ok"
+
     if not args.prompt:
         raise SystemExit("missing prompt: pass prompt text or use --list-models")
-    if not args.model:
-        raise SystemExit("missing model: set LM_STUDIO_MODEL or pass --model")
+
+    selected_model = (args.model or "").strip()
+    try:
+        loaded_models = fetch_model_ids()
+    except urllib.error.HTTPError as exc:
+        details = exc.read().decode("utf-8", errors="replace")
+        sys.stderr.write(f"HTTP {exc.code} {exc.reason}\n{details}\n")
+        return 1
+    except urllib.error.URLError as exc:
+        sys.stderr.write(f"request failed: {exc.reason}\n")
+        return 2
+
+    if not loaded_models:
+        raise SystemExit("no LM Studio models loaded")
+    if not selected_model:
+        selected_model = loaded_models[0]
+        if args.debug:
+            sys.stderr.write(f"[LMStudio] model not set; using fallback loaded model={selected_model}\n")
+    elif selected_model not in loaded_models:
+        fallback = loaded_models[0]
+        if args.debug:
+            sys.stderr.write(
+                f"[LMStudio] selected model '{selected_model}' not loaded; falling back to '{fallback}'\n"
+            )
+        selected_model = fallback
 
     url = f"{base_url}/v1/chat/completions"
 
     payload = {
-        "model": args.model,
+        "model": selected_model,
         "messages": [
             {"role": "system", "content": args.system},
             {"role": "user", "content": args.prompt},
@@ -151,7 +206,7 @@ def main() -> int:
     )
 
     if args.debug:
-        sys.stderr.write(f"[LMStudio] POST {url} model={args.model}\n")
+        sys.stderr.write(f"[LMStudio] POST {url} model={selected_model}\n")
     try:
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         with opener.open(
