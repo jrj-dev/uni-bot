@@ -71,6 +71,23 @@ final class LMStudioLLMService: LLMService {
                 tools: tools
             )
         } catch {
+            if case let LLMError.httpError(status, body) = error,
+               status == 400,
+               body.localizedCaseInsensitiveContains("cannot truncate prompt with n_keep")
+            {
+                debugLog(
+                    "LM Studio returned n_keep truncation error; retrying once with reduced context and no tools",
+                    category: "LLM"
+                )
+                let reducedMessages = reducedContextMessages(from: lmMessages)
+                return try await executeRequest(
+                    url: url,
+                    apiKey: apiKey,
+                    model: requestModel,
+                    lmMessages: reducedMessages,
+                    tools: []
+                )
+            }
             if isTimeoutError(error), !tools.isEmpty {
                 debugLog(
                     "LM Studio timed out with tools payload; retrying once without tools",
@@ -217,6 +234,16 @@ final class LMStudioLLMService: LLMService {
                 "content": msg.content,
             ]
         }
+    }
+
+    private func reducedContextMessages(from messages: [[String: Any]]) -> [[String: Any]] {
+        guard !messages.isEmpty else { return messages }
+        let system = messages.first
+        let tail = Array(messages.dropFirst().suffix(6))
+        if let system {
+            return [system] + tail
+        }
+        return tail
     }
 
     private func resolvedIPv4Address(for host: String) -> String? {
