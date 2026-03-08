@@ -173,6 +173,8 @@ UniFi event poller (detached container, replaces old container automatically):
 
 ```bash
 ENV_FILE="$HOME/.env.local" ~/projects/uni-bot/skills/unifi-event-poller/deploy/start.sh
+# One-time startup backfill for last 24h, then normal polling
+ENV_FILE="$HOME/.env.local" ~/projects/uni-bot/skills/unifi-event-poller/deploy/start.sh --backfill-24h
 ```
 
 Watch poller logs:

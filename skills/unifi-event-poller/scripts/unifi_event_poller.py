@@ -35,6 +35,11 @@ Optional:
   UNIFI_POLL_INTERVAL_SECONDS (default: 30)
   UNIFI_EVENT_TIMEOUT_SECONDS (default: 20)
   UNIFI_EVENT_LOKI_JOB (default: unifi_network_events)
+  UNIFI_EVENT_USE_CURSOR (default: true)
+  UNIFI_EVENT_CURSOR_OVERLAP_SECONDS (default: 5)
+  UNIFI_BACKFILL_ON_START (default: false)
+  UNIFI_BACKFILL_HOURS (default: 24)
+  UNIFI_BACKFILL_LIMIT (default: 1000)
   UNIFI_INSECURE (default: true)
   LOKI_INSECURE (default: false)
 """
@@ -99,6 +104,17 @@ def with_limit(url: str, limit: int) -> str:
     query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
     if "limit" not in query:
         query["limit"] = [str(max(1, limit))]
+    encoded = urllib.parse.urlencode(query, doseq=True)
+    return urllib.parse.urlunparse(
+        (parsed.scheme, parsed.netloc, parsed.path, parsed.params, encoded, parsed.fragment)
+    )
+
+
+def with_query_params(url: str, params: list[tuple[str, str]]) -> str:
+    parsed = urllib.parse.urlparse(url)
+    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+    for key, value in params:
+        query[key] = [value]
     encoded = urllib.parse.urlencode(query, doseq=True)
     return urllib.parse.urlunparse(
         (parsed.scheme, parsed.netloc, parsed.path, parsed.params, encoded, parsed.fragment)
@@ -268,6 +284,95 @@ def discover_working_event_url(
     raise RuntimeError("no UniFi event endpoint candidates were configured")
 
 
+def fetch_backfill_events(
+    *,
+    selected_unifi_url: str,
+    unifi_api_key: str,
+    timeout: int,
+    insecure: bool,
+    hours: int,
+    limit: int,
+) -> list[dict[str, Any]]:
+    now = int(time.time())
+    start = max(0, now - max(1, hours) * 3600)
+    now_ms = now * 1000
+    start_ms = start * 1000
+
+    candidates = [
+        with_query_params(selected_unifi_url, [("start", str(start_ms)), ("end", str(now_ms)), ("limit", str(max(1, limit)))]),
+        with_query_params(selected_unifi_url, [("_start", str(start)), ("_end", str(now)), ("_limit", str(max(1, limit)))]),
+        with_query_params(selected_unifi_url, [("start", str(start)), ("end", str(now)), ("limit", str(max(1, limit)))]),
+    ]
+
+    for candidate in candidates:
+        try:
+            rows = fetch_events(
+                unifi_url=candidate,
+                unifi_api_key=unifi_api_key,
+                timeout=timeout,
+                insecure=insecure,
+            )
+            print(f"[unifi-event-poller] backfill endpoint selected: {candidate}")
+            return rows
+        except urllib.error.HTTPError as exc:
+            details = exc.read().decode("utf-8", errors="replace")
+            print(
+                f"[unifi-event-poller] backfill HTTP {exc.code} on {candidate}: {details[:180]}",
+                file=sys.stderr,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[unifi-event-poller] backfill attempt failed on {candidate}: {exc}", file=sys.stderr)
+    return []
+
+
+def fetch_events_since(
+    *,
+    selected_unifi_url: str,
+    unifi_api_key: str,
+    timeout: int,
+    insecure: bool,
+    start_s: int,
+    end_s: int,
+    limit: int,
+    mode_hint: str,
+) -> tuple[list[dict[str, Any]], str]:
+    start_ms = start_s * 1000
+    end_ms = end_s * 1000
+    mode_params: dict[str, list[tuple[str, str]]] = {
+        "ms": [("start", str(start_ms)), ("end", str(end_ms)), ("limit", str(max(1, limit)))],
+        "underscore_sec": [("_start", str(start_s)), ("_end", str(end_s)), ("_limit", str(max(1, limit)))],
+        "sec": [("start", str(start_s)), ("end", str(end_s)), ("limit", str(max(1, limit)))],
+    }
+    modes = ["ms", "underscore_sec", "sec"]
+    if mode_hint in mode_params:
+        modes = [mode_hint] + [m for m in modes if m != mode_hint]
+
+    last_error: Exception | None = None
+    for mode in modes:
+        url = with_query_params(selected_unifi_url, mode_params[mode])
+        try:
+            rows = fetch_events(
+                unifi_url=url,
+                unifi_api_key=unifi_api_key,
+                timeout=timeout,
+                insecure=insecure,
+            )
+            return rows, mode
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                last_error = exc
+                continue
+            details = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"HTTP {exc.code} on {url}: {details[:200]}") from exc
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            continue
+
+    if last_error is not None:
+        return [], ""
+    return [], ""
+
+
 def push_events_to_loki(
     *,
     events: list[dict[str, Any]],
@@ -334,6 +439,11 @@ def main() -> int:
     unifi_insecure = env_bool("UNIFI_INSECURE", default=True)
     loki_insecure = env_bool("LOKI_INSECURE", default=False)
     loki_job = (os.environ.get("UNIFI_EVENT_LOKI_JOB") or "unifi_network_events").strip()
+    use_cursor = env_bool("UNIFI_EVENT_USE_CURSOR", default=True)
+    cursor_overlap_seconds = int((os.environ.get("UNIFI_EVENT_CURSOR_OVERLAP_SECONDS") or "5").strip() or "5")
+    backfill_on_start = env_bool("UNIFI_BACKFILL_ON_START", default=False)
+    backfill_hours = int((os.environ.get("UNIFI_BACKFILL_HOURS") or "24").strip() or "24")
+    backfill_limit = int((os.environ.get("UNIFI_BACKFILL_LIMIT") or "1000").strip() or "1000")
 
     if interval_seconds <= 0:
         raise SystemExit("UNIFI_POLL_INTERVAL_SECONDS must be > 0")
@@ -365,13 +475,17 @@ def main() -> int:
 
     print(
         f"[unifi-event-poller] starting poller interval={interval_seconds}s "
-        f"candidate_endpoints={len(candidates)} loki={loki_push_url} job={loki_job}"
+        f"candidate_endpoints={len(candidates)} loki={loki_push_url} job={loki_job} "
+        f"backfill_on_start={backfill_on_start}"
     )
 
     seen = deque(maxlen=5000)
     seen_set: set[str] = set()
 
     selected_unifi_url = ""
+    backfill_done = False
+    cursor_mode = ""
+    cursor_start_s = int(time.time()) - max(60, int(interval_seconds * 2))
 
     while True:
         started = time.time()
@@ -383,13 +497,50 @@ def main() -> int:
                     timeout=timeout_seconds,
                     insecure=unifi_insecure,
                 )
+                if backfill_on_start and not backfill_done:
+                    backfill_rows = fetch_backfill_events(
+                        selected_unifi_url=selected_unifi_url,
+                        unifi_api_key=unifi_api_key,
+                        timeout=timeout_seconds,
+                        insecure=unifi_insecure,
+                        hours=backfill_hours,
+                        limit=backfill_limit,
+                    )
+                    if backfill_rows:
+                        rows = backfill_rows + rows
+                    backfill_done = True
             else:
-                rows = fetch_events(
-                    unifi_url=selected_unifi_url,
-                    unifi_api_key=unifi_api_key,
-                    timeout=timeout_seconds,
-                    insecure=unifi_insecure,
-                )
+                if use_cursor:
+                    poll_end_s = int(time.time())
+                    rows, detected_mode = fetch_events_since(
+                        selected_unifi_url=selected_unifi_url,
+                        unifi_api_key=unifi_api_key,
+                        timeout=timeout_seconds,
+                        insecure=unifi_insecure,
+                        start_s=cursor_start_s,
+                        end_s=poll_end_s,
+                        limit=event_limit,
+                        mode_hint=cursor_mode,
+                    )
+                    if detected_mode and detected_mode != cursor_mode:
+                        cursor_mode = detected_mode
+                        print(f"[unifi-event-poller] cursor mode selected: {cursor_mode}")
+                    if detected_mode:
+                        cursor_start_s = max(0, poll_end_s - max(0, cursor_overlap_seconds))
+                    else:
+                        rows = fetch_events(
+                            unifi_url=selected_unifi_url,
+                            unifi_api_key=unifi_api_key,
+                            timeout=timeout_seconds,
+                            insecure=unifi_insecure,
+                        )
+                else:
+                    rows = fetch_events(
+                        unifi_url=selected_unifi_url,
+                        unifi_api_key=unifi_api_key,
+                        timeout=timeout_seconds,
+                        insecure=unifi_insecure,
+                    )
             new_events: list[dict[str, Any]] = []
             for event in rows:
                 fid = event_fingerprint(event)
@@ -414,12 +565,12 @@ def main() -> int:
                 )
                 print(
                     f"[unifi-event-poller] poll stats fetched={len(rows)} "
-                    f"new={len(new_events)} forwarded={len(new_events)}"
+                    f"new={len(new_events)} forwarded={len(new_events)} cursor_mode={cursor_mode or 'none'}"
                 )
             else:
                 print(
                     f"[unifi-event-poller] poll stats fetched={len(rows)} "
-                    "new=0 forwarded=0"
+                    f"new=0 forwarded=0 cursor_mode={cursor_mode or 'none'}"
                 )
 
         except urllib.error.HTTPError as exc:
