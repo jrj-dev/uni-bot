@@ -17,6 +17,8 @@ Use the bundled script to talk to the local UniFi Network API.
 - Interpret tool results in plain language for a non-technical user.
 - Never speculate; use tools to verify before concluding.
 - Never disclose or expose API keys, passwords, tokens, or private credentials.
+- If the user asks about a specific client/device, first resolve identity with `list_clients` and/or `lookup_client_identity` (name/hostname/IP/MAC) before deeper checks.
+- Do not assume "the current phone/device" unless the user explicitly asks about their current phone/device.
 - Tool reference (purpose and parameters):
 - `list_devices`: List UniFi infrastructure devices (APs, switches, gateways). Parameters: none.
 - `list_clients`: List connected clients. Parameters: none.
@@ -97,12 +99,13 @@ set -a
 
 ## Common Workflow
 
-1. Start with a read-only request to inspect current state.
-2. If the endpoint is unclear, check the local Network API docs exposed by the console.
-3. Use the helper script for the request.
-4. Summarize findings in plain language and call out any inferred conclusions.
-5. For configuration changes, explain the exact action before sending the write request.
-6. Prefer a dry-run first; require explicit confirmation token before apply.
+1. If a specific client/device is mentioned, resolve it first with `list_clients` or `lookup_client_identity` and carry friendly name + IP + MAC through the rest of the workflow.
+2. Start with a read-only request to inspect current state.
+3. If the endpoint is unclear, check the local Network API docs exposed by the console.
+4. Use the helper script for the request.
+5. Summarize findings in plain language and call out any inferred conclusions.
+6. For configuration changes, explain the exact action before sending the write request.
+7. Prefer a dry-run first; require explicit confirmation token before apply.
 
 ## Helper Script
 
