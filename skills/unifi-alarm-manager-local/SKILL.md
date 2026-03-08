@@ -17,6 +17,8 @@ Focused Loki skill for UniFi Alarm Manager event streams.
   - device name
   - targeted contains terms
 - For broad issue hunting, use `--errors` and `index-stats` to scope quickly.
+- For current-state checks, use short windows first (5-30 minutes, backward/latest-first).
+- For historical/trend analysis, set an explicit `--minutes` duration.
 
 ## Required Environment
 

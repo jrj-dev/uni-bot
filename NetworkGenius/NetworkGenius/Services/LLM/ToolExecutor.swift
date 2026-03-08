@@ -82,6 +82,12 @@ final class ToolExecutor {
                     portsCSV: toolCall.arguments["ports"],
                     timeoutSeconds: Int(toolCall.arguments["timeout_seconds"] ?? "")
                 )
+            case "network_traceroute":
+                output = await diagnosticsService.traceroute(
+                    target: toolCall.arguments["target"],
+                    maxHops: Int(toolCall.arguments["max_hops"] ?? ""),
+                    timeoutSeconds: Int(toolCall.arguments["timeout_seconds"] ?? "")
+                )
             case "lookup_client_identity":
                 output = try await diagnosticsService.lookupClientIdentity(
                     queryService: queryService,
@@ -104,6 +110,16 @@ final class ToolExecutor {
                 output = try await summaryService.summary("firewall")
             case "security_summary":
                 output = try await summaryService.summary("security")
+            case "wan_gateway_health":
+                output = try await wanGatewayHealth(
+                    logMinutes: Int(toolCall.arguments["minutes"] ?? "")
+                )
+            case "config_diff_from_logs":
+                output = try await lokiService.configDiffSummary(
+                    minutes: Int(toolCall.arguments["minutes"] ?? ""),
+                    limit: Int(toolCall.arguments["limit"] ?? ""),
+                    contains: toolCall.arguments["contains"]
+                )
             case "search_unifi_docs":
                 output = try await docsService.search(
                     query: toolCall.arguments["query"] ?? "",
@@ -152,6 +168,63 @@ final class ToolExecutor {
             debugLog("Tool '\(toolCall.name)' failed in \(elapsedMS)ms: \(error.localizedDescription)", category: "Tools")
             return "Error executing \(toolCall.name): \(error.localizedDescription)"
         }
+    }
+
+    private func wanGatewayHealth(logMinutes rawMinutes: Int?) async throws -> String {
+        let devices = try await queryService.queryItems("devices")
+        let gateways = devices.filter { isLikelyGateway($0) }
+        let minutes = max(1, min(rawMinutes ?? 120, 1440))
+
+        var gatewayLines: [String] = []
+        for gateway in gateways {
+            let name = firstString(in: gateway, keys: ["name", "hostname", "model", "id"]) ?? "unknown"
+            let ip = firstString(in: gateway, keys: ["ipAddress", "ip", "lanIp"]) ?? "unknown"
+            let mac = firstString(in: gateway, keys: ["macAddress", "mac"]) ?? "unknown"
+            let state = firstString(in: gateway, keys: ["state", "status", "connectionState", "adoptionState"]) ?? "unknown"
+            let version = firstString(in: gateway, keys: ["firmwareVersion", "version"]) ?? "unknown"
+            gatewayLines.append("- \(name) ip=\(ip) mac=\(mac) state=\(state) version=\(version)")
+        }
+        if gatewayLines.isEmpty {
+            gatewayLines = ["- No gateway devices were identified from current device inventory."]
+        }
+
+        let wanLogs = try await lokiService.queryRange(
+            query: #"|~ "(?i)wan|gateway|failover|packet loss|latency|jitter|uplink|isp""#,
+            minutes: minutes,
+            limit: 40,
+            direction: "backward"
+        )
+
+        return """
+        WAN/Gateway health snapshot:
+        \(gatewayLines.joined(separator: "\n"))
+
+        Recent WAN/gateway SIEM events (\(minutes)m):
+        \(wanLogs)
+        """
+    }
+
+    private func isLikelyGateway(_ device: [String: Any]) -> Bool {
+        let candidates = [
+            firstString(in: device, keys: ["type"]),
+            firstString(in: device, keys: ["role"]),
+            firstString(in: device, keys: ["name"]),
+            firstString(in: device, keys: ["model"]),
+        ]
+        let joined = candidates.compactMap { $0?.lowercased() }.joined(separator: " ")
+        if joined.contains("gateway") || joined.contains("udm") || joined.contains("uxg") {
+            return true
+        }
+        return device.keys.contains("wan") || device.keys.contains("uplink")
+    }
+
+    private func firstString(in dict: [String: Any], keys: [String]) -> String? {
+        for key in keys {
+            if let value = dict[key] as? String, !value.isEmpty {
+                return value
+            }
+        }
+        return nil
     }
 }
 
@@ -357,6 +430,29 @@ private struct GrafanaLokiService {
         - chunks: \(chunks)
         - entries: \(entries)
         - bytes: \(bytes)
+        """
+    }
+
+    func configDiffSummary(minutes rawMinutes: Int?, limit rawLimit: Int?, contains rawContains: String?) async throws -> String {
+        guard !baseURL.isEmpty else {
+            return "Error: Loki base URL is not configured in Settings."
+        }
+
+        let minutes = max(1, min(rawMinutes ?? 180, 10080))
+        let limit = max(1, min(rawLimit ?? 80, 200))
+        let escapedContains = ((rawContains ?? "").trimmingCharacters(in: .whitespacesAndNewlines))
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        var query = #"|~ "(?i)config|setting|policy|firewall|acl|dns|vpn|admin|login|logout|backup|restore|upgrade|update|changed|applied|rule""#
+        if !escapedContains.isEmpty {
+            query += #" |= "\#(escapedContains)""#
+        }
+        let result = try await queryRange(query: query, minutes: minutes, limit: limit, direction: "backward")
+        return """
+        Config/admin/security change summary from logs:
+        - window: last \(minutes) minutes
+        - hint: for current state, keep a short window (5-30m); for historical diffs, increase minutes.
+        \(result)
         """
     }
 
@@ -911,6 +1007,44 @@ private struct ClientDiagnosticsService {
         Port check for \(target):
         \(lines.joined(separator: "\n"))
         """
+    }
+
+    func traceroute(target rawTarget: String?, maxHops rawMaxHops: Int?, timeoutSeconds rawTimeout: Int?) async -> String {
+        let target = (rawTarget ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !target.isEmpty else {
+            return "Error: network_traceroute requires 'target'."
+        }
+        let maxHops = max(5, min(rawMaxHops ?? 20, 64))
+        let timeout = max(1, min(rawTimeout ?? 2, 5))
+
+        #if os(macOS) || targetEnvironment(macCatalyst)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/sbin/traceroute")
+        process.arguments = ["-n", "-m", String(maxHops), "-w", String(timeout), target]
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        process.standardOutput = outPipe
+        process.standardError = errPipe
+        do {
+            try process.run()
+            process.waitUntilExit()
+            let out = String(data: outPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            let err = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            let merged = (out + "\n" + err).trimmingCharacters(in: .whitespacesAndNewlines)
+            let clipped = String(merged.prefix(5000))
+            if clipped.isEmpty {
+                return "Traceroute produced no output for \(target)."
+            }
+            return """
+            Traceroute (\(target), max_hops=\(maxHops), timeout=\(timeout)s):
+            \(clipped)
+            """
+        } catch {
+            return "Traceroute failed to start: \(error.localizedDescription)"
+        }
+        #else
+        return "Error: traceroute is not supported on this iOS runtime."
+        #endif
     }
 
     func lookupClientIdentity(queryService: UniFiQueryService, query rawQuery: String?) async throws -> String {

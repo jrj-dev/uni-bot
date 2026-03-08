@@ -20,6 +20,7 @@ final class AppState: ObservableObject {
     @AppStorage("grafanaLokiURL") var grafanaLokiURL: String = ""
     @AppStorage("lmStudioBaseURL") var lmStudioBaseURL: String = ""
     @AppStorage("lmStudioModel") var lmStudioModel: String = ""
+    @AppStorage("lmStudioMaxPromptChars") var lmStudioMaxPromptChars: Int = 4098
 
     var llmProvider: LLMProvider {
         get { LLMProvider(rawValue: llmProviderRaw) ?? .claude }

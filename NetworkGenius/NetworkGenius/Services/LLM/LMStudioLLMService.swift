@@ -5,6 +5,7 @@ import CFNetwork
 final class LMStudioLLMService: LLMService {
     private let configuredModel: String
     private let baseURL: String
+    private let maxPromptChars: Int
     private let session: URLSession
     private let requestTimeoutSeconds: TimeInterval = 90
     private let preflightTimeoutSeconds: TimeInterval = 45
@@ -14,9 +15,10 @@ final class LMStudioLLMService: LLMService {
     private static let lmStudioLastKnownGoodModelKey = "lmStudioLastKnownGoodModel"
     private static var hostResolutionCache: [String: String] = [:]
 
-    init(baseURL: String, model: String) {
+    init(baseURL: String, model: String, maxPromptChars: Int = 4098) {
         self.baseURL = UniFiAPIClient.normalizeBaseURL(baseURL)
         self.configuredModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.maxPromptChars = max(1028, min(maxPromptChars, 9026))
         let config = URLSessionConfiguration.default
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
         config.urlCache = nil
@@ -29,7 +31,10 @@ final class LMStudioLLMService: LLMService {
             debugLog("LM Studio service configured without base URL", category: "LLM")
         } else {
             let host = URL(string: self.baseURL)?.host ?? "unknown"
-            debugLog("LM Studio service configured (host=\(host), model=\(self.configuredModel))", category: "LLM")
+            debugLog(
+                "LM Studio service configured (host=\(host), model=\(self.configuredModel), maxPromptChars=\(self.maxPromptChars))",
+                category: "LLM"
+            )
         }
     }
 
@@ -61,6 +66,7 @@ final class LMStudioLLMService: LLMService {
         for msg in messages {
             lmMessages.append(openAIMessage(msg))
         }
+        lmMessages = cappedMessagesByCharacterCount(lmMessages, maxChars: maxPromptChars)
 
         do {
             return try await executeRequest(
@@ -244,6 +250,47 @@ final class LMStudioLLMService: LLMService {
             return [system] + tail
         }
         return tail
+    }
+
+    private func cappedMessagesByCharacterCount(_ messages: [[String: Any]], maxChars: Int) -> [[String: Any]] {
+        guard !messages.isEmpty else { return messages }
+        var working = messages
+        var total = totalContentCharacters(in: working)
+
+        // Drop oldest non-system messages first.
+        while total > maxChars, working.count > 2 {
+            working.remove(at: 1)
+            total = totalContentCharacters(in: working)
+        }
+
+        // If still too large, trim system then latest message content.
+        if total > maxChars, !working.isEmpty {
+            var overflow = total - maxChars
+            if let system = working.first?["content"] as? String, overflow > 0 {
+                let keep = max(128, system.count - overflow)
+                working[0]["content"] = String(system.prefix(keep))
+                overflow -= max(0, system.count - keep)
+            }
+            if overflow > 0, working.count >= 2, let latest = working[working.count - 1]["content"] as? String {
+                let keep = max(128, latest.count - overflow)
+                working[working.count - 1]["content"] = String(latest.suffix(keep))
+            }
+        }
+
+        let finalTotal = totalContentCharacters(in: working)
+        if finalTotal != totalContentCharacters(in: messages) {
+            debugLog(
+                "LM Studio prompt trimmed by char budget (before=\(totalContentCharacters(in: messages)), after=\(finalTotal), max=\(maxChars))",
+                category: "LLM"
+            )
+        }
+        return working
+    }
+
+    private func totalContentCharacters(in messages: [[String: Any]]) -> Int {
+        messages.reduce(0) { partial, message in
+            partial + ((message["content"] as? String)?.count ?? 0)
+        }
     }
 
     private func resolvedIPv4Address(for host: String) -> String? {

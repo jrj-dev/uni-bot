@@ -34,12 +34,15 @@ Use the bundled script to talk to the local UniFi Network API.
 - `lookup_client_identity`: Resolve a client by GUID/IP/MAC/name fragment and return friendly identity fields.
 - `ping_client`: Probe reachability for a client host/IP. Parameters: `target` (required), `timeout_seconds` (optional).
 - `resolve_client_dns`: Resolve DNS (forward/reverse) for a client host/IP. Parameters: `target` (required).
+- `network_traceroute`: Run traceroute to inspect path hops/latency. Parameters: `target` (required), `max_hops` (optional), `timeout_seconds` (optional).
 - `ssh_collect_unifi_logs`: Run an approved read-only SSH log command on a UniFi device. Parameters: `host` (required), `command_id` (required), `approve_token` (optional, required to execute), `timeout_seconds` (optional).
 - `network_overview`: High-level network summary (counts and busiest APs). Parameters: none.
 - `clients_summary`: Client breakdown by type/access/uplink. Parameters: none.
 - `wifi_summary`: WiFi summary (SSID/security/band/network mapping). Parameters: none.
 - `firewall_summary`: Firewall summary (action counts and zone pair traffic). Parameters: none.
 - `security_summary`: Security posture summary (ACL, DNS, VPN, RADIUS). Parameters: none.
+- `wan_gateway_health`: Gateway/WAN health snapshot plus recent WAN-related SIEM logs. Parameters: `minutes` (optional).
+- `config_diff_from_logs`: Summarize recent config/admin/security log changes. Parameters: `minutes` (optional), `limit` (optional), `contains` (optional).
 - `search_unifi_docs`: Search official UniFi Help Center docs. Parameters: `query` (required), `max_results` (optional, integer 1-8).
 - `get_unifi_doc`: Fetch an official UniFi Help Center article by ID or URL. Parameters: `article_id` (optional), `article_url` (optional). Provide at least one.
 - `query_unifi_logs`: Query Grafana Loki logs over a recent time range. Parameters: `query` (optional), `minutes` (optional), `limit` (optional), `direction` (optional).
@@ -48,6 +51,8 @@ Use the bundled script to talk to the local UniFi Network API.
 - `list_unifi_log_label_values`: List values for one Loki label. Parameters: `label` (required).
 - Use Loki log tools to answer event-history questions across security detections, critical incidents, admin logins, device issues, triggers/alerts, VPN behavior, firewall policy effects, UniFi OS updates, backup activity, and user access.
 - Loki query scope is UniFi-only: selectors are constrained to `job="unifi_siem"`.
+- For current-state questions, start with latest logs (usually 5-30 minutes, `direction=backward`).
+- For historical/trend questions, use explicit duration (`minutes`) before querying.
 
 ## Work Safely
 

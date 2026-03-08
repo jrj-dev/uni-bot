@@ -22,6 +22,7 @@ final class ChatViewModel: ObservableObject {
     private var activeLLMProvider: LLMProvider?
     private var activeLMStudioBaseURL: String = ""
     private var activeLMStudioModel: String = ""
+    private var activeLMStudioMaxPromptChars: Int = 4098
     var speechService: SpeechService?
     private var startupValidationAttempted = false
 
@@ -83,12 +84,14 @@ final class ChatViewModel: ObservableObject {
         case .lmStudio:
             self.llmService = LMStudioLLMService(
                 baseURL: appState.lmStudioBaseURL,
-                model: appState.lmStudioModel
+                model: appState.lmStudioModel,
+                maxPromptChars: appState.lmStudioMaxPromptChars
             )
         }
         activeLLMProvider = appState.llmProvider
         activeLMStudioBaseURL = UniFiAPIClient.normalizeBaseURL(appState.lmStudioBaseURL)
         activeLMStudioModel = appState.lmStudioModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        activeLMStudioMaxPromptChars = appState.lmStudioMaxPromptChars
     }
 
     func startNewChat() async {
@@ -394,8 +397,10 @@ final class ChatViewModel: ObservableObject {
         let providerChanged = activeLLMProvider != appState.llmProvider
         let normalizedLMStudioBaseURL = UniFiAPIClient.normalizeBaseURL(appState.lmStudioBaseURL)
         let normalizedLMStudioModel = appState.lmStudioModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedLMStudioMaxPromptChars = appState.lmStudioMaxPromptChars
         let lmStudioConfigChanged = normalizedLMStudioBaseURL != activeLMStudioBaseURL
             || normalizedLMStudioModel != activeLMStudioModel
+            || normalizedLMStudioMaxPromptChars != activeLMStudioMaxPromptChars
 
         guard providerChanged || (appState.llmProvider == .lmStudio && lmStudioConfigChanged) else {
             return
@@ -409,13 +414,15 @@ final class ChatViewModel: ObservableObject {
         case .lmStudio:
             llmService = LMStudioLLMService(
                 baseURL: appState.lmStudioBaseURL,
-                model: appState.lmStudioModel
+                model: appState.lmStudioModel,
+                maxPromptChars: appState.lmStudioMaxPromptChars
             )
         }
 
         activeLLMProvider = appState.llmProvider
         activeLMStudioBaseURL = normalizedLMStudioBaseURL
         activeLMStudioModel = normalizedLMStudioModel
+        activeLMStudioMaxPromptChars = normalizedLMStudioMaxPromptChars
         debugLog(
             "LLM configuration changed (provider=\(appState.llmProvider.rawValue)); rebuilt service. Next request will include current thread context (\(llmMessages.count) transcript messages).",
             category: "Chat"

@@ -31,6 +31,10 @@ This repo contains two parts:
 - Client diagnostics tools in app:
   - ping-style reachability probe
   - DNS forward/reverse resolution
+  - traceroute path analysis
+- WAN and change-analysis tools in app:
+  - WAN/gateway health snapshot (`wan_gateway_health`)
+  - SIEM config/admin/security diff summary (`config_diff_from_logs`)
 - Guarded SSH log collection tool in app:
   - explicit approval token required before execution
   - strict read-only command allowlist
@@ -67,6 +71,7 @@ This repo contains two parts:
 - UniFi Alarm Manager webhook receiver (`unifi_alarm_webhook_receiver.py`) that forwards alarms to Loki.
   - Includes Docker module at `skills/unifi-network-local/deploy/unifi-alarm-webhook/` with `Dockerfile`, `stack.yml`, and `deploy.sh`.
 - Dedicated alarm-analysis skill module (`skills/unifi-alarm-manager-local`) for Loki queries scoped to `job="unifi_siem"` with client/IP/device narrowing.
+- Dedicated SIEM security-analysis skill module (`skills/unifi-siem-security-local`) for security-focused Loki queries scoped to `job="unifi_siem"`.
 - UniFi event poller module (`skills/unifi-event-poller`) that polls UniFi events every 30s and forwards new events to Loki (supports endpoint auto-discovery plus explicit `UNIFI_EVENT_PATH` override).
 
 ## Project Layout
@@ -182,6 +187,17 @@ UniFi Alarm Manager Loki skill:
 python3 skills/unifi-alarm-manager-local/scripts/alarm_loki_query.py query-range --minutes 120 --client-name "Kid-iPad"
 python3 skills/unifi-alarm-manager-local/scripts/alarm_loki_query.py query-range --minutes 180 --errors --device-name "U7-LR-Hallway"
 python3 skills/unifi-alarm-manager-local/scripts/alarm_loki_query.py index-stats --minutes 240 --errors --contains vpn
+```
+
+UniFi SIEM Security skill:
+
+```bash
+# Current security state (latest-first, short window)
+python3 skills/unifi-siem-security-local/scripts/siem_security_query.py query-range --minutes 30
+
+# Historical/security investigation with narrowing
+python3 skills/unifi-siem-security-local/scripts/siem_security_query.py query-range --minutes 180 --contains blocked --contains vpn
+python3 skills/unifi-siem-security-local/scripts/siem_security_query.py index-stats --minutes 1440
 ```
 
 UniFi event poller (detached container, replaces old container automatically):

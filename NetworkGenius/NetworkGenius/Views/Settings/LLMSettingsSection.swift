@@ -27,6 +27,22 @@ struct LLMSettingsSection: View {
                 TextField("LM Studio Model ID", text: $viewModel.lmStudioModel)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("Local Prompt Size")
+                        Spacer()
+                        Text("\(Int(viewModel.lmStudioMaxPromptChars)) chars")
+                            .foregroundStyle(.secondary)
+                    }
+                    Slider(
+                        value: $viewModel.lmStudioMaxPromptChars,
+                        in: 1028...9026,
+                        step: 1
+                    )
+                    Text("Limits LM Studio prompt history sent per request.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 SecureField("LM Studio API Key", text: $viewModel.lmStudioAPIKey)
                     .textContentType(.password)
                 Text("LM Studio is treated as local-only and should be reachable on local Wi-Fi or VPN.")

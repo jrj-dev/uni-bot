@@ -15,6 +15,7 @@ final class SettingsViewModel: ObservableObject {
     @Published var grafanaLokiAPIKey: String = ""
     @Published var lmStudioBaseURL: String = ""
     @Published var lmStudioModel: String = ""
+    @Published var lmStudioMaxPromptChars: Double = 4098
     @Published var lmStudioAPIKey: String = ""
     @Published var claudeAPIKey: String = ""
     @Published var openaiAPIKey: String = ""
@@ -55,6 +56,7 @@ final class SettingsViewModel: ObservableObject {
         grafanaLokiURL = appState.grafanaLokiURL
         lmStudioBaseURL = appState.lmStudioBaseURL
         lmStudioModel = appState.lmStudioModel
+        lmStudioMaxPromptChars = Double(appState.lmStudioMaxPromptChars)
         if normalizedKey(lmStudioModel).isEmpty,
            let lastGood = UserDefaults.standard.string(forKey: Self.lmStudioLastKnownGoodModelKey),
            !lastGood.isEmpty
@@ -92,6 +94,7 @@ final class SettingsViewModel: ObservableObject {
         appState.grafanaLokiURL = UniFiAPIClient.normalizeBaseURL(grafanaLokiURL)
         appState.lmStudioBaseURL = UniFiAPIClient.normalizeBaseURL(lmStudioBaseURL)
         appState.lmStudioModel = normalizedKey(lmStudioModel)
+        appState.lmStudioMaxPromptChars = max(1028, min(Int(lmStudioMaxPromptChars.rounded()), 9026))
         appState.siteID = siteID.trimmingCharacters(in: .whitespacesAndNewlines)
         appState.allowSelfSignedCerts = allowSelfSignedCerts
         appState.llmProvider = selectedProvider

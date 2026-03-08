@@ -121,6 +121,15 @@ enum ToolCatalog {
             ]
         ),
         ToolDefinition(
+            name: "network_traceroute",
+            description: "Run traceroute to a target host/IP to inspect path hops and latency.",
+            parameters: [
+                ToolParameter(name: "target", type: "string", description: "Target host or IP.", required: true),
+                ToolParameter(name: "max_hops", type: "integer", description: "Maximum hops (5-64). Default: 20.", required: false),
+                ToolParameter(name: "timeout_seconds", type: "integer", description: "Per-hop timeout seconds (1-5). Default: 2.", required: false),
+            ]
+        ),
+        ToolDefinition(
             name: "lookup_client_identity",
             description: "Resolve a UniFi client by GUID/IP/MAC/name and return friendly identity fields.",
             parameters: [
@@ -161,6 +170,22 @@ enum ToolCatalog {
             name: "security_summary",
             description: "Security posture summary: ACL rules, DNS policies, VPN, RADIUS profiles.",
             parameters: []
+        ),
+        ToolDefinition(
+            name: "wan_gateway_health",
+            description: "Summarize gateway/WAN health from UniFi device data plus recent WAN-related SIEM logs.",
+            parameters: [
+                ToolParameter(name: "minutes", type: "integer", description: "How far back to inspect logs (1-1440). Default: 120.", required: false),
+            ]
+        ),
+        ToolDefinition(
+            name: "config_diff_from_logs",
+            description: "Summarize recent config/admin/security changes from UniFi SIEM logs, with optional duration and filter.",
+            parameters: [
+                ToolParameter(name: "minutes", type: "integer", description: "How far back to inspect logs (1-10080). Default: 180.", required: false),
+                ToolParameter(name: "limit", type: "integer", description: "Max matching events to include (1-200). Default: 80.", required: false),
+                ToolParameter(name: "contains", type: "string", description: "Optional text filter, e.g. firewall, vpn, admin, backup.", required: false),
+            ]
         ),
         ToolDefinition(
             name: "search_unifi_docs",
