@@ -1,6 +1,6 @@
 ---
 name: unifi-alarm-manager-local
-description: Query UniFi Alarm Manager events from Grafana Loki, scoped to job="unifi_alarm_manager". Use when the user wants alarm-specific event history and troubleshooting context narrowed by client, IP, device, or error patterns.
+description: Query UniFi Alarm Manager events from Grafana Loki, scoped to job="unifi_siem". Use when the user wants alarm-specific event history and troubleshooting context narrowed by client, IP, device, or error patterns.
 ---
 
 # UniFi Alarm Manager Local
@@ -10,7 +10,7 @@ Focused Loki skill for UniFi Alarm Manager event streams.
 ## Scope
 
 - Read-only Loki access only.
-- Always scoped to `job="unifi_alarm_manager"` (raw LogQL input is normalized back into this scope).
+- Always scoped to `job="unifi_siem"` (raw LogQL input is normalized back into this scope).
 - Prefer narrowing with known context:
   - client name
   - client IP

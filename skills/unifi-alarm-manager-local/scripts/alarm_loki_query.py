@@ -19,7 +19,7 @@ ERROR_REGEX = r"(?i)error|failed|critical|deny|drop|offline|timeout|unauthorized
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run Loki queries for job=unifi_alarm_manager with optional narrowing."
+        description="Run Loki queries for job=unifi_siem with optional narrowing."
     )
     parser.add_argument("action", choices=ACTION_NAMES, help="Action to run.")
     parser.add_argument(
@@ -91,12 +91,12 @@ def build_logql(args: argparse.Namespace) -> str:
             close_index = query.find("}")
             if close_index != -1:
                 pipeline = query[close_index + 1 :].strip()
-                return ('{job="unifi_alarm_manager"} ' + pipeline).strip()
+                return ('{job="unifi_siem"} ' + pipeline).strip()
         if query.startswith("|"):
-            return f'{{job="unifi_alarm_manager"}} {query}'
-        return f'{{job="unifi_alarm_manager"}} |= "{shell_quote(query)}"'
+            return f'{{job="unifi_siem"}} {query}'
+        return f'{{job="unifi_siem"}} |= "{shell_quote(query)}"'
 
-    query = '{job="unifi_alarm_manager"}'
+    query = '{job="unifi_siem"}'
     terms: list[str] = []
     if args.client_name:
         terms.append(args.client_name)

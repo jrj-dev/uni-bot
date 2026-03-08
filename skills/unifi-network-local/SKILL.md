@@ -47,7 +47,7 @@ Use the bundled script to talk to the local UniFi Network API.
 - `list_unifi_log_labels`: List available Loki labels. Parameters: none.
 - `list_unifi_log_label_values`: List values for one Loki label. Parameters: `label` (required).
 - Use Loki log tools to answer event-history questions across security detections, critical incidents, admin logins, device issues, triggers/alerts, VPN behavior, firewall policy effects, UniFi OS updates, backup activity, and user access.
-- Loki query scope is UniFi-only: selectors are constrained to `job=~"unifi|unifi_alarm_manager|unifi_network_events"`.
+- Loki query scope is UniFi-only: selectors are constrained to `job="unifi_siem"`.
 
 ## Work Safely
 
@@ -76,7 +76,7 @@ Set these values in the shell before making requests:
 - `UNIFI_ALARM_WEBHOOK_PORT`: Webhook receiver port. Default `8787`.
 - `UNIFI_ALARM_WEBHOOK_PATH`: Webhook path. Default `/webhook/unifi/alarm`.
 - `UNIFI_ALARM_WEBHOOK_SECRET`: Optional shared secret required on inbound webhook requests.
-- `UNIFI_ALARM_LOKI_JOB`: Loki `job` label for alarm events. Default `unifi_alarm_manager`.
+- `UNIFI_ALARM_LOKI_JOB`: Loki `job` label for alarm events. Default `unifi_siem`.
 - `UNIFI_SSH_USERNAME`: SSH username for UniFi device access (required for SSH log collection).
 - `UNIFI_SSH_PRIVATE_KEY_PATH`: Path to SSH private key file.
 - `UNIFI_SSH_PRIVATE_KEY`: SSH private key content (used when key path is not provided).
@@ -231,8 +231,8 @@ Available summaries:
 Run named Loki queries:
 
 ```bash
-python3 skills/unifi-network-local/scripts/loki_query.py query-range --logql '{job="unifi"}' --minutes 60 --limit 100 --direction backward
-python3 skills/unifi-network-local/scripts/loki_query.py query-instant --logql '{job="unifi"} |= "DROP"' --limit 50
+python3 skills/unifi-network-local/scripts/loki_query.py query-range --logql '{job="unifi_siem"}' --minutes 60 --limit 100 --direction backward
+python3 skills/unifi-network-local/scripts/loki_query.py query-instant --logql '{job="unifi_siem"} |= "DROP"' --limit 50
 python3 skills/unifi-network-local/scripts/loki_query.py labels
 python3 skills/unifi-network-local/scripts/loki_query.py label-values --label host
 ```

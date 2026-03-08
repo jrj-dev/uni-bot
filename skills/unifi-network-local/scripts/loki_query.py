@@ -15,7 +15,7 @@ from _paths import SCRIPT_DIR
 
 REQUEST_SCRIPT = SCRIPT_DIR / "loki_request.py"
 QUERY_NAMES = ("query-range", "query-instant", "labels", "label-values")
-UNIFI_SELECTOR = '{job=~"unifi|unifi_alarm_manager|unifi_network_events"}'
+UNIFI_SELECTOR = '{job="unifi_siem"}'
 
 
 def parse_args() -> argparse.Namespace:

@@ -58,8 +58,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--loki-job",
-        default=os.environ.get("UNIFI_ALARM_LOKI_JOB", "unifi_alarm_manager"),
-        help="Loki job label. Default: UNIFI_ALARM_LOKI_JOB or unifi_alarm_manager",
+        default=os.environ.get("UNIFI_ALARM_LOKI_JOB", "unifi_siem"),
+        help="Loki job label. Default: UNIFI_ALARM_LOKI_JOB or unifi_siem",
     )
     parser.add_argument(
         "--timeout",
@@ -163,8 +163,8 @@ def push_to_loki(config: AppConfig, payload: dict[str, Any]) -> None:
     host = payload.get("host") or payload.get("console") or "unknown"
 
     labels = {
-        "job": sanitize_label(config.loki_job, fallback="unifi_alarm_manager"),
-        "source": "unifi_alarm_manager",
+        "job": sanitize_label(config.loki_job, fallback="unifi_siem"),
+        "source": "unifi_siem",
         "event_type": sanitize_label(event_type),
         "severity": sanitize_label(severity),
         "site": sanitize_label(site),

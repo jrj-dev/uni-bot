@@ -65,7 +65,7 @@ This repo contains two parts:
 - Guarded UniFi SSH log helper (`guarded_unifi_ssh_logs.py`) with dry-run token + explicit apply.
 - UniFi Alarm Manager webhook receiver (`unifi_alarm_webhook_receiver.py`) that forwards alarms to Loki.
   - Includes Docker module at `skills/unifi-network-local/deploy/unifi-alarm-webhook/` with `Dockerfile`, `stack.yml`, and `deploy.sh`.
-- Dedicated alarm-analysis skill module (`skills/unifi-alarm-manager-local`) for Loki queries scoped to `job="unifi_alarm_manager"` with client/IP/device narrowing.
+- Dedicated alarm-analysis skill module (`skills/unifi-alarm-manager-local`) for Loki queries scoped to `job="unifi_siem"` with client/IP/device narrowing.
 - UniFi event poller module (`skills/unifi-event-poller`) that polls UniFi events every 30s and forwards new events to Loki (supports endpoint auto-discovery plus explicit `UNIFI_EVENT_PATH` override).
 
 ## Project Layout
@@ -109,12 +109,12 @@ UNIFI_ALARM_WEBHOOK_BIND=0.0.0.0
 UNIFI_ALARM_WEBHOOK_PORT=8787
 UNIFI_ALARM_WEBHOOK_PATH=/webhook/unifi/alarm
 UNIFI_ALARM_WEBHOOK_SECRET=
-UNIFI_ALARM_LOKI_JOB=unifi_alarm_manager
+UNIFI_ALARM_LOKI_JOB=unifi_siem
 UNIFI_EVENT_PATH=/proxy/network/api/s/default/stat/event
 UNIFI_EVENT_LIMIT=50
 UNIFI_POLL_INTERVAL_SECONDS=30
 UNIFI_EVENT_TIMEOUT_SECONDS=20
-UNIFI_EVENT_LOKI_JOB=unifi_network_events
+UNIFI_EVENT_LOKI_JOB=unifi_siem
 UNIFI_INSECURE=true
 LOKI_INSECURE=false
 ```
@@ -169,7 +169,7 @@ python3 skills/unifi-network-local/scripts/query_summary.py overview --site-ref 
 Loki:
 
 ```bash
-python3 skills/unifi-network-local/scripts/loki_query.py query-range --logql '{job="unifi"}' --minutes 60 --limit 100
+python3 skills/unifi-network-local/scripts/loki_query.py query-range --logql '{job="unifi_siem"}' --minutes 60 --limit 100
 python3 skills/unifi-network-local/scripts/loki_query.py labels
 python3 skills/unifi-network-local/scripts/loki_query.py label-values --label host
 ```

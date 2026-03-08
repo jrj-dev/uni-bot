@@ -157,7 +157,7 @@ final class ToolExecutor {
 
 private struct GrafanaLokiService {
     private let baseURL: String
-    private let unifiSelector = "{job=~\"unifi|unifi_alarm_manager|unifi_network_events\"}"
+    private let unifiSelector = "{job=\"unifi_siem\"}"
 
     init(baseURL: String) {
         self.baseURL = UniFiAPIClient.normalizeBaseURL(baseURL)
