@@ -412,9 +412,15 @@ def main() -> int:
                     insecure=loki_insecure,
                     job_label=loki_job,
                 )
-                print(f"[unifi-event-poller] forwarded {len(new_events)} new event(s)")
+                print(
+                    f"[unifi-event-poller] poll stats fetched={len(rows)} "
+                    f"new={len(new_events)} forwarded={len(new_events)}"
+                )
             else:
-                print("[unifi-event-poller] no new events")
+                print(
+                    f"[unifi-event-poller] poll stats fetched={len(rows)} "
+                    "new=0 forwarded=0"
+                )
 
         except urllib.error.HTTPError as exc:
             details = exc.read().decode("utf-8", errors="replace")
