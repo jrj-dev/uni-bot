@@ -19,6 +19,9 @@ final class ChatViewModel: ObservableObject {
     private var networkMonitor: NetworkMonitor?
     private var appState: AppState?
     private var persistenceStore: ChatPersistenceStore?
+    private var activeLLMProvider: LLMProvider?
+    private var activeLMStudioBaseURL: String = ""
+    private var activeLMStudioModel: String = ""
     var speechService: SpeechService?
     private var startupValidationAttempted = false
 
@@ -83,6 +86,9 @@ final class ChatViewModel: ObservableObject {
                 model: appState.lmStudioModel
             )
         }
+        activeLLMProvider = appState.llmProvider
+        activeLMStudioBaseURL = UniFiAPIClient.normalizeBaseURL(appState.lmStudioBaseURL)
+        activeLMStudioModel = appState.lmStudioModel.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     func startNewChat() async {
@@ -102,7 +108,7 @@ final class ChatViewModel: ObservableObject {
         guard let restored = persistenceStore.loadConversation(id: id) else { return }
         currentConversationID = restored.id
         messages = restored.messages
-        llmMessages = restored.llmMessages
+        llmMessages = normalizedLLMHistory(restored.llmMessages)
         startupValidationAttempted = !messages.isEmpty || !llmMessages.isEmpty
         isLoading = false
         currentToolName = nil
@@ -110,6 +116,7 @@ final class ChatViewModel: ObservableObject {
     }
 
     func sendMessage(_ text: String, retryingMessageID: UUID? = nil) async {
+        refreshLLMServiceIfNeeded()
         guard canUseSelectedLLMOnCurrentNetwork() else {
             let msg = "LM Studio is configured as a local provider and is only available on local Wi-Fi or VPN."
             debugLog("LM Studio request blocked: not on local Wi-Fi or VPN", category: "Chat")
@@ -197,6 +204,7 @@ final class ChatViewModel: ObservableObject {
         guard !startupValidationAttempted else { return }
         startupValidationAttempted = true
 
+        refreshLLMServiceIfNeeded()
         guard messages.isEmpty, llmMessages.isEmpty else { return }
         guard let llmService else { return }
         guard let appState, appState.hasLLMKey else {
@@ -250,6 +258,7 @@ final class ChatViewModel: ObservableObject {
         if llmMessages.count > maxHistoryMessages {
             llmMessages = Array(llmMessages.suffix(maxHistoryMessages))
         }
+        llmMessages = normalizedLLMHistory(llmMessages)
     }
 
     private func canUseSelectedLLMOnCurrentNetwork() -> Bool {
@@ -313,7 +322,7 @@ final class ChatViewModel: ObservableObject {
         if let restored = persistenceStore.loadMostRecentConversation() {
             currentConversationID = restored.id
             messages = restored.messages
-            llmMessages = restored.llmMessages
+            llmMessages = normalizedLLMHistory(restored.llmMessages)
             startupValidationAttempted = !messages.isEmpty || !llmMessages.isEmpty
         } else {
             let thread = persistenceStore.createConversation()
@@ -348,6 +357,69 @@ final class ChatViewModel: ObservableObject {
             return
         }
         messages[index].sendFailed = true
+    }
+
+    private func normalizedLLMHistory(_ input: [LLMMessage]) -> [LLMMessage] {
+        var output: [LLMMessage] = []
+        var pendingToolCallIDs: Set<String> = []
+
+        for message in input {
+            switch message.role {
+            case .assistant:
+                output.append(message)
+                let toolCalls = message.toolCalls ?? []
+                if toolCalls.isEmpty {
+                    pendingToolCallIDs.removeAll()
+                } else {
+                    pendingToolCallIDs = Set(toolCalls.map(\.id))
+                }
+            case .tool:
+                guard let id = message.toolCallID,
+                      pendingToolCallIDs.contains(id)
+                else {
+                    continue
+                }
+                output.append(message)
+                pendingToolCallIDs.remove(id)
+            case .user:
+                pendingToolCallIDs.removeAll()
+                output.append(message)
+            }
+        }
+        return output
+    }
+
+    private func refreshLLMServiceIfNeeded() {
+        guard let appState else { return }
+        let providerChanged = activeLLMProvider != appState.llmProvider
+        let normalizedLMStudioBaseURL = UniFiAPIClient.normalizeBaseURL(appState.lmStudioBaseURL)
+        let normalizedLMStudioModel = appState.lmStudioModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lmStudioConfigChanged = normalizedLMStudioBaseURL != activeLMStudioBaseURL
+            || normalizedLMStudioModel != activeLMStudioModel
+
+        guard providerChanged || (appState.llmProvider == .lmStudio && lmStudioConfigChanged) else {
+            return
+        }
+
+        switch appState.llmProvider {
+        case .claude:
+            llmService = ClaudeLLMService()
+        case .openai:
+            llmService = OpenAILLMService()
+        case .lmStudio:
+            llmService = LMStudioLLMService(
+                baseURL: appState.lmStudioBaseURL,
+                model: appState.lmStudioModel
+            )
+        }
+
+        activeLLMProvider = appState.llmProvider
+        activeLMStudioBaseURL = normalizedLMStudioBaseURL
+        activeLMStudioModel = normalizedLMStudioModel
+        debugLog(
+            "LLM configuration changed (provider=\(appState.llmProvider.rawValue)); rebuilt service. Next request will include current thread context (\(llmMessages.count) transcript messages).",
+            category: "Chat"
+        )
     }
 }
 

@@ -23,10 +23,17 @@ This repo contains two parts:
   - OpenAI neural TTS
 - Secure secret storage in iOS Keychain:
   - UniFi key
+  - UniFi SSH username + private key
   - Loki key
   - LM Studio key
   - OpenAI key
   - Claude key
+- Client diagnostics tools in app:
+  - ping-style reachability probe
+  - DNS forward/reverse resolution
+- Guarded SSH log collection tool in app:
+  - explicit approval token required before execution
+  - strict read-only command allowlist
 - Loki/Grafana tools for event logs and security/network event analysis.
 - LM Studio model loading in Settings via `/v1/models` with model picker.
 - Reasoning-output controls:
@@ -54,6 +61,8 @@ This repo contains two parts:
   - `enabled` toggle only
   - dry-run default
   - explicit confirmation token for apply
+- Client diagnostics helper (`network_client_diagnostics.py`) for ping-style probes and DNS checks.
+- Guarded UniFi SSH log helper (`guarded_unifi_ssh_logs.py`) with dry-run token + explicit apply.
 - UniFi Alarm Manager webhook receiver (`unifi_alarm_webhook_receiver.py`) that forwards alarms to Loki.
   - Includes Docker module at `skills/unifi-network-local/deploy/unifi-alarm-webhook/` with `Dockerfile`, `stack.yml`, and `deploy.sh`.
 - Dedicated alarm-analysis skill module (`skills/unifi-alarm-manager-local`) for Loki queries scoped to `job="unifi_alarm_manager"` with client/IP/device narrowing.
@@ -81,6 +90,10 @@ Set values in `~/.env.local`:
 ```dotenv
 UNIFI_BASE_URL=https://your-unifi-console
 UNIFI_API_KEY=replace-me
+UNIFI_SSH_USERNAME=
+UNIFI_SSH_PRIVATE_KEY_PATH=
+UNIFI_SSH_PRIVATE_KEY=
+UNIFI_SSH_APPROVAL_SECRET=
 
 LOKI_BASE_URL=http://your-loki-host:3100
 LOKI_API_KEY=replace-me
@@ -189,6 +202,26 @@ LM Studio:
 python3 skills/unifi-network-local/scripts/lmstudio_chat.py --list-models
 python3 skills/unifi-network-local/scripts/lmstudio_chat.py --test
 python3 skills/unifi-network-local/scripts/lmstudio_chat.py --model <model-id> "Summarize top issues"
+```
+
+Client diagnostics:
+
+```bash
+python3 skills/unifi-network-local/scripts/network_client_diagnostics.py ping 192.168.1.50 --count 3 --timeout 2
+python3 skills/unifi-network-local/scripts/network_client_diagnostics.py dns 192.168.1.50
+python3 skills/unifi-network-local/scripts/network_client_diagnostics.py dns laptop.local
+python3 skills/unifi-network-local/scripts/network_client_diagnostics.py http 192.168.1.50 --scheme https --path /
+python3 skills/unifi-network-local/scripts/network_client_diagnostics.py ports 192.168.1.50 --ports 22,53,80,443 --timeout 2
+```
+
+Guarded UniFi SSH logs:
+
+```bash
+# Dry-run (returns confirm token)
+python3 skills/unifi-network-local/scripts/guarded_unifi_ssh_logs.py --host 192.168.1.1 --command-id logread_tail --reason "Investigate packet drops"
+
+# Apply (requires exact token from dry-run)
+python3 skills/unifi-network-local/scripts/guarded_unifi_ssh_logs.py --host 192.168.1.1 --command-id logread_tail --apply --confirm-token <TOKEN>
 ```
 
 Guarded policy toggle (safe write path):

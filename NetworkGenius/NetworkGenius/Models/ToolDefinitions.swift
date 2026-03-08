@@ -87,6 +87,57 @@ enum ToolCatalog {
             ]
         ),
         ToolDefinition(
+            name: "ping_client",
+            description: "Probe reachability for a client IP/hostname using a local TCP-based ping-style check.",
+            parameters: [
+                ToolParameter(name: "target", type: "string", description: "Client IP or hostname.", required: true),
+                ToolParameter(name: "timeout_seconds", type: "integer", description: "Probe timeout in seconds (1-10). Default: 3.", required: false),
+            ]
+        ),
+        ToolDefinition(
+            name: "resolve_client_dns",
+            description: "Resolve DNS for a client hostname (forward) or IP (reverse lookup).",
+            parameters: [
+                ToolParameter(name: "target", type: "string", description: "Client IP or hostname.", required: true),
+            ]
+        ),
+        ToolDefinition(
+            name: "http_probe_client",
+            description: "Probe HTTP/HTTPS response for a client host/IP and return status/latency.",
+            parameters: [
+                ToolParameter(name: "target", type: "string", description: "Client host or IP.", required: true),
+                ToolParameter(name: "scheme", type: "string", description: "http or https. Default: http.", required: false),
+                ToolParameter(name: "path", type: "string", description: "Optional request path. Default: /.", required: false),
+                ToolParameter(name: "timeout_seconds", type: "integer", description: "Probe timeout seconds (1-20). Default: 5.", required: false),
+            ]
+        ),
+        ToolDefinition(
+            name: "port_check_client",
+            description: "Check TCP connectivity to one or more ports on a client host/IP.",
+            parameters: [
+                ToolParameter(name: "target", type: "string", description: "Client host or IP.", required: true),
+                ToolParameter(name: "ports", type: "string", description: "Comma-separated ports, e.g. 22,53,80,443.", required: true),
+                ToolParameter(name: "timeout_seconds", type: "integer", description: "Per-port timeout seconds (1-10). Default: 2.", required: false),
+            ]
+        ),
+        ToolDefinition(
+            name: "lookup_client_identity",
+            description: "Resolve a UniFi client by GUID/IP/MAC/name and return friendly identity fields.",
+            parameters: [
+                ToolParameter(name: "query", type: "string", description: "Client id, IP, MAC, hostname, or display name fragment.", required: true),
+            ]
+        ),
+        ToolDefinition(
+            name: "ssh_collect_unifi_logs",
+            description: "Run an approved, read-only SSH log command on a UniFi device. Requires explicit approval token before execution.",
+            parameters: [
+                ToolParameter(name: "host", type: "string", description: "UniFi device host or IP.", required: true),
+                ToolParameter(name: "command_id", type: "string", description: "Read-only command id: logread_tail, messages_tail, dmesg_tail, kernel_tail.", required: true),
+                ToolParameter(name: "approve_token", type: "string", description: "Approval token returned by prior dry-run call. Required to execute.", required: false),
+                ToolParameter(name: "timeout_seconds", type: "integer", description: "SSH timeout in seconds (5-60). Default: 15.", required: false),
+            ]
+        ),
+        ToolDefinition(
             name: "network_overview",
             description: "High-level network overview with device, client, and network counts plus busiest APs.",
             parameters: []

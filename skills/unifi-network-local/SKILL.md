@@ -31,6 +31,10 @@ Use the bundled script to talk to the local UniFi Network API.
 - `get_device_details`: Get detailed information for one device. Parameters: `device_id` (required).
 - `get_device_stats`: Get latest statistics for one device. Parameters: `device_id` (required).
 - `get_client_details`: Get detailed information for one client. Parameters: `client_id` (required).
+- `lookup_client_identity`: Resolve a client by GUID/IP/MAC/name fragment and return friendly identity fields.
+- `ping_client`: Probe reachability for a client host/IP. Parameters: `target` (required), `timeout_seconds` (optional).
+- `resolve_client_dns`: Resolve DNS (forward/reverse) for a client host/IP. Parameters: `target` (required).
+- `ssh_collect_unifi_logs`: Run an approved read-only SSH log command on a UniFi device. Parameters: `host` (required), `command_id` (required), `approve_token` (optional, required to execute), `timeout_seconds` (optional).
 - `network_overview`: High-level network summary (counts and busiest APs). Parameters: none.
 - `clients_summary`: Client breakdown by type/access/uplink. Parameters: none.
 - `wifi_summary`: WiFi summary (SSID/security/band/network mapping). Parameters: none.
@@ -73,6 +77,10 @@ Set these values in the shell before making requests:
 - `UNIFI_ALARM_WEBHOOK_PATH`: Webhook path. Default `/webhook/unifi/alarm`.
 - `UNIFI_ALARM_WEBHOOK_SECRET`: Optional shared secret required on inbound webhook requests.
 - `UNIFI_ALARM_LOKI_JOB`: Loki `job` label for alarm events. Default `unifi_alarm_manager`.
+- `UNIFI_SSH_USERNAME`: SSH username for UniFi device access (required for SSH log collection).
+- `UNIFI_SSH_PRIVATE_KEY_PATH`: Path to SSH private key file.
+- `UNIFI_SSH_PRIVATE_KEY`: SSH private key content (used when key path is not provided).
+- `UNIFI_SSH_APPROVAL_SECRET`: Secret used to mint/verify guarded SSH approval tokens.
 
 For a reusable skill, keep your real credentials file outside the project tree, for example:
 
@@ -256,6 +264,26 @@ Deploy webhook receiver to local Docker stack:
 ```bash
 docker build -t local/unifi-alarm-webhook:latest -f skills/unifi-network-local/deploy/unifi-alarm-webhook/Dockerfile .
 docker stack deploy -c skills/unifi-network-local/deploy/unifi-alarm-webhook/stack.yml unifi-tools
+```
+
+Run client diagnostics:
+
+```bash
+python3 skills/unifi-network-local/scripts/network_client_diagnostics.py ping 192.168.1.50 --count 3 --timeout 2
+python3 skills/unifi-network-local/scripts/network_client_diagnostics.py dns 192.168.1.50
+python3 skills/unifi-network-local/scripts/network_client_diagnostics.py dns laptop.local
+python3 skills/unifi-network-local/scripts/network_client_diagnostics.py http 192.168.1.50 --scheme https --path /
+python3 skills/unifi-network-local/scripts/network_client_diagnostics.py ports 192.168.1.50 --ports 22,53,80,443 --timeout 2
+```
+
+Run guarded UniFi SSH log collection (approval required):
+
+```bash
+# Dry-run: prints confirm token (required for apply)
+python3 skills/unifi-network-local/scripts/guarded_unifi_ssh_logs.py --host 192.168.1.1 --command-id logread_tail --reason "Investigate WAN drops"
+
+# Apply: must include exact token from dry-run
+python3 skills/unifi-network-local/scripts/guarded_unifi_ssh_logs.py --host 192.168.1.1 --command-id logread_tail --apply --confirm-token <TOKEN>
 ```
 
 ## Publishing Safety

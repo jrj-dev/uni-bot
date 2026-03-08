@@ -4,6 +4,8 @@ import Security
 enum KeychainHelper {
     enum Key: String {
         case unifiAPIKey = "unifi_api_key"
+        case unifiSSHUsername = "unifi_ssh_username"
+        case unifiSSHPrivateKey = "unifi_ssh_private_key"
         case claudeAPIKey = "claude_api_key"
         case openaiAPIKey = "openai_api_key"
         case grafanaLokiAPIKey = "grafana_loki_api_key"

@@ -1,4 +1,6 @@
 import Foundation
+import Network
+import Darwin
 
 final class ToolExecutor {
     private let queryService: UniFiQueryService
@@ -6,6 +8,8 @@ final class ToolExecutor {
     private let networkMonitor: NetworkMonitor
     private let docsService = UniFiDocumentationService()
     private let lokiService: GrafanaLokiService
+    private let diagnosticsService = ClientDiagnosticsService()
+    private let sshLogService = UniFiSSHLogService()
 
     init(
         queryService: UniFiQueryService,
@@ -58,6 +62,38 @@ final class ToolExecutor {
                 output = try await queryService.query("device-stats", resourceID: toolCall.arguments["device_id"])
             case "get_client_details":
                 output = try await queryService.query("client", resourceID: toolCall.arguments["client_id"])
+            case "ping_client":
+                output = await diagnosticsService.probeReachability(
+                    target: toolCall.arguments["target"],
+                    timeoutSeconds: Int(toolCall.arguments["timeout_seconds"] ?? "")
+                )
+            case "resolve_client_dns":
+                output = diagnosticsService.resolveDNS(target: toolCall.arguments["target"])
+            case "http_probe_client":
+                output = await diagnosticsService.httpProbe(
+                    target: toolCall.arguments["target"],
+                    scheme: toolCall.arguments["scheme"],
+                    path: toolCall.arguments["path"],
+                    timeoutSeconds: Int(toolCall.arguments["timeout_seconds"] ?? "")
+                )
+            case "port_check_client":
+                output = await diagnosticsService.portCheck(
+                    target: toolCall.arguments["target"],
+                    portsCSV: toolCall.arguments["ports"],
+                    timeoutSeconds: Int(toolCall.arguments["timeout_seconds"] ?? "")
+                )
+            case "lookup_client_identity":
+                output = try await diagnosticsService.lookupClientIdentity(
+                    queryService: queryService,
+                    query: toolCall.arguments["query"]
+                )
+            case "ssh_collect_unifi_logs":
+                output = await sshLogService.run(
+                    host: toolCall.arguments["host"],
+                    commandID: toolCall.arguments["command_id"],
+                    approveToken: toolCall.arguments["approve_token"],
+                    timeoutSeconds: Int(toolCall.arguments["timeout_seconds"] ?? "")
+                )
             case "network_overview":
                 output = try await summaryService.summary("overview")
             case "clients_summary":
@@ -608,5 +644,409 @@ private struct UniFiDocumentationService {
         output.dateStyle = .medium
         output.timeStyle = .none
         return output.string(from: date)
+    }
+}
+
+private actor SSHApprovalStore {
+    private struct PendingApproval {
+        let token: String
+        let signature: String
+        let expiresAt: Date
+    }
+
+    private var pending: [String: PendingApproval] = [:]
+
+    func issue(host: String, commandID: String) -> String {
+        let token = String(UUID().uuidString.prefix(8)).lowercased()
+        let signature = "\(host)|\(commandID)".lowercased()
+        let approval = PendingApproval(
+            token: token,
+            signature: signature,
+            expiresAt: Date().addingTimeInterval(300)
+        )
+        pending[token] = approval
+        return token
+    }
+
+    func consume(token: String, host: String, commandID: String) -> Bool {
+        let key = token.lowercased()
+        guard let approval = pending[key] else { return false }
+        pending[key] = nil
+        guard approval.expiresAt > Date() else { return false }
+        return approval.signature == "\(host)|\(commandID)".lowercased()
+    }
+}
+
+private struct UniFiSSHLogService {
+    private let approvals = SSHApprovalStore()
+    private let allowedCommands: [String: String] = [
+        "logread_tail": "logread | tail -n 200",
+        "messages_tail": "tail -n 200 /var/log/messages",
+        "dmesg_tail": "dmesg | tail -n 200",
+        "kernel_tail": "tail -n 200 /var/log/kern.log",
+    ]
+
+    func run(
+        host rawHost: String?,
+        commandID rawCommandID: String?,
+        approveToken rawApproveToken: String?,
+        timeoutSeconds rawTimeoutSeconds: Int?
+    ) async -> String {
+        let host = (rawHost ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let commandID = (rawCommandID ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !host.isEmpty else {
+            return "Error: ssh_collect_unifi_logs requires 'host'."
+        }
+        guard let command = allowedCommands[commandID] else {
+            return "Error: Unsupported command_id. Allowed: \(allowedCommands.keys.sorted().joined(separator: ", "))."
+        }
+
+        let token = (rawApproveToken ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty else {
+            let approvalToken = await approvals.issue(host: host, commandID: commandID)
+            return """
+            Approval required: SSH command execution is gated.
+            Re-run ssh_collect_unifi_logs with:
+            - host: \(host)
+            - command_id: \(commandID)
+            - approve_token: \(approvalToken)
+            Token expires in 5 minutes.
+            """
+        }
+        guard await approvals.consume(token: token, host: host, commandID: commandID) else {
+            return "Error: approve_token is invalid or expired. Request a new token by calling without approve_token."
+        }
+
+        let username = (KeychainHelper.loadString(key: .unifiSSHUsername) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let privateKey = (KeychainHelper.loadString(key: .unifiSSHPrivateKey) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !username.isEmpty else {
+            return "Error: UniFi SSH username not configured in Settings."
+        }
+        guard !privateKey.isEmpty else {
+            return "Error: UniFi SSH private key not configured in Settings."
+        }
+
+        let timeout = max(5, min(rawTimeoutSeconds ?? 15, 60))
+        return await executeSSH(
+            username: username,
+            host: host,
+            commandID: commandID,
+            command: command,
+            privateKey: privateKey,
+            timeoutSeconds: timeout
+        )
+    }
+
+    private func executeSSH(
+        username: String,
+        host: String,
+        commandID: String,
+        command: String,
+        privateKey: String,
+        timeoutSeconds: Int
+    ) async -> String {
+        #if os(macOS) || targetEnvironment(macCatalyst)
+        let tempDir = FileManager.default.temporaryDirectory
+        let keyURL = tempDir.appendingPathComponent("unifi_ssh_\(UUID().uuidString).key")
+        do {
+            try privateKey.write(to: keyURL, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: NSNumber(value: Int16(0o600))],
+                ofItemAtPath: keyURL.path
+            )
+        } catch {
+            return "Error: Unable to prepare temporary SSH key file."
+        }
+        defer { try? FileManager.default.removeItem(at: keyURL) }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+        process.arguments = [
+            "-i", keyURL.path,
+            "-o", "BatchMode=yes",
+            "-o", "StrictHostKeyChecking=accept-new",
+            "-o", "ConnectTimeout=\(timeoutSeconds)",
+            "\(username)@\(host)",
+            command,
+        ]
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        process.standardOutput = outPipe
+        process.standardError = errPipe
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+            let out = String(data: outPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            let err = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            let output = out.trimmingCharacters(in: .whitespacesAndNewlines)
+            let errors = err.trimmingCharacters(in: .whitespacesAndNewlines)
+            if process.terminationStatus == 0 {
+                let clipped = String(output.prefix(4000))
+                return """
+                SSH log command completed (host=\(host), command_id=\(commandID)):
+                \(clipped.isEmpty ? "<no output>" : clipped)
+                """
+            }
+            return "Error: SSH command failed (status=\(process.terminationStatus)): \(errors.isEmpty ? "unknown error" : errors)"
+        } catch {
+            return "Error: SSH command failed to start: \(error.localizedDescription)"
+        }
+        #else
+        return "Error: SSH command execution is not supported on this iOS runtime. Use the local CLI skill for SSH log collection."
+        #endif
+    }
+}
+
+private struct ClientDiagnosticsService {
+    private let probePorts: [UInt16] = [22, 53, 80, 443]
+
+    func probeReachability(target rawTarget: String?, timeoutSeconds rawTimeout: Int?) async -> String {
+        let target = (rawTarget ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !target.isEmpty else {
+            return "Error: ping_client requires 'target'."
+        }
+        let timeout = max(1, min(rawTimeout ?? 3, 10))
+        for port in probePorts {
+            if await tcpProbe(host: target, port: port, timeoutSeconds: timeout) {
+                return "Reachability probe success: \(target) responded on TCP port \(port)."
+            }
+        }
+        return "Reachability probe failed: no TCP response from \(target) on ports \(probePorts.map(String.init).joined(separator: ", "))."
+    }
+
+    func resolveDNS(target rawTarget: String?) -> String {
+        let target = (rawTarget ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !target.isEmpty else {
+            return "Error: resolve_client_dns requires 'target'."
+        }
+        if let reverse = reverseLookupIfIPAddress(target) {
+            return reverse
+        }
+        let addresses = resolveHost(target)
+        if addresses.isEmpty {
+            return "DNS resolution failed for \(target)."
+        }
+        return "DNS \(target) -> \(addresses.joined(separator: ", "))"
+    }
+
+    func httpProbe(
+        target rawTarget: String?,
+        scheme rawScheme: String?,
+        path rawPath: String?,
+        timeoutSeconds rawTimeout: Int?
+    ) async -> String {
+        let target = (rawTarget ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !target.isEmpty else {
+            return "Error: http_probe_client requires 'target'."
+        }
+        let scheme = ((rawScheme ?? "http").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "https") ? "https" : "http"
+        let path = {
+            let p = (rawPath ?? "/").trimmingCharacters(in: .whitespacesAndNewlines)
+            if p.isEmpty { return "/" }
+            return p.hasPrefix("/") ? p : "/\(p)"
+        }()
+        let timeout = max(1, min(rawTimeout ?? 5, 20))
+        guard let url = URL(string: "\(scheme)://\(target)\(path)") else {
+            return "Error: Invalid URL for target '\(target)'."
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = TimeInterval(timeout)
+        request.setValue("close", forHTTPHeaderField: "Connection")
+        let started = Date()
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            let elapsedMS = Int(Date().timeIntervalSince(started) * 1000)
+            if let http = response as? HTTPURLResponse {
+                return "HTTP probe \(url.absoluteString) -> status \(http.statusCode) in \(elapsedMS)ms."
+            }
+            return "HTTP probe \(url.absoluteString) completed in \(elapsedMS)ms (non-HTTP response)."
+        } catch {
+            return "HTTP probe failed for \(url.absoluteString): \(error.localizedDescription)"
+        }
+    }
+
+    func portCheck(target rawTarget: String?, portsCSV rawPorts: String?, timeoutSeconds rawTimeout: Int?) async -> String {
+        let target = (rawTarget ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !target.isEmpty else {
+            return "Error: port_check_client requires 'target'."
+        }
+        let ports = (rawPorts ?? "")
+            .split(separator: ",")
+            .compactMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            .filter { $0 > 0 && $0 <= 65535 }
+        guard !ports.isEmpty else {
+            return "Error: port_check_client requires valid comma-separated ports."
+        }
+        let timeout = max(1, min(rawTimeout ?? 2, 10))
+        var lines: [String] = []
+        for port in ports.prefix(20) {
+            let ok = await tcpProbe(host: target, port: UInt16(port), timeoutSeconds: timeout)
+            lines.append("port \(port): \(ok ? "open/reachable" : "no response/blocked")")
+        }
+        return """
+        Port check for \(target):
+        \(lines.joined(separator: "\n"))
+        """
+    }
+
+    func lookupClientIdentity(queryService: UniFiQueryService, query rawQuery: String?) async throws -> String {
+        let query = (rawQuery ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else {
+            return "Error: lookup_client_identity requires 'query'."
+        }
+        let clients = try await queryService.queryItems("clients")
+        let matches = clients.filter { client in
+            let fields = [
+                client["id"] as? String,
+                client["name"] as? String,
+                client["hostname"] as? String,
+                client["ipAddress"] as? String,
+                client["macAddress"] as? String,
+            ]
+            return fields.compactMap { $0?.lowercased() }.contains { $0.contains(query) }
+        }
+        if matches.isEmpty {
+            return "No client matched '\(query)'."
+        }
+        let lines = matches.prefix(10).enumerated().map { idx, item in
+            let id = item["id"] as? String ?? "unknown"
+            let name = item["name"] as? String ?? item["hostname"] as? String ?? "unknown"
+            let ip = item["ipAddress"] as? String ?? "unknown"
+            let mac = item["macAddress"] as? String ?? "unknown"
+            return "\(idx + 1). name=\(name), ip=\(ip), mac=\(mac), id=\(id)"
+        }
+        return """
+        Client identity matches (\(lines.count)):
+        \(lines.joined(separator: "\n"))
+        """
+    }
+
+    private func tcpProbe(host: String, port: UInt16, timeoutSeconds: Int) async -> Bool {
+        guard let nwPort = NWEndpoint.Port(rawValue: port) else { return false }
+        return await withCheckedContinuation { continuation in
+            let connection = NWConnection(host: NWEndpoint.Host(host), port: nwPort, using: .tcp)
+            let queue = DispatchQueue(label: "networkgenius.tcpProbe")
+            var resolved = false
+            func finish(_ result: Bool) {
+                guard !resolved else { return }
+                resolved = true
+                connection.cancel()
+                continuation.resume(returning: result)
+            }
+            connection.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    finish(true)
+                case .failed, .cancelled:
+                    finish(false)
+                default:
+                    break
+                }
+            }
+            connection.start(queue: queue)
+            queue.asyncAfter(deadline: .now() + .seconds(timeoutSeconds)) {
+                finish(false)
+            }
+        }
+    }
+
+    private func resolveHost(_ host: String) -> [String] {
+        var hints = addrinfo(
+            ai_flags: AI_DEFAULT,
+            ai_family: AF_UNSPEC,
+            ai_socktype: SOCK_STREAM,
+            ai_protocol: 0,
+            ai_addrlen: 0,
+            ai_canonname: nil,
+            ai_addr: nil,
+            ai_next: nil
+        )
+        var result: UnsafeMutablePointer<addrinfo>?
+        let status = getaddrinfo(host, nil, &hints, &result)
+        guard status == 0, let first = result else { return [] }
+        defer { freeaddrinfo(result) }
+
+        var output: [String] = []
+        for pointer in sequence(first: first, next: { $0.pointee.ai_next }) {
+            guard let addr = pointer.pointee.ai_addr else { continue }
+            var hostBuffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            let rc = getnameinfo(
+                addr,
+                pointer.pointee.ai_addrlen,
+                &hostBuffer,
+                socklen_t(hostBuffer.count),
+                nil,
+                0,
+                NI_NUMERICHOST
+            )
+            if rc == 0 {
+                output.append(String(cString: hostBuffer))
+            }
+        }
+        return Array(Set(output)).sorted()
+    }
+
+    private func reverseLookupIfIPAddress(_ input: String) -> String? {
+        var sockaddrStorage = sockaddr_storage()
+        var hostBuffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+
+        if input.contains(":") {
+            var addr6 = in6_addr()
+            if inet_pton(AF_INET6, input, &addr6) == 1 {
+                var addr = sockaddr_in6()
+                addr.sin6_len = UInt8(MemoryLayout<sockaddr_in6>.size)
+                addr.sin6_family = sa_family_t(AF_INET6)
+                addr.sin6_addr = addr6
+                memcpy(&sockaddrStorage, &addr, MemoryLayout<sockaddr_in6>.size)
+                let rc = withUnsafePointer(to: &sockaddrStorage) { ptr in
+                    ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { saPtr in
+                        getnameinfo(
+                            saPtr,
+                            socklen_t(MemoryLayout<sockaddr_in6>.size),
+                            &hostBuffer,
+                            socklen_t(hostBuffer.count),
+                            nil,
+                            0,
+                            NI_NAMEREQD
+                        )
+                    }
+                }
+                if rc == 0 {
+                    return "Reverse DNS \(input) -> \(String(cString: hostBuffer))"
+                }
+                return "Reverse DNS lookup failed for \(input)."
+            }
+        } else {
+            var addr4 = in_addr()
+            if inet_pton(AF_INET, input, &addr4) == 1 {
+                var addr = sockaddr_in()
+                addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+                addr.sin_family = sa_family_t(AF_INET)
+                addr.sin_addr = addr4
+                memcpy(&sockaddrStorage, &addr, MemoryLayout<sockaddr_in>.size)
+                let rc = withUnsafePointer(to: &sockaddrStorage) { ptr in
+                    ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { saPtr in
+                        getnameinfo(
+                            saPtr,
+                            socklen_t(MemoryLayout<sockaddr_in>.size),
+                            &hostBuffer,
+                            socklen_t(hostBuffer.count),
+                            nil,
+                            0,
+                            NI_NAMEREQD
+                        )
+                    }
+                }
+                if rc == 0 {
+                    return "Reverse DNS \(input) -> \(String(cString: hostBuffer))"
+                }
+                return "Reverse DNS lookup failed for \(input)."
+            }
+        }
+        return nil
     }
 }
