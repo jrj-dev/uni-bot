@@ -308,11 +308,31 @@ final class ChatViewModel: ObservableObject {
         let patterns: [String] = [
             #"<think\b[^>]*>[\s\S]*?</think>"#,
             #"<reasoning\b[^>]*>[\s\S]*?</reasoning>"#,
+            #"<analysis\b[^>]*>[\s\S]*?</analysis>"#,
+            #"<thought\b[^>]*>[\s\S]*?</thought>"#,
             #"```thinking[\s\S]*?```"#,
+            #"```reasoning[\s\S]*?```"#,
+            #"```analysis[\s\S]*?```"#,
+            #"```thought[\s\S]*?```"#,
+            #"(?is)(^|\n)#{1,6}\s*(reasoning|analysis|chain[- ]of[- ]thought|thought process|deliberation)\s*\n[\s\S]*?(?=\n#{1,6}\s|\z)"#,
+            #"(?is)(^|\n)\*\*(reasoning|analysis|chain[- ]of[- ]thought|thought process|deliberation)\*\*\s*:?\n[\s\S]*?(?=\n\*\*|\n#{1,6}\s|\z)"#,
+            #"(?im)^\s*(reasoning|analysis|chain[- ]of[- ]thought|thought process|deliberation)\s*:\s*.*$"#,
         ]
         for pattern in patterns {
             cleaned = cleaned.replacingRegex(pattern, with: "")
         }
+
+        // If the model emits hidden reasoning followed by a "Final answer" section, keep only the final section.
+        if let markerRange = cleaned.range(
+            of: #"(?is)\b(final answer|final|answer)\s*:\s*"#,
+            options: .regularExpression
+        ) {
+            let prefix = cleaned[..<markerRange.lowerBound]
+            if prefix.range(of: #"\b(reasoning|analysis|think|thought|chain[- ]of[- ]thought)\b"#, options: [.regularExpression, .caseInsensitive]) != nil {
+                cleaned = String(cleaned[markerRange.upperBound...])
+            }
+        }
+
         cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
         if cleaned.isEmpty, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return "Done."

@@ -74,8 +74,9 @@ struct ChatInputBar: View {
         guard !isLoading else { return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        onSend(trimmed)
+        // Clear first so UI never keeps stale text if parent state updates immediately.
         text = ""
+        onSend(trimmed)
     }
 
     private var canUseSpeechInput: Bool {
@@ -98,7 +99,10 @@ struct ChatInputBar: View {
         Task {
             let spoken = await speechService.stopListening().trimmingCharacters(in: .whitespacesAndNewlines)
             guard !spoken.isEmpty else { return }
-            onSend(spoken)
+            await MainActor.run {
+                text = ""
+                onSend(spoken)
+            }
         }
     }
 }

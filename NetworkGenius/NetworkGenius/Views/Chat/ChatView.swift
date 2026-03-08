@@ -102,6 +102,8 @@ struct ChatView: View {
             }
             .onAppear {
                 debugLog("Chat view appeared", category: "UI")
+                showSettings = false
+                showConversationList = false
                 viewModel.speechService = speechService
                 viewModel.configure(appState: appState, networkMonitor: networkMonitor, modelContext: modelContext)
                 Task {
@@ -125,6 +127,8 @@ struct ChatView: View {
             }
             .onChange(of: scenePhase) { _, phase in
                 guard phase == .active else { return }
+                showSettings = false
+                showConversationList = false
                 Task {
                     debugLog("App became active; re-probing console reachability", category: "UI")
                     await networkMonitor.probeConsole(

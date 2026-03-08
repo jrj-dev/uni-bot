@@ -1048,23 +1048,55 @@ private struct ClientDiagnosticsService {
     }
 
     func lookupClientIdentity(queryService: UniFiQueryService, query rawQuery: String?) async throws -> String {
-        let query = (rawQuery ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let raw = (rawQuery ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let query = normalizeClientLookupText(raw)
         guard !query.isEmpty else {
             return "Error: lookup_client_identity requires 'query'."
         }
         let clients = try await queryService.queryItems("clients")
-        let matches = clients.filter { client in
-            let fields = [
-                client["id"] as? String,
-                client["name"] as? String,
-                client["hostname"] as? String,
-                client["ipAddress"] as? String,
-                client["macAddress"] as? String,
-            ]
-            return fields.compactMap { $0?.lowercased() }.contains { $0.contains(query) }
+        let rankedMatches: [(client: [String: Any], score: Int)] = clients.compactMap { client in
+            let fields = clientIdentityFields(client)
+            let normalizedFields = fields.map(normalizeClientLookupText).filter { !$0.isEmpty }
+
+            var score = 0
+            for field in normalizedFields {
+                if field == query {
+                    score = max(score, 100)
+                } else if field.contains(query) {
+                    score = max(score, 90)
+                } else if query.contains(field), field.count >= 4 {
+                    score = max(score, 70)
+                } else if field.hasPrefix(query) || query.hasPrefix(field) {
+                    score = max(score, 65)
+                } else {
+                    let distance = editDistance(query, field)
+                    if distance <= 2 {
+                        score = max(score, 50 - (distance * 10))
+                    } else if distance <= 4 && min(query.count, field.count) >= 8 {
+                        score = max(score, 20)
+                    }
+                }
+            }
+
+            if score == 0 {
+                return nil
+            }
+            return (client: client, score: score)
         }
+
+        let matches = rankedMatches
+            .sorted { lhs, rhs in
+                if lhs.score == rhs.score {
+                    let lhsName = (lhs.client["name"] as? String ?? lhs.client["hostname"] as? String ?? "").lowercased()
+                    let rhsName = (rhs.client["name"] as? String ?? rhs.client["hostname"] as? String ?? "").lowercased()
+                    return lhsName < rhsName
+                }
+                return lhs.score > rhs.score
+            }
+            .map(\.client)
+
         if matches.isEmpty {
-            return "No client matched '\(query)'."
+            return "No client matched '\(raw)'."
         }
         let lines = matches.prefix(10).enumerated().map { idx, item in
             let id = item["id"] as? String ?? "unknown"
@@ -1077,6 +1109,68 @@ private struct ClientDiagnosticsService {
         Client identity matches (\(lines.count)):
         \(lines.joined(separator: "\n"))
         """
+    }
+
+    private func clientIdentityFields(_ client: [String: Any]) -> [String] {
+        let keys = [
+            "id",
+            "name",
+            "hostname",
+            "ipAddress",
+            "macAddress",
+            "displayName",
+            "display_name",
+            "alias",
+            "userName",
+            "user_name",
+            "dhcpHostname",
+            "dhcp_hostname",
+            "vendorName",
+            "vendor_name",
+        ]
+        return keys.compactMap { key in
+            guard let value = client[key] as? String else { return nil }
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+    }
+
+    private func normalizeClientLookupText(_ input: String) -> String {
+        var text = input.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if text.hasSuffix(".local") {
+            text = String(text.dropLast(6))
+        }
+        let allowed = CharacterSet.alphanumerics
+        let scalars = text.unicodeScalars.map { scalar in
+            allowed.contains(scalar) ? Character(scalar) : Character(" ")
+        }
+        let collapsed = String(scalars)
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+        return collapsed
+    }
+
+    private func editDistance(_ lhs: String, _ rhs: String) -> Int {
+        if lhs == rhs { return 0 }
+        if lhs.isEmpty { return rhs.count }
+        if rhs.isEmpty { return lhs.count }
+        let a = Array(lhs)
+        let b = Array(rhs)
+        var previous = Array(0...b.count)
+        for i in 1...a.count {
+            var current = Array(repeating: 0, count: b.count + 1)
+            current[0] = i
+            for j in 1...b.count {
+                let cost = a[i - 1] == b[j - 1] ? 0 : 1
+                current[j] = min(
+                    previous[j] + 1,
+                    current[j - 1] + 1,
+                    previous[j - 1] + cost
+                )
+            }
+            previous = current
+        }
+        return previous[b.count]
     }
 
     private func tcpProbe(host: String, port: UInt16, timeoutSeconds: Int) async -> Bool {
