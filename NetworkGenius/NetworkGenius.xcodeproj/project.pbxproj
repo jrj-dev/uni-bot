@@ -484,6 +484,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Network Genius";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking = YES;
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Network Genius needs local network access to communicate with your UniFi console.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Network Genius uses the microphone so you can ask questions by voice.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Network Genius uses speech recognition to convert your voice to text.";
@@ -517,6 +518,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Network Genius";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_NSAppTransportSecurity_NSAllowsLocalNetworking = YES;
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Network Genius needs local network access to communicate with your UniFi console.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Network Genius uses the microphone so you can ask questions by voice.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Network Genius uses speech recognition to convert your voice to text.";
