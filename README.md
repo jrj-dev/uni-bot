@@ -55,6 +55,9 @@ This repo contains two parts:
   - dry-run default
   - explicit confirmation token for apply
 - UniFi Alarm Manager webhook receiver (`unifi_alarm_webhook_receiver.py`) that forwards alarms to Loki.
+  - Includes Docker module at `skills/unifi-network-local/deploy/unifi-alarm-webhook/` with `Dockerfile`, `stack.yml`, and `deploy.sh`.
+- Dedicated alarm-analysis skill module (`skills/unifi-alarm-manager-local`) for Loki queries scoped to `job="unifi_alarm_manager"` with client/IP/device narrowing.
+- UniFi event poller module (`skills/unifi-event-poller`) that polls UniFi events every 30s and forwards new events to Loki (supports endpoint auto-discovery plus explicit `UNIFI_EVENT_PATH` override).
 
 ## Project Layout
 
@@ -67,13 +70,13 @@ tests/                                 python tests and fixtures
 
 ## Configuration
 
-Create local env file for scripts:
+Create local env file for scripts in your home directory:
 
 ```bash
-cp .env.local.example .env.local
+cp .env.local.example ~/.env.local
 ```
 
-Set values in `.env.local`:
+Set values in `~/.env.local`:
 
 ```dotenv
 UNIFI_BASE_URL=https://your-unifi-console
@@ -94,20 +97,28 @@ UNIFI_ALARM_WEBHOOK_PORT=8787
 UNIFI_ALARM_WEBHOOK_PATH=/webhook/unifi/alarm
 UNIFI_ALARM_WEBHOOK_SECRET=
 UNIFI_ALARM_LOKI_JOB=unifi_alarm_manager
+UNIFI_EVENT_PATH=/proxy/network/api/s/default/stat/event
+UNIFI_EVENT_LIMIT=50
+UNIFI_POLL_INTERVAL_SECONDS=30
+UNIFI_EVENT_TIMEOUT_SECONDS=20
+UNIFI_EVENT_LOKI_JOB=unifi_network_events
+UNIFI_INSECURE=true
+LOKI_INSECURE=false
 ```
 
 Load env vars:
 
 ```bash
 set -a
-. ./.env.local
+. ~/.env.local
 set +a
 ```
 
 Notes:
-- Keep `.env.local` out of git.
+- Keep `~/.env.local` out of git.
 - `LM_STUDIO_MODEL` can be blank; select model from API/UI.
 - Guard allowlists are required for any policy toggles. Empty allowlists block writes.
+- If event polling returns `HTTP 404`, use `UNIFI_EVENT_PATH=/proxy/network/api/s/default/stat/event` (validated on this controller).
 
 ## iOS App Setup
 
@@ -148,6 +159,26 @@ Loki:
 python3 skills/unifi-network-local/scripts/loki_query.py query-range --logql '{job="unifi"}' --minutes 60 --limit 100
 python3 skills/unifi-network-local/scripts/loki_query.py labels
 python3 skills/unifi-network-local/scripts/loki_query.py label-values --label host
+```
+
+UniFi Alarm Manager Loki skill:
+
+```bash
+python3 skills/unifi-alarm-manager-local/scripts/alarm_loki_query.py query-range --minutes 120 --client-name "Kid-iPad"
+python3 skills/unifi-alarm-manager-local/scripts/alarm_loki_query.py query-range --minutes 180 --errors --device-name "U7-LR-Hallway"
+python3 skills/unifi-alarm-manager-local/scripts/alarm_loki_query.py index-stats --minutes 240 --errors --contains vpn
+```
+
+UniFi event poller (detached container, replaces old container automatically):
+
+```bash
+ENV_FILE="$HOME/.env.local" ~/projects/uni-bot/skills/unifi-event-poller/deploy/start.sh
+```
+
+Watch poller logs:
+
+```bash
+docker logs -f unifi-event-poller
 ```
 
 LM Studio:
@@ -192,16 +223,27 @@ It listens on `UNIFI_ALARM_WEBHOOK_BIND:UNIFI_ALARM_WEBHOOK_PORT` and forwards i
 Docker stack deployment (local machine):
 
 ```bash
-# Build local image
-docker build -t local/unifi-alarm-webhook:latest -f skills/unifi-network-local/deploy/unifi-alarm-webhook/Dockerfile .
+# One-command build + deploy
+skills/unifi-network-local/deploy/unifi-alarm-webhook/deploy.sh
+```
 
-# Export env vars (or source .env.local)
-set -a
-. ./.env.local
-set +a
+By default, `deploy.sh` reads environment variables from `~/.env.local`.
+Override with `--env-file <path>` when needed.
+It defaults to compose mode (`docker compose up -d`).
+Use `--mode swarm` if you want swarm stack deployment.
 
-# Deploy stack
-docker stack deploy -c skills/unifi-network-local/deploy/unifi-alarm-webhook/stack.yml unifi-tools
+Watch logs (compose mode):
+
+```bash
+docker compose -f ~/projects/uni-bot/skills/unifi-network-local/deploy/unifi-alarm-webhook/compose.yml logs -f
+```
+
+Optional flags:
+
+```bash
+skills/unifi-network-local/deploy/unifi-alarm-webhook/deploy.sh --help
+skills/unifi-network-local/deploy/unifi-alarm-webhook/deploy.sh --skip-build
+skills/unifi-network-local/deploy/unifi-alarm-webhook/deploy.sh --mode compose
 ```
 
 ## Testing

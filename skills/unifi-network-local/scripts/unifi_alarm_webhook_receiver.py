@@ -11,6 +11,7 @@ import ssl
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -90,6 +91,52 @@ def build_context(insecure: bool) -> ssl.SSLContext | None:
     return context
 
 
+def normalize_loki_push_url(raw_base_url: str) -> str:
+    base = (raw_base_url or "").strip().strip("'").strip('"')
+    if not base:
+        raise ValueError("LOKI_BASE_URL is empty")
+    parsed = urllib.parse.urlparse(base)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("LOKI_BASE_URL must include http:// or https://")
+    if not parsed.netloc:
+        raise ValueError("LOKI_BASE_URL missing host")
+
+    path = parsed.path.rstrip("/")
+    if path.endswith("/loki/api/v1/push"):
+        push_path = path
+    elif path.endswith("/loki/api/v1"):
+        push_path = path + "/push"
+    elif path.endswith("/loki"):
+        push_path = path + "/api/v1/push"
+    elif path:
+        push_path = path + "/loki/api/v1/push"
+    else:
+        push_path = "/loki/api/v1/push"
+
+    return urllib.parse.urlunparse(
+        (parsed.scheme, parsed.netloc, push_path, "", "", "")
+    )
+
+
+def candidate_loki_push_urls(raw_base_url: str) -> list[str]:
+    primary = normalize_loki_push_url(raw_base_url)
+    parsed = urllib.parse.urlparse(primary)
+    host = (parsed.hostname or "").lower()
+    candidates = [primary]
+
+    # Docker containers often cannot resolve mDNS .local hostnames.
+    # Provide a pragmatic fallback for local Docker Desktop networking.
+    if host.endswith(".local"):
+        fallback_netloc = "host.docker.internal"
+        if parsed.port:
+            fallback_netloc = f"{fallback_netloc}:{parsed.port}"
+        fallback = urllib.parse.urlunparse(
+            (parsed.scheme, fallback_netloc, parsed.path, "", "", "")
+        )
+        candidates.append(fallback)
+    return candidates
+
+
 @dataclass
 class AppConfig:
     path: str
@@ -127,19 +174,28 @@ def push_to_loki(config: AppConfig, payload: dict[str, Any]) -> None:
     ts_ns = str(time.time_ns())
     loki_payload = {"streams": [{"stream": labels, "values": [[ts_ns, line]]}]}
 
-    url = config.loki_base_url.rstrip("/") + "/loki/api/v1/push"
+    urls = candidate_loki_push_urls(config.loki_base_url)
     body = json.dumps(loki_payload, separators=(",", ":")).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     if config.loki_api_key.strip():
         headers["Authorization"] = f"Bearer {config.loki_api_key.strip()}"
 
-    request = urllib.request.Request(url=url, data=body, headers=headers, method="POST")
     context = build_context(config.insecure)
-
-    with urllib.request.urlopen(request, timeout=config.timeout, context=context) as response:
-        status = getattr(response, "status", 200)
-        if status < 200 or status >= 300:
-            raise RuntimeError(f"Loki push failed with HTTP {status}")
+    last_error: Exception | None = None
+    for url in urls:
+        request = urllib.request.Request(url=url, data=body, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(request, timeout=config.timeout, context=context) as response:
+                status = getattr(response, "status", 200)
+                if status < 200 or status >= 300:
+                    raise RuntimeError(f"Loki push failed with HTTP {status}")
+            return
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            continue
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("Loki push failed for unknown reason")
 
 
 def is_authorized(handler: BaseHTTPRequestHandler, secret: str) -> bool:
@@ -203,7 +259,10 @@ def make_handler(config: AppConfig):
                 self.wfile.write(b"loki push failed\n")
                 return
             except Exception as exc:  # noqa: BLE001
-                sys.stderr.write(f"[alarm-webhook] push error: {exc}\n")
+                safe_loki = (config.loki_base_url or "").strip()
+                sys.stderr.write(
+                    f"[alarm-webhook] push error: {exc} (loki_base_url={safe_loki})\n"
+                )
                 self.send_response(502)
                 self.end_headers()
                 self.wfile.write(b"loki push failed\n")

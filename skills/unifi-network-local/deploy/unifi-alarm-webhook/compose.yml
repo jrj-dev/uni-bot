@@ -1,0 +1,15 @@
+services:
+  unifi-alarm-webhook:
+    image: ${IMAGE_TAG:-local/unifi-alarm-webhook:latest}
+    container_name: unifi-alarm-webhook
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    environment:
+      LOKI_BASE_URL: ${LOKI_BASE_URL}
+      LOKI_API_KEY: ${LOKI_API_KEY}
+      UNIFI_ALARM_WEBHOOK_BIND: 0.0.0.0
+      UNIFI_ALARM_WEBHOOK_PORT: 8787
+      UNIFI_ALARM_WEBHOOK_PATH: ${UNIFI_ALARM_WEBHOOK_PATH:-/webhook/unifi/alarm}
+      UNIFI_ALARM_WEBHOOK_SECRET: ${UNIFI_ALARM_WEBHOOK_SECRET}
+      UNIFI_ALARM_LOKI_JOB: ${UNIFI_ALARM_LOKI_JOB:-unifi_alarm_manager}

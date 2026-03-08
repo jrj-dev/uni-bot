@@ -77,7 +77,7 @@ For a reusable skill, keep your real credentials file outside the project tree, 
 
 ```bash
 set -a
-. ~/.uni-bot.env.local
+. ~/.env.local
 ```
 
 ## Common Workflow
@@ -259,7 +259,7 @@ docker stack deploy -c skills/unifi-network-local/deploy/unifi-alarm-webhook/sta
 ## Publishing Safety
 
 - Do not publish `.env.local`; it is a local-only secret file.
-- Prefer keeping the real env file outside the repo entirely, for example `~/.uni-bot.env.local`.
+- Prefer keeping the real env file outside the repo entirely, for example `~/.env.local`.
 - Do not publish live snapshots from `data/unifi/snapshots/`.
 - Do not publish Safari exports such as `*.webarchive`.
 - Keep examples generic and avoid checking in controller IPs, site IDs, SSIDs, device names, or client data.
