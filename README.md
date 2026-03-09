@@ -171,7 +171,13 @@ UniFi:
 python3 skills/unifi-network-local/scripts/unifi_request.py GET /proxy/network/integration/v1/sites
 python3 skills/unifi-network-local/scripts/named_query.py clients --site-ref default
 python3 skills/unifi-network-local/scripts/query_summary.py overview --site-ref default
+python3 skills/unifi-network-local/scripts/app_block.py list-apps --search zoom
+python3 skills/unifi-network-local/scripts/app_block.py list-categories --search streaming
+python3 skills/unifi-network-local/scripts/app_block.py plan-block --site-ref default --client "Kid iPad" --app YouTube --category "Streaming Media" --schedule-mode daily --start-time 20:00 --end-time 22:00
+python3 skills/unifi-network-local/scripts/app_block.py apply-block --site-ref default --client "Kid iPad" --app YouTube --category "Streaming Media" --schedule-mode daily --start-time 20:00 --end-time 22:00
 ```
+
+The app-block helper now targets UniFi's private CyberSecure `trafficrules` API and emits `simple_app_block_payloads` derived from the live UI model. It uses separate `APP_ID` and `APP_CATEGORY` rule types, so mixed app-plus-category requests are submitted as two rules.
 
 Loki:
 

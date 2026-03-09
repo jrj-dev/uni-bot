@@ -115,6 +115,60 @@ Run the generic request client:
 python3 skills/unifi-network-local/scripts/unifi_request.py GET /proxy/network/integration/v1/sites
 ```
 
+Plan app blocking for a specific client from the DPI application catalog:
+
+```bash
+python3 skills/unifi-network-local/scripts/app_block.py list-apps --search zoom --insecure
+python3 skills/unifi-network-local/scripts/app_block.py list-categories --search streaming --insecure
+python3 skills/unifi-network-local/scripts/app_block.py plan-block \
+  --site-ref default \
+  --client "Kid iPad" \
+  --app YouTube \
+  --app Roblox \
+  --category "Streaming Media" \
+  --schedule-mode weekly \
+  --days mon,tue,wed,thu,fri \
+  --start-time 20:00 \
+  --end-time 22:00 \
+  --timezone America/Chicago \
+  --insecure
+
+python3 skills/unifi-network-local/scripts/app_block.py apply-block \
+  --site-ref default \
+  --client "Kid iPad" \
+  --app YouTube \
+  --category "Streaming Media" \
+  --schedule-mode weekly \
+  --days mon,tue,wed,thu,fri \
+  --start-time 20:00 \
+  --end-time 22:00 \
+  --insecure
+```
+
+The helper resolves:
+
+- the client by name, hostname, MAC, IP, or client ID
+- the app list from `/proxy/network/integration/v1/dpi/applications`
+- the category list from `/proxy/network/integration/v1/dpi/categories`
+- schedule intent for `always`, `once`, `daily`, or `weekly`
+
+It emits a policy plan and can now apply the private CyberSecure simple-app-block API used by the live UniFi UI.
+It emits `simple_app_block_payloads` matching the live CyberSecure UI object model:
+
+- `type: DEVICE`
+- `target_type: APP_ID` or `APP_CATEGORY`
+- `app_ids` or `app_category_ids`
+- `client_macs`
+- `schedule.mode`, `date`, `date_start`, `date_end`, `time_range_start`, `time_range_end`, `repeat_on_days`, `time_all_day`
+
+The live UniFi frontend bundle confirms the private CRUD path:
+
+- `POST /proxy/network/v2/api/site/{site_ref}/trafficrules`
+- `PUT /proxy/network/v2/api/site/{site_ref}/trafficrules/{_id}`
+- `DELETE /proxy/network/v2/api/site/{site_ref}/trafficrules/{_id}`
+
+The live UI enum exposes separate target types for apps and categories, so when both `--app` and `--category` are supplied the helper emits or applies two rules instead of fabricating a combined target type.
+
 The integration API uses:
 
 - Base path: `https://<console>/proxy/network/integration`

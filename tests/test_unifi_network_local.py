@@ -241,6 +241,257 @@ class NamedQueryTests(unittest.TestCase):
 
         self.assertEqual(path, "/proxy/network/integration/v1/sites/site-1/acl-rules")
 
+
+class AppBlockTests(unittest.TestCase):
+    def test_resolve_client_prefers_exact_match(self) -> None:
+        module = load_module("app_block_test_client", "app_block.py")
+
+        client = module.resolve_client(
+            "AA:BB:CC:DD:EE:FF",
+            [
+                {"id": "1", "name": "Office MacBook", "mac": "AA:BB:CC:DD:EE:FF"},
+                {"id": "2", "name": "Office TV", "mac": "11:22:33:44:55:66"},
+            ],
+        )
+
+        self.assertEqual(client["id"], "1")
+
+    def test_resolve_apps_supports_substring_matching(self) -> None:
+        module = load_module("app_block_test_apps", "app_block.py")
+
+        apps = module.resolve_apps(
+            ["zoom", "teams"],
+            [
+                {"id": "app-1", "name": "Zoom"},
+                {"id": "app-2", "name": "Microsoft Teams"},
+            ],
+        )
+
+        self.assertEqual([item["id"] for item in apps], ["app-1", "app-2"])
+
+    def test_build_schedule_for_weekly_requires_days(self) -> None:
+        module = load_module("app_block_test_schedule_error", "app_block.py")
+        args = SimpleNamespace(
+            schedule_mode="weekly",
+            start=None,
+            end=None,
+            start_time="08:00",
+            end_time="17:00",
+            days=None,
+            all_day=False,
+        )
+
+        with self.assertRaises(SystemExit) as exc:
+            module.build_schedule(args)
+
+        self.assertEqual(str(exc.exception), "--days is required for --schedule-mode weekly")
+
+    def test_build_schedule_for_custom_maps_bundle_fields(self) -> None:
+        module = load_module("app_block_test_schedule_custom", "app_block.py")
+        args = SimpleNamespace(
+            schedule_mode="custom",
+            start="2026-03-09T20:00",
+            end="2026-03-12T22:00",
+            start_time="20:00",
+            end_time="22:00",
+            days="mon,wed,fri",
+            all_day=False,
+        )
+
+        schedule = module.build_schedule(args)
+
+        self.assertEqual(
+            schedule,
+            {
+                "mode": "CUSTOM",
+                "date_start": "2026-03-09",
+                "date_end": "2026-03-12",
+                "repeat_on_days": [1, 3, 5],
+                "time_range_start": "20:00",
+                "time_range_end": "22:00",
+            },
+        )
+
+    def test_build_plan_resolves_client_apps_and_schedule(self) -> None:
+        module = load_module("app_block_test_plan", "app_block.py")
+        args = SimpleNamespace(
+            site_id="site-1",
+            site_ref=None,
+            insecure=True,
+            client="macbook",
+            apps=["zoom", "teams"],
+            categories=["streaming"],
+            schedule_mode="daily",
+            start=None,
+            end=None,
+            start_time="20:00",
+            end_time="22:00",
+            days=None,
+            all_day=False,
+            policy_name=None,
+        )
+
+        def fake_query(query: str, **_: object) -> object:
+            if query == "clients":
+                return {
+                    "data": [
+                        {
+                            "id": "client-1",
+                            "name": "MacBook Pro",
+                            "hostname": "macbook-pro",
+                            "mac": "AA:BB:CC:DD:EE:FF",
+                            "ip": "192.168.1.25",
+                        }
+                    ]
+                }
+            if query == "dpi-applications":
+                return {
+                    "data": [
+                        {"id": "app-1", "name": "Zoom"},
+                        {"id": "app-2", "name": "Microsoft Teams"},
+                    ]
+                }
+            if query == "dpi-categories":
+                return {
+                    "data": [
+                        {"id": "3", "name": "Streaming Media"},
+                        {"id": "4", "name": "Peer-to-Peer"},
+                    ]
+                }
+            raise AssertionError(f"unexpected query: {query}")
+
+        with mock.patch.object(module, "run_named_query", side_effect=fake_query):
+            plan = module.build_plan(args)
+
+        self.assertEqual(plan["resolved_client"]["id"], "client-1")
+        self.assertEqual(
+            [item["id"] for item in plan["resolved_applications"]],
+            ["app-1", "app-2"],
+        )
+        self.assertEqual(
+            [item["id"] for item in plan["resolved_categories"]],
+            ["3"],
+        )
+        self.assertEqual(len(plan["simple_app_block_payloads"]), 2)
+        self.assertEqual(
+            plan["simple_app_block_payloads"][0]["target_type"],
+            "APP_ID",
+        )
+        self.assertEqual(
+            plan["simple_app_block_payloads"][0]["app_ids"],
+            ["app-1", "app-2"],
+        )
+        self.assertEqual(
+            plan["simple_app_block_payloads"][1]["app_category_ids"],
+            ["3"],
+        )
+        self.assertEqual(
+            plan["simple_app_block_payloads"][0]["client_macs"],
+            ["AA:BB:CC:DD:EE:FF"],
+        )
+        self.assertEqual(
+            plan["simple_app_block_payloads"][0]["schedule"]["mode"],
+            "EVERY_DAY",
+        )
+        self.assertEqual(
+            plan["legacy_private_api_payload_candidate"]["service"]["firewall"]["name"]["DPI_LOCAL"]["rule"]["1"]["application"],
+            "Zoom",
+        )
+        self.assertEqual(
+            plan["legacy_private_api_payload_candidate"]["service"]["firewall"]["name"]["DPI_LOCAL"]["rule"]["3"]["application"]["category"],
+            "3",
+        )
+        self.assertEqual(plan["schedule"]["mode"], "EVERY_DAY")
+        self.assertEqual(plan["schedule"]["time_range_start"], "20:00")
+        self.assertEqual(plan["schedule"]["time_range_end"], "22:00")
+
+    def test_apply_block_posts_to_private_trafficrules_endpoint(self) -> None:
+        module = load_module("app_block_test_apply", "app_block.py")
+        args = SimpleNamespace(
+            site_id=None,
+            site_ref="default",
+            insecure=True,
+            client="macbook",
+            apps=["zoom"],
+            categories=[],
+            schedule_mode="always",
+            start=None,
+            end=None,
+            start_time=None,
+            end_time=None,
+            days=None,
+            all_day=False,
+            policy_name="Block Zoom for MacBook Pro",
+            rule_id=None,
+        )
+
+        def fake_query(query: str, **_: object) -> object:
+            if query == "clients":
+                return {"data": [{"id": "client-1", "name": "MacBook Pro", "mac": "AA:BB:CC:DD:EE:FF"}]}
+            if query == "dpi-applications":
+                return {"data": [{"id": 39, "name": "Zoom"}]}
+            if query == "dpi-categories":
+                return {"data": []}
+            raise AssertionError(f"unexpected query: {query}")
+
+        with mock.patch.object(module, "run_named_query", side_effect=fake_query):
+            with mock.patch.object(module, "run_unifi_request", return_value={"_id": "rule-1"}) as request_mock:
+                stdout = io.StringIO()
+                with contextlib.redirect_stdout(stdout):
+                    exit_code = module.command_apply_block(args)
+
+        self.assertEqual(exit_code, 0)
+        request_mock.assert_called_once()
+        self.assertEqual(
+            request_mock.call_args.args[:2],
+            ("POST", "/proxy/network/v2/api/site/default/trafficrules"),
+        )
+        self.assertEqual(
+            request_mock.call_args.kwargs["body"]["target_type"],
+            "APP_ID",
+        )
+        self.assertIn('"site_ref": "default"', stdout.getvalue())
+
+    def test_build_simple_app_block_payload_category_only(self) -> None:
+        module = load_module("app_block_test_simple_category", "app_block.py")
+
+        payload = module.build_simple_app_block_payload(
+            client={"mac": "72:79:0b:7b:ed:25"},
+            schedule={"mode": "ALWAYS"},
+            policy_name="Block Streaming",
+            target_type="APP_CATEGORY",
+            ids=[3],
+        )
+
+        self.assertEqual(payload["target_type"], "APP_CATEGORY")
+        self.assertEqual(payload["app_ids"], [])
+        self.assertEqual(payload["app_category_ids"], [3])
+        self.assertEqual(payload["client_macs"], ["72:79:0b:7b:ed:25"])
+
+    def test_build_plan_requires_app_or_category(self) -> None:
+        module = load_module("app_block_test_requires_target", "app_block.py")
+        args = SimpleNamespace(
+            site_id="site-1",
+            site_ref=None,
+            insecure=True,
+            client="macbook",
+            apps=[],
+            categories=[],
+            schedule_mode="always",
+            start=None,
+            end=None,
+            start_time=None,
+            end_time=None,
+            days=None,
+            all_day=False,
+            policy_name=None,
+        )
+
+        with self.assertRaises(SystemExit) as exc:
+            module.build_plan(args)
+
+        self.assertEqual(str(exc.exception), "at least one --app or --category is required")
+
     def test_resolve_path_for_hotspot_vouchers(self) -> None:
         module = load_module("named_query_test_vouchers", "named_query.py")
         args = SimpleNamespace(query="hotspot-vouchers", site_id="site-1")
