@@ -235,10 +235,12 @@ final class SettingsViewModel: ObservableObject {
         let normalizedLokiURL = UniFiAPIClient.normalizeBaseURL(grafanaLokiURL)
         guard !normalizedLokiURL.isEmpty else {
             lokiConnectionTestResult = "Failed: Loki Base URL is invalid."
+            debugLog("Loki test skipped: invalid Loki base URL", category: "Logs")
             return
         }
         guard let url = URL(string: "\(normalizedLokiURL)/loki/api/v1/labels") else {
             lokiConnectionTestResult = "Failed: Unable to build Loki labels URL."
+            debugLog("Loki test failed: unable to build labels URL from base=\(normalizedLokiURL)", category: "Logs")
             return
         }
 
@@ -253,23 +255,45 @@ final class SettingsViewModel: ObservableObject {
 
         let session = URLSessionFactory.makeSession(allowSelfSigned: allowSelfSignedCerts)
         let startedAt = Date()
+        debugLog(
+            "Loki test started (url=\(url.absoluteString), auth=\(token.isEmpty ? "none" : "bearer"), allowSelfSigned=\(allowSelfSignedCerts))",
+            category: "Logs"
+        )
         do {
             let (data, response) = try await session.data(for: request)
-            if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-                let body = String(data: data, encoding: .utf8) ?? ""
-                throw LLMError.httpError(http.statusCode, body)
+            let elapsedMS = Int(Date().timeIntervalSince(startedAt) * 1000)
+            if let http = response as? HTTPURLResponse {
+                let contentType = http.value(forHTTPHeaderField: "Content-Type") ?? "unknown"
+                debugLog("Loki test HTTP \(http.statusCode) in \(elapsedMS)ms (contentType=\(contentType), bytes=\(data.count))", category: "Logs")
+                if !(200..<300).contains(http.statusCode) {
+                    let body = String(data: data, encoding: .utf8) ?? ""
+                    throw LLMError.httpError(http.statusCode, body)
+                }
+            } else {
+                debugLog("Loki test received non-HTTP response in \(elapsedMS)ms", category: "Logs")
             }
             guard let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let labels = payload["data"] as? [String]
             else {
+                let preview = String(data: data.prefix(300), encoding: .utf8)?
+                    .replacingOccurrences(of: "\n", with: " ")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    ?? "<non-utf8 body>"
+                debugLog("Loki test parse failed: payloadPreview=\(preview)", category: "Logs")
                 throw LLMError.invalidResponse("Unexpected Loki labels response format.")
             }
-            let elapsedMS = Int(Date().timeIntervalSince(startedAt) * 1000)
             lokiConnectionTestResult = "Connected! Loki reachable in \(elapsedMS)ms (\(labels.count) labels)."
+            debugLog("Loki test succeeded (labels=\(labels.count), elapsed=\(elapsedMS)ms)", category: "Logs")
         } catch let error as LLMError {
             lokiConnectionTestResult = "Failed: \(error.localizedDescription)"
+            debugLog("Loki test failed: \(error.localizedDescription)", category: "Logs")
         } catch {
             lokiConnectionTestResult = "Failed: \(error.localizedDescription)"
+            let nsError = error as NSError
+            debugLog(
+                "Loki test failed domain=\(nsError.domain) code=\(nsError.code) description=\(error.localizedDescription)",
+                category: "Logs"
+            )
         }
     }
 
