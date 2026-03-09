@@ -37,7 +37,27 @@ final class UniFiAPIClient {
         } else if !value.contains("://"), !value.isEmpty {
             value = "https://\(value)"
         }
+        guard let components = URLComponents(string: value),
+              let host = components.host,
+              !host.isEmpty
+        else {
+            return value
+        }
+        if isInvalidIPv4Address(host) {
+            return ""
+        }
         return value
+    }
+
+    private static func isInvalidIPv4Address(_ host: String) -> Bool {
+        let parts = host.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4 else { return false }
+        for part in parts {
+            guard !part.isEmpty, part.allSatisfy(\.isNumber), let value = Int(part), value >= 0, value <= 255 else {
+                return true
+            }
+        }
+        return false
     }
 
     func get(path: String, queryItems: [URLQueryItem] = []) async throws -> Data {

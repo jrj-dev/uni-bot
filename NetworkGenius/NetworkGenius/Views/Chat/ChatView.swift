@@ -97,6 +97,14 @@ struct ChatView: View {
                     speechService.ttsProvider = .local
                 }
                 speechService.openAICloudVoice = UserDefaults.standard.string(forKey: "openAICloudVoice") ?? "alloy"
+                // Rebuild clients/tool executor with latest Settings values (Loki URL, console URL, model config, etc).
+                viewModel.configure(appState: appState, networkMonitor: networkMonitor, modelContext: modelContext)
+                Task {
+                    await networkMonitor.probeConsole(
+                        baseURL: appState.consoleURL,
+                        allowSelfSigned: appState.allowSelfSignedCerts
+                    )
+                }
             }) {
                 SettingsView()
             }

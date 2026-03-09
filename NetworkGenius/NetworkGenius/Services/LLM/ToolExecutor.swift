@@ -166,7 +166,17 @@ final class ToolExecutor {
         } catch {
             let elapsedMS = Int(Date().timeIntervalSince(startedAt) * 1000)
             debugLog("Tool '\(toolCall.name)' failed in \(elapsedMS)ms: \(error.localizedDescription)", category: "Tools")
-            return "Error executing \(toolCall.name): \(error.localizedDescription)"
+            if let llmError = error as? LLMError,
+               case let .httpError(statusCode, _) = llmError
+            {
+                if statusCode == 401 || statusCode == 403 {
+                    return "AUTH_ERROR: \(toolCall.name) was denied by the remote API (HTTP \(statusCode)). Check API key or permissions."
+                }
+                if statusCode == 429 {
+                    return "THROTTLED: \(toolCall.name) hit rate limits (HTTP 429). Retry with a smaller query or shortly later."
+                }
+            }
+            return "TOOL_ERROR: \(toolCall.name) failed: \(error.localizedDescription)"
         }
     }
 
@@ -535,7 +545,7 @@ private struct GrafanaLokiService {
 
         if entries.isEmpty {
             debugLog("Loki returned no log lines for query=\(query)", category: "Logs")
-            return "\(description): no log lines returned for query '\(query)'."
+            return "NO_DATA: \(description): no log lines returned for query '\(query)'."
         }
 
         let selected = entries.prefix(limit)
