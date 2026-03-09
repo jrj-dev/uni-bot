@@ -32,6 +32,8 @@ final class SettingsViewModel: ObservableObject {
 
     @Published var connectionTestResult: String?
     @Published var isTesting = false
+    @Published var lokiConnectionTestResult: String?
+    @Published var isTestingLokiConnection = false
     @Published var llmKeyTestResult: String?
     @Published var isTestingLLMKey = false
     @Published var lmStudioModels: [String] = []
@@ -222,6 +224,52 @@ final class SettingsViewModel: ObservableObject {
             llmKeyTestResult = "Failed: \(error.localizedDescription)"
         } catch {
             llmKeyTestResult = "Failed: \(friendlyLMStudioError(error))"
+        }
+    }
+
+    func testLokiConnection() async {
+        isTestingLokiConnection = true
+        lokiConnectionTestResult = nil
+        defer { isTestingLokiConnection = false }
+
+        let normalizedLokiURL = UniFiAPIClient.normalizeBaseURL(grafanaLokiURL)
+        guard !normalizedLokiURL.isEmpty else {
+            lokiConnectionTestResult = "Failed: Loki Base URL is invalid."
+            return
+        }
+        guard let url = URL(string: "\(normalizedLokiURL)/loki/api/v1/labels") else {
+            lokiConnectionTestResult = "Failed: Unable to build Loki labels URL."
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        let token = normalizedKey(grafanaLokiAPIKey)
+        if !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        request.timeoutInterval = 20
+
+        let session = URLSessionFactory.makeSession(allowSelfSigned: allowSelfSignedCerts)
+        let startedAt = Date()
+        do {
+            let (data, response) = try await session.data(for: request)
+            if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                let body = String(data: data, encoding: .utf8) ?? ""
+                throw LLMError.httpError(http.statusCode, body)
+            }
+            guard let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let labels = payload["data"] as? [String]
+            else {
+                throw LLMError.invalidResponse("Unexpected Loki labels response format.")
+            }
+            let elapsedMS = Int(Date().timeIntervalSince(startedAt) * 1000)
+            lokiConnectionTestResult = "Connected! Loki reachable in \(elapsedMS)ms (\(labels.count) labels)."
+        } catch let error as LLMError {
+            lokiConnectionTestResult = "Failed: \(error.localizedDescription)"
+        } catch {
+            lokiConnectionTestResult = "Failed: \(error.localizedDescription)"
         }
     }
 

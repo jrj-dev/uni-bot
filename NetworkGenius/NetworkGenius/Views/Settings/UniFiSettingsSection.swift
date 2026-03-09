@@ -52,6 +52,30 @@ struct UniFiSettingsSection: View {
 
             SecureField("Loki API Key (optional)", text: $viewModel.grafanaLokiAPIKey)
                 .textContentType(.password)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Button {
+                    Task { await viewModel.testLokiConnection() }
+                } label: {
+                    HStack {
+                        if viewModel.isTestingLokiConnection {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                        Text("Test Loki Connection")
+                    }
+                }
+                .disabled(
+                    UniFiAPIClient.normalizeBaseURL(viewModel.grafanaLokiURL).isEmpty
+                        || viewModel.isTestingLokiConnection
+                )
+
+                if let result = viewModel.lokiConnectionTestResult {
+                    Text(result)
+                        .font(.caption)
+                        .foregroundStyle(result.hasPrefix("Connected") ? .green : .red)
+                }
+            }
         }
     }
 }
