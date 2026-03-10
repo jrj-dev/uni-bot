@@ -102,6 +102,22 @@ final class ToolExecutor {
                     queryService: queryService,
                     query: toolCall.arguments["query"]
                 )
+            case "resolve_client_for_app_block":
+                output = try await appBlockService.resolveClientForAppBlock(
+                    queryService: queryService,
+                    query: toolCall.arguments["query"],
+                    siteRef: toolCall.arguments["site_ref"]
+                )
+            case "resolve_dpi_application":
+                output = try await appBlockService.resolveDPIApplication(
+                    queryService: queryService,
+                    query: toolCall.arguments["query"]
+                )
+            case "resolve_dpi_category":
+                output = try await appBlockService.resolveDPICategory(
+                    queryService: queryService,
+                    query: toolCall.arguments["query"]
+                )
             case "list_dpi_applications":
                 output = try await appBlockService.listDPIApplications(
                     queryService: queryService,
@@ -133,6 +149,12 @@ final class ToolExecutor {
                     clientSelector: toolCall.arguments["client"],
                     appsCSV: toolCall.arguments["apps"],
                     categoriesCSV: toolCall.arguments["categories"],
+                    siteRef: toolCall.arguments["site_ref"]
+                )
+            case "list_client_app_block":
+                output = try await appBlockService.listClientAppBlock(
+                    queryService: queryService,
+                    clientSelector: toolCall.arguments["client"],
                     siteRef: toolCall.arguments["site_ref"]
                 )
             case "ssh_collect_unifi_logs":
@@ -900,6 +922,7 @@ private struct UniFiAppBlockService {
     private let apiClient: UniFiAPIClient
     private let allowedClientSelectors: [String]
     private let approvals = AppBlockApprovalStore()
+    private let dpiCache = DPICatalogCache()
 
     init(apiClient: UniFiAPIClient, allowlistCSV: String) {
         self.apiClient = apiClient
@@ -918,7 +941,7 @@ private struct UniFiAppBlockService {
         search rawSearch: String?,
         limit rawLimit: Int?
     ) async throws -> String {
-        let items = try await queryService.queryItems("dpi-applications")
+        let items = try await loadDPIApplications(queryService: queryService)
         return formatDPIList(
             items: items,
             search: rawSearch,
@@ -927,12 +950,103 @@ private struct UniFiAppBlockService {
         )
     }
 
+    func resolveClientForAppBlock(
+        queryService: UniFiQueryService,
+        query rawQuery: String?,
+        siteRef rawSiteRef: String?
+    ) async throws -> String {
+        let query = (rawQuery ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            return "Error: resolve_client_for_app_block requires 'query'."
+        }
+        let siteRef = normalizedSiteRef(rawSiteRef)
+        let clients = try await resolveClientsForAppBlock(queryService: queryService, siteRef: siteRef)
+        guard let match = bestClientMatch(query, in: clients) else {
+            debugLog("resolve_client_for_app_block no match (query=\(query), site_ref=\(siteRef), candidates=\(clients.count))", category: "Tools")
+            return "No client matched '\(query)'."
+        }
+        let client = match.client
+        let name = clientDisplayName(client)
+        let id = normalize(client["id"] as? String ?? client["_id"] as? String ?? client["clientId"] as? String)
+        let mac = normalize(client["mac"] as? String ?? client["macAddress"] as? String)
+        let ip = normalize(client["ip"] as? String ?? client["ipAddress"] as? String ?? client["last_ip"] as? String)
+        let allowed = isClientAllowed(client)
+        debugLog(
+            "resolve_client_for_app_block matched (query=\(query), site_ref=\(siteRef), score=\(match.score), result=\(previewJSON(client)))",
+            category: "Tools"
+        )
+        return """
+        Resolved client:
+        - name: \(name)
+        - id: \(id.isEmpty ? "unknown" : id)
+        - ip: \(ip.isEmpty ? "unknown" : ip)
+        - mac: \(mac.isEmpty ? "unknown" : mac)
+        - allowlisted_for_app_block: \(allowed ? "yes" : "no")
+        - score: \(match.score)
+        - site_ref: \(siteRef)
+        """
+    }
+
+    func resolveDPIApplication(
+        queryService: UniFiQueryService,
+        query rawQuery: String?
+    ) async throws -> String {
+        let query = (rawQuery ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            return "Error: resolve_dpi_application requires 'query'."
+        }
+        let apps = try await loadDPIApplications(queryService: queryService)
+        guard let best = bestNamedMatch(query, in: apps) else {
+            debugLog("resolve_dpi_application no match (query=\(query), candidates=\(apps.count))", category: "Tools")
+            return "No DPI application matched '\(query)'."
+        }
+        let id = namedIdentifier(best.row) ?? "unknown"
+        let name = stringValue(best.row["name"]) ?? "unknown"
+        debugLog(
+            "resolve_dpi_application matched (query=\(query), score=\(best.score), result=\(previewJSON(best.row)))",
+            category: "Tools"
+        )
+        return """
+        Resolved DPI application:
+        - name: \(name)
+        - id: \(id)
+        - score: \(best.score)
+        """
+    }
+
+    func resolveDPICategory(
+        queryService: UniFiQueryService,
+        query rawQuery: String?
+    ) async throws -> String {
+        let query = (rawQuery ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            return "Error: resolve_dpi_category requires 'query'."
+        }
+        let categories = try await loadDPICategories(queryService: queryService)
+        guard let best = bestNamedMatch(query, in: categories) else {
+            debugLog("resolve_dpi_category no match (query=\(query), candidates=\(categories.count))", category: "Tools")
+            return "No DPI category matched '\(query)'."
+        }
+        let id = namedIdentifier(best.row) ?? "unknown"
+        let name = stringValue(best.row["name"]) ?? "unknown"
+        debugLog(
+            "resolve_dpi_category matched (query=\(query), score=\(best.score), result=\(previewJSON(best.row)))",
+            category: "Tools"
+        )
+        return """
+        Resolved DPI category:
+        - name: \(name)
+        - id: \(id)
+        - score: \(best.score)
+        """
+    }
+
     func listDPICategories(
         queryService: UniFiQueryService,
         search rawSearch: String?,
         limit rawLimit: Int?
     ) async throws -> String {
-        let items = try await queryService.queryItems("dpi-categories")
+        let items = try await loadDPICategories(queryService: queryService)
         return formatDPIList(
             items: items,
             search: rawSearch,
@@ -962,14 +1076,11 @@ private struct UniFiAppBlockService {
         guard !appSelectors.isEmpty || !categorySelectors.isEmpty else {
             return "Error: Provide at least one app or category selector."
         }
-        let siteRef = {
-            let candidate = (rawSiteRef ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            return candidate.isEmpty ? "default" : candidate
-        }()
+        let siteRef = normalizedSiteRef(rawSiteRef)
 
         let clients = try await resolveClientsForAppBlock(queryService: queryService, siteRef: siteRef)
-        let applications = try await queryService.queryItems("dpi-applications")
-        let categories = try await queryService.queryItems("dpi-categories")
+        let applications = try await loadDPIApplications(queryService: queryService)
+        let categories = try await loadDPICategories(queryService: queryService)
         let client = try resolveClient(clientSelector, in: clients)
         guard isClientAllowed(client) else {
             let display = clientDisplayName(client)
@@ -984,7 +1095,10 @@ private struct UniFiAppBlockService {
             : policyName
 
         var payloads: [[String: Any]] = []
-        let clientMac = client["mac"] as? String ?? client["macAddress"] as? String ?? ""
+        let clientMac = resolvedClientMAC(client, allClients: clients)
+        guard !clientMac.isEmpty else {
+            return "Error: Could not resolve client MAC for '\(clientDisplayName(client))'. Try selecting the client by MAC from list_clients(include_inactive=true)."
+        }
         if !resolvedApps.isEmpty {
             payloads.append([
                 "name": effectivePolicyName,
@@ -992,7 +1106,7 @@ private struct UniFiAppBlockService {
                 "target_type": "APP_ID",
                 "client_macs": [clientMac],
                 "network_ids": [],
-                "source_devices": [],
+                "source_devices": [client],
                 "source_networks": [],
                 "schedule": ["mode": "ALWAYS"],
                 "app_ids": resolvedApps.compactMap { $0["id"] },
@@ -1007,7 +1121,7 @@ private struct UniFiAppBlockService {
                 "target_type": "APP_CATEGORY",
                 "client_macs": [clientMac],
                 "network_ids": [],
-                "source_devices": [],
+                "source_devices": [client],
                 "source_networks": [],
                 "schedule": ["mode": "ALWAYS"],
                 "app_ids": [],
@@ -1017,6 +1131,11 @@ private struct UniFiAppBlockService {
         if payloads.isEmpty {
             return "Error: No app/category IDs could be resolved from provided selectors."
         }
+
+        debugLog(
+            "plan_client_app_block resolved (client=\(clientDisplayName(client)), site_ref=\(siteRef), app_selectors=\(appSelectors.joined(separator: ",")), category_selectors=\(categorySelectors.joined(separator: ",")), payloads=\(previewJSON(payloads)))",
+            category: "Tools"
+        )
 
         let token = await approvals.issue(
             siteRef: siteRef,
@@ -1047,44 +1166,51 @@ private struct UniFiAppBlockService {
             return "Error: approve_token is invalid or expired. Run plan_client_app_block again."
         }
 
-        let path = "/proxy/network/v2/api/site/\(plan.siteRef)/trafficrules"
-        var existingRules = try await fetchTrafficRules(siteRef: plan.siteRef)
+        // UniFi persists simple app blocks by replacing the full collection, not by
+        // posting individual traffic rules, so we fetch, merge, then POST the whole list.
+        let path = "/proxy/network/v2/api/site/\(plan.siteRef)/firewall-app-blocks"
+        var existingRules = try await fetchSimpleAppBlocks(siteRef: plan.siteRef)
         var createdCount = 0
         var updatedCount = 0
         var resultLines: [String] = []
-        for payload in plan.payloads {
+        var nextRules = existingRules
+        for rawPayload in plan.payloads {
+            let payload = materializeSimpleAppBlockPayload(rawPayload)
+            debugLog(
+                "apply_client_app_block materialized payload (site_ref=\(plan.siteRef), payload=\(previewJSON(payload)))",
+                category: "Tools"
+            )
+            let targetClientMac = canonicalMAC(String(describing: (payload["client_macs"] as? [Any])?.first ?? "")) ?? ""
+            guard !targetClientMac.isEmpty else {
+                return "Error: App-block apply aborted because client_macs is missing or invalid for client '\(plan.clientName)'. Re-run plan_client_app_block and select the client by MAC."
+            }
+
             if let existing = findMatchingRule(for: payload, in: existingRules),
                let ruleID = trafficRuleID(existing)
             {
                 let merged = mergeRule(existing: existing, incoming: payload)
-                let response = try await apiClient.putJSON(path: "\(path)/\(ruleID)", body: merged)
                 updatedCount += 1
-                if let updatedRule = normalizeTrafficRule(response) {
-                    existingRules.removeAll { trafficRuleID($0) == ruleID }
-                    existingRules.append(updatedRule)
-                }
-                let jsonData = try JSONSerialization.data(withJSONObject: response, options: [.sortedKeys])
-                let snippet = String(data: jsonData, encoding: .utf8) ?? "{}"
-                resultLines.append("updated \(ruleID): \(String(snippet.prefix(220)))")
+                nextRules = nextRules.map { trafficRuleID($0) == ruleID ? merged : $0 }
+                resultLines.append("updated \(ruleID): \(String(previewJSON(merged).prefix(220)))")
                 continue
             }
 
-            let response = try await apiClient.postJSON(path: path, body: payload)
             createdCount += 1
-            if let createdRule = normalizeTrafficRule(response) {
-                existingRules.append(createdRule)
-            }
-            let jsonData = try JSONSerialization.data(withJSONObject: response, options: [.sortedKeys])
-            let snippet = String(data: jsonData, encoding: .utf8) ?? "{}"
-            resultLines.append("created: \(String(snippet.prefix(220)))")
+            nextRules.append(payload)
+            resultLines.append("created: \(String(previewJSON(payload).prefix(220)))")
         }
+        let response = try await writeSimpleAppBlocks(path: path, blocks: nextRules)
+        existingRules = try await fetchSimpleAppBlocks(siteRef: plan.siteRef)
+        let verifiedCount = plan.payloads.filter { findMatchingRule(for: materializeSimpleAppBlockPayload($0), in: existingRules) != nil }.count
         return """
         App-block apply completed:
         - client: \(plan.clientName)
         - site_ref: \(plan.siteRef)
         - rules_created: \(createdCount)
         - rules_updated: \(updatedCount)
+        - verified_rules: \(verifiedCount)/\(plan.payloads.count)
         - response_preview:
+        \(String(previewJSON(response).prefix(220)))
         \(resultLines.joined(separator: "\n"))
         """
     }
@@ -1100,10 +1226,7 @@ private struct UniFiAppBlockService {
         guard !clientSelector.isEmpty else {
             return "Error: remove_client_app_block requires 'client'."
         }
-        let siteRef = {
-            let candidate = (rawSiteRef ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            return candidate.isEmpty ? "default" : candidate
-        }()
+        let siteRef = normalizedSiteRef(rawSiteRef)
 
         let clients = try await resolveClientsForAppBlock(queryService: queryService, siteRef: siteRef)
         let client = try resolveClient(clientSelector, in: clients)
@@ -1118,15 +1241,17 @@ private struct UniFiAppBlockService {
 
         let appSelectors = parseCSV(rawApps)
         let categorySelectors = parseCSV(rawCategories)
-        let applications = appSelectors.isEmpty ? [] : try await queryService.queryItems("dpi-applications")
-        let categories = categorySelectors.isEmpty ? [] : try await queryService.queryItems("dpi-categories")
+        let applications = appSelectors.isEmpty ? [] : try await loadDPIApplications(queryService: queryService)
+        let categories = categorySelectors.isEmpty ? [] : try await loadDPICategories(queryService: queryService)
         let appIDs = Set(try resolveNamedSelectors(appSelectors, in: applications, kind: "application")
             .compactMap { normalize($0["id"]) })
         let categoryIDs = Set(try resolveNamedSelectors(categorySelectors, in: categories, kind: "category")
             .compactMap { normalize($0["id"]) })
 
-        var rules = try await fetchTrafficRules(siteRef: siteRef)
-        let path = "/proxy/network/v2/api/site/\(siteRef)/trafficrules"
+        // Deletions use the same collection-write flow as creation, so we edit the
+        // in-memory list and submit the full replacement set once.
+        var rules = try await fetchSimpleAppBlocks(siteRef: siteRef)
+        let path = "/proxy/network/v2/api/site/\(siteRef)/firewall-app-blocks"
         var deleted = 0
         var updated = 0
 
@@ -1136,7 +1261,7 @@ private struct UniFiAppBlockService {
             let targetType = normalize(rule["target_type"] ?? rule["targetType"])
 
             if appIDs.isEmpty, categoryIDs.isEmpty {
-                _ = try await apiClient.deleteJSON(path: "\(path)/\(ruleID)")
+                rules.removeAll { trafficRuleID($0) == ruleID }
                 deleted += 1
                 continue
             }
@@ -1146,7 +1271,7 @@ private struct UniFiAppBlockService {
                 let kept = arrayStrings(rule["app_ids"]).filter { !appIDs.contains(normalize($0)) }
                 next["app_ids"] = kept
                 if kept.isEmpty {
-                    _ = try await apiClient.deleteJSON(path: "\(path)/\(ruleID)")
+                    rules.removeAll { trafficRuleID($0) == ruleID }
                     deleted += 1
                     continue
                 }
@@ -1154,7 +1279,7 @@ private struct UniFiAppBlockService {
                 let kept = arrayStrings(rule["app_category_ids"]).filter { !categoryIDs.contains(normalize($0)) }
                 next["app_category_ids"] = kept
                 if kept.isEmpty {
-                    _ = try await apiClient.deleteJSON(path: "\(path)/\(ruleID)")
+                    rules.removeAll { trafficRuleID($0) == ruleID }
                     deleted += 1
                     continue
                 }
@@ -1162,9 +1287,12 @@ private struct UniFiAppBlockService {
                 continue
             }
 
-            _ = try await apiClient.putJSON(path: "\(path)/\(ruleID)", body: next)
+            let updatedRule = materializeSimpleAppBlockPayload(next)
+            rules = rules.map { trafficRuleID($0) == ruleID ? updatedRule : $0 }
             updated += 1
         }
+
+        _ = try await writeSimpleAppBlocks(path: path, blocks: rules)
 
         return """
         App-block removal completed:
@@ -1172,6 +1300,54 @@ private struct UniFiAppBlockService {
         - site_ref: \(siteRef)
         - rules_deleted: \(deleted)
         - rules_updated: \(updated)
+        """
+    }
+
+    func listClientAppBlock(
+        queryService: UniFiQueryService,
+        clientSelector rawClientSelector: String?,
+        siteRef rawSiteRef: String?
+    ) async throws -> String {
+        let clientSelector = (rawClientSelector ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clientSelector.isEmpty else {
+            return "Error: list_client_app_block requires 'client'."
+        }
+        let siteRef = normalizedSiteRef(rawSiteRef)
+        let clients = try await resolveClientsForAppBlock(queryService: queryService, siteRef: siteRef)
+        let client = try resolveClient(clientSelector, in: clients)
+        let clientMac = resolvedClientMAC(client, allClients: clients)
+        guard !clientMac.isEmpty else {
+            return "Error: Could not resolve client MAC for listing."
+        }
+
+        let applications = try await loadDPIApplications(queryService: queryService)
+        let categories = try await loadDPICategories(queryService: queryService)
+        let appNameByID = nameMapByID(applications)
+        let categoryNameByID = nameMapByID(categories)
+
+        let rules = try await fetchSimpleAppBlocks(siteRef: siteRef)
+            .filter { isSimpleAppRule($0) && ruleTargetsClient($0, mac: clientMac) }
+
+        let lines = rules.enumerated().map { index, rule in
+            let ruleID = trafficRuleID(rule) ?? "unknown"
+            let targetType = canonicalTargetType(rule)
+            let action = String(describing: rule["action"] ?? "BLOCK")
+            let schedule = scheduleMode(rule)
+            let appIDs = uniqueStrings(arrayStrings(rule["app_ids"]) + arrayStrings(rule["appIds"]))
+            let categoryIDs = uniqueStrings(arrayStrings(rule["app_category_ids"]) + arrayStrings(rule["appCategoryIds"]))
+            let appSummary = summarizeResolvedIDs(appIDs, nameMap: appNameByID)
+            let categorySummary = summarizeResolvedIDs(categoryIDs, nameMap: categoryNameByID)
+            let targetLabel = targetType == "app_category" ? "APP_CATEGORY" : "APP"
+            return "\(index + 1). id=\(ruleID), target=\(targetLabel), action=\(action), schedule=\(schedule), apps=\(appSummary), categories=\(categorySummary)"
+        }
+
+        return """
+        Client app-block rules:
+        - client: \(clientDisplayName(client))
+        - mac: \(clientMac)
+        - site_ref: \(siteRef)
+        - rule_count: \(rules.count)
+        \(lines.isEmpty ? "- rules: none" : lines.joined(separator: "\n"))
         """
     }
 
@@ -1200,23 +1376,59 @@ private struct UniFiAppBlockService {
         """
     }
 
-    private func resolveClientsForAppBlock(queryService: UniFiQueryService, siteRef: String) async throws -> [[String: Any]] {
-        var bestRows: [[String: Any]] = []
-        if let rows = try? await queryService.queryItems("clients-all"), rows.count > bestRows.count {
-            bestRows = rows
+    private func loadDPIApplications(queryService: UniFiQueryService) async throws -> [[String: Any]] {
+        if let cached = await dpiCache.applicationsIfFresh() {
+            debugLog("loadDPIApplications cache hit (\(cached.count) items)", category: "Tools")
+            return cached
         }
-        if let rows = try? await queryService.queryItems("clients"), rows.count > bestRows.count {
-            bestRows = rows
-        }
+        let items = try await queryService.queryItems("dpi-applications")
+        debugLog("loadDPIApplications fetched (\(items.count) items)", category: "Tools")
+        await dpiCache.storeApplications(items)
+        return items
+    }
 
+    private func loadDPICategories(queryService: UniFiQueryService) async throws -> [[String: Any]] {
+        if let cached = await dpiCache.categoriesIfFresh() {
+            debugLog("loadDPICategories cache hit (\(cached.count) items)", category: "Tools")
+            return cached
+        }
+        let items = try await queryService.queryItems("dpi-categories")
+        debugLog("loadDPICategories fetched (\(items.count) items)", category: "Tools")
+        await dpiCache.storeCategories(items)
+        return items
+    }
+
+    private func resolveClientsForAppBlock(queryService: UniFiQueryService, siteRef: String) async throws -> [[String: Any]] {
+        var sources: [[[String: Any]]] = []
+        if let rows = try? await queryService.queryItems("clients-all") {
+            debugLog("resolveClientsForAppBlock source clients-all (\(rows.count) rows)", category: "Tools")
+            sources.append(rows)
+        }
+        if let rows = try? await queryService.queryItems("clients") {
+            debugLog("resolveClientsForAppBlock source clients (\(rows.count) rows)", category: "Tools")
+            sources.append(rows)
+        }
         let legacyPath = "/proxy/network/api/s/\(siteRef)/stat/alluser"
         if let payload = try? await apiClient.getJSON(path: legacyPath) {
             let rows = rowsFromPayload(payload)
-            if rows.count > bestRows.count {
-                bestRows = rows
+            debugLog("resolveClientsForAppBlock source legacy alluser (\(rows.count) rows)", category: "Tools")
+            sources.append(rows)
+        }
+
+        var mergedByKey: [String: [String: Any]] = [:]
+        for rows in sources {
+            for row in rows {
+                let key = clientMergeKey(row)
+                if let existing = mergedByKey[key] {
+                    mergedByKey[key] = mergeClientRow(existing: existing, incoming: row)
+                } else {
+                    mergedByKey[key] = row
+                }
             }
         }
-        return bestRows
+        let merged = Array(mergedByKey.values)
+        debugLog("resolveClientsForAppBlock merged (\(merged.count) clients, site_ref=\(siteRef))", category: "Tools")
+        return merged
     }
 
     private func rowsFromPayload(_ payload: Any) -> [[String: Any]] {
@@ -1234,8 +1446,8 @@ private struct UniFiAppBlockService {
         return []
     }
 
-    private func fetchTrafficRules(siteRef: String) async throws -> [[String: Any]] {
-        let path = "/proxy/network/v2/api/site/\(siteRef)/trafficrules"
+    private func fetchSimpleAppBlocks(siteRef: String) async throws -> [[String: Any]] {
+        let path = "/proxy/network/v2/api/site/\(siteRef)/firewall-app-blocks"
         let payload = try await apiClient.getJSON(path: path)
         if let rows = payload as? [[String: Any]] {
             return rows
@@ -1264,25 +1476,25 @@ private struct UniFiAppBlockService {
 
     private func isSimpleAppRule(_ rule: [String: Any]) -> Bool {
         let type = normalize(rule["type"])
-        let targetType = normalize(rule["target_type"] ?? rule["targetType"])
+        let targetType = canonicalTargetType(rule)
         return type == "device" && (targetType == "app_id" || targetType == "app_category")
     }
 
     private func ruleTargetsClient(_ rule: [String: Any], mac: String) -> Bool {
-        let macs = Set(arrayStrings(rule["client_macs"]).map(normalize))
-        return macs.contains(mac)
+        let macs = Set(extractClientDevices(rule).map(normalize))
+        return macs.contains(normalize(mac))
     }
 
     private func findMatchingRule(for payload: [String: Any], in rules: [[String: Any]]) -> [String: Any]? {
-        let payloadType = normalize(payload["target_type"] ?? payload["targetType"])
-        let payloadMacs = Set(arrayStrings(payload["client_macs"]).map(normalize))
+        let payloadType = canonicalTargetType(payload)
+        let payloadMacs = Set(extractClientDevices(payload).map(normalize))
         let payloadSchedule = scheduleSignature(payload["schedule"])
         guard !payloadMacs.isEmpty else { return nil }
         return rules.first(where: { rule in
             guard isSimpleAppRule(rule) else { return false }
-            let ruleType = normalize(rule["target_type"] ?? rule["targetType"])
+            let ruleType = canonicalTargetType(rule)
             if ruleType != payloadType { return false }
-            let ruleMacs = Set(arrayStrings(rule["client_macs"]).map(normalize))
+            let ruleMacs = Set(extractClientDevices(rule).map(normalize))
             if ruleMacs != payloadMacs { return false }
             return scheduleSignature(rule["schedule"]) == payloadSchedule
         })
@@ -1296,17 +1508,143 @@ private struct UniFiAppBlockService {
             }
         }
 
-        let targetType = normalize(incoming["target_type"] ?? incoming["targetType"])
+        let targetType = canonicalTargetType(incoming)
         if targetType == "app_id" {
-            let ids = Set(arrayStrings(existing["app_ids"]) + arrayStrings(incoming["app_ids"]))
+            let ids = Set(
+                arrayStrings(existing["app_ids"])
+                    + arrayStrings(incoming["app_ids"])
+            )
             merged["app_ids"] = Array(ids).sorted()
             merged["app_category_ids"] = []
         } else if targetType == "app_category" {
-            let ids = Set(arrayStrings(existing["app_category_ids"]) + arrayStrings(incoming["app_category_ids"]))
+            let ids = Set(
+                arrayStrings(existing["app_category_ids"])
+                    + arrayStrings(incoming["app_category_ids"])
+            )
             merged["app_category_ids"] = Array(ids).sorted()
             merged["app_ids"] = []
         }
         return merged
+    }
+
+    private func materializeSimpleAppBlockPayload(_ raw: [String: Any]) -> [String: Any] {
+        // The app plan can carry richer local-only fields; this strips each rule down
+        // to the browser-style shape accepted by /firewall-app-blocks.
+        let candidateMACs = arrayStrings(raw["client_macs"]) + extractClientDevices(raw)
+        let macs = Array(Set(candidateMACs.compactMap(canonicalMAC))).sorted()
+        let targetType = canonicalTargetType(raw)
+        var payload: [String: Any] = [
+            "name": raw["name"] ?? "App Block",
+            "type": "DEVICE",
+            "client_macs": macs,
+            "network_ids": arrayStrings(raw["network_ids"]),
+            "target_type": targetType == "app_category" ? "APP_CATEGORY" : "APP_ID",
+            "schedule": raw["schedule"] ?? ["mode": "ALWAYS"],
+        ]
+
+        if targetType == "app_category" {
+            let categoryIDs = arrayStrings(raw["app_category_ids"])
+            let resolved = Array(Set(categoryIDs)).sorted()
+            payload["app_ids"] = []
+            payload["app_category_ids"] = resolved
+        } else {
+            let appIDs = arrayStrings(raw["app_ids"])
+            let resolved = Array(Set(appIDs)).sorted()
+            payload["app_ids"] = resolved
+            payload["app_category_ids"] = []
+        }
+
+        return payload
+    }
+
+    private func canonicalTargetType(_ rule: [String: Any]) -> String {
+        let explicit = normalize(rule["target_type"] ?? rule["targetType"])
+        if explicit.contains("category") {
+            return "app_category"
+        }
+        if explicit.contains("app") {
+            return "app_id"
+        }
+        let matchingTarget = normalize(rule["matchingTarget"] ?? rule["matching_target"])
+        if matchingTarget.contains("category") {
+            return "app_category"
+        }
+        return "app_id"
+    }
+
+    private func extractClientDevices(_ rule: [String: Any]) -> [String] {
+        let direct = arrayStrings(rule["client_macs"])
+        if !direct.isEmpty { return direct }
+        let ids = arrayStrings(rule["client_ids"])
+        if !ids.isEmpty { return ids }
+        if let sourceDevices = rule["source_devices"] as? [Any] {
+            let devices = sourceDevices.compactMap { item -> String? in
+                guard let dict = item as? [String: Any] else { return nil }
+                return (dict["mac"] as? String) ?? (dict["id"] as? String)
+            }
+            if !devices.isEmpty { return devices }
+        }
+        let source = rule["targetDevices"] ?? rule["target_devices"]
+        guard let targetDevices = source as? [Any] else { return [] }
+        var devices: [String] = []
+        for item in targetDevices {
+            if let value = item as? String, !value.isEmpty {
+                devices.append(value)
+                continue
+            }
+            if let dict = item as? [String: Any] {
+                let candidate = (dict["mac"] as? String)
+                    ?? (dict["id"] as? String)
+                    ?? (dict["device"] as? String)
+                if let candidate, !candidate.isEmpty {
+                    devices.append(candidate)
+                }
+            }
+        }
+        return devices
+    }
+
+    private func writeSimpleAppBlocks(path: String, blocks: [[String: Any]]) async throws -> Any {
+        // This endpoint expects the complete simple-app-block collection in one POST.
+        debugLog(
+            "SimpleAppBlocks POST payload: count=\(blocks.count), first=\(blocks.first.map(summarizeTrafficRulePayload) ?? "none")",
+            category: "UniFiAPI"
+        )
+        return try await apiClient.postJSON(path: path, body: blocks)
+    }
+
+    private func summarizeTrafficRulePayload(_ payload: [String: Any]) -> String {
+        let targetType = String(describing: payload["target_type"] ?? "nil")
+        let clientMACs = arrayStrings(payload["client_macs"]).joined(separator: ",")
+        let action = String(describing: payload["action"] ?? "nil")
+        let matchingTarget = String(describing: payload["matchingTarget"] ?? "nil")
+        let targetDeviceCount = (payload["targetDevices"] as? [Any])?.count ?? 0
+        let appCount = (payload["app_ids"] as? [Any])?.count ?? 0
+        let categoryCount = (payload["app_category_ids"] as? [Any])?.count ?? 0
+
+        let scheduleMode: String = {
+            guard let schedule = payload["schedule"] as? [String: Any] else { return "none" }
+            if let mode = schedule["mode"] {
+                return String(describing: mode)
+            }
+            if let timeAllDay = schedule["time_all_day"] {
+                return "time_all_day=\(timeAllDay)"
+            }
+            return "custom"
+        }()
+
+        return "action=\(action), matchingTarget=\(matchingTarget), target_type=\(targetType), client_macs=\(clientMACs), targetDevices.count=\(targetDeviceCount), app_ids.count=\(appCount), app_category_ids.count=\(categoryCount), schedule=\(scheduleMode)"
+    }
+
+    private func previewJSON(_ value: Any, limit: Int = 500) -> String {
+        guard JSONSerialization.isValidJSONObject(value),
+              let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]),
+              let text = String(data: data, encoding: .utf8)
+        else {
+            let fallback = String(describing: value)
+            return String(fallback.prefix(limit))
+        }
+        return String(text.prefix(limit))
     }
 
     private func arrayStrings(_ any: Any?) -> [String] {
@@ -1324,6 +1662,48 @@ private struct UniFiAppBlockService {
         return text
     }
 
+    private func scheduleMode(_ rule: [String: Any]) -> String {
+        guard let schedule = rule["schedule"] as? [String: Any] else { return "unknown" }
+        if let mode = schedule["mode"] as? String, !mode.isEmpty {
+            return mode
+        }
+        return "custom"
+    }
+
+    private func nameMapByID(_ rows: [[String: Any]]) -> [String: String] {
+        var out: [String: String] = [:]
+        for row in rows {
+            let id = normalize(row["id"])
+            let name = (row["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !id.isEmpty, !name.isEmpty else { continue }
+            out[id] = name
+        }
+        return out
+    }
+
+    private func uniqueStrings(_ values: [String]) -> [String] {
+        var seen: Set<String> = []
+        var out: [String] = []
+        for value in values {
+            let key = normalize(value)
+            if key.isEmpty || seen.contains(key) { continue }
+            seen.insert(key)
+            out.append(value)
+        }
+        return out
+    }
+
+    private func summarizeResolvedIDs(_ ids: [String], nameMap: [String: String]) -> String {
+        if ids.isEmpty { return "none" }
+        return ids.map { id in
+            let key = normalize(id)
+            if let name = nameMap[key], !name.isEmpty {
+                return "\(name) (\(id))"
+            }
+            return id
+        }.joined(separator: ", ")
+    }
+
     private func parseCSV(_ value: String?) -> [String] {
         (value ?? "")
             .split(separator: ",")
@@ -1331,21 +1711,14 @@ private struct UniFiAppBlockService {
             .filter { !$0.isEmpty }
     }
 
+    private func normalizedSiteRef(_ rawSiteRef: String?) -> String {
+        let candidate = (rawSiteRef ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return candidate.isEmpty ? "default" : candidate
+    }
+
     private func resolveClient(_ selector: String, in clients: [[String: Any]]) throws -> [String: Any] {
         try resolveSingle(selector, in: clients, kind: "client") { item in
-            [
-                item["id"] as? String,
-                item["name"] as? String,
-                item["displayName"] as? String,
-                item["clientName"] as? String,
-                item["hostname"] as? String,
-                item["hostName"] as? String,
-                item["dhcpHostname"] as? String,
-                item["mac"] as? String,
-                item["macAddress"] as? String,
-                item["ip"] as? String,
-                item["ipAddress"] as? String,
-            ].compactMap { $0 }
+            clientCandidateValues(item)
         }
     }
 
@@ -1353,10 +1726,23 @@ private struct UniFiAppBlockService {
         var output: [[String: Any]] = []
         var seen: Set<String> = []
         for selector in selectors {
-            let resolved = try resolveSingle(selector, in: rows, kind: kind) { item in
-                [item["id"] as? String, item["name"] as? String].compactMap { $0 }
+            let resolved: [String: Any]
+            do {
+                resolved = try resolveSingle(selector, in: rows, kind: kind) { item in
+                    namedCandidateValues(item)
+                }
+            } catch let error as LLMError {
+                if case .invalidResponse = error,
+                   (kind == "application" || kind == "category"),
+                   isNumericSelector(selector)
+                {
+                    // Allow direct numeric DPI ID selectors even if catalog name mapping is missing.
+                    resolved = ["id": selector.trimmingCharacters(in: .whitespacesAndNewlines), "name": "id:\(selector)"]
+                } else {
+                    throw error
+                }
             }
-            let key = normalize(resolved["id"] as? String ?? resolved["name"] as? String ?? UUID().uuidString)
+            let key = normalize(namedIdentifier(resolved) ?? UUID().uuidString)
             if !seen.contains(key) {
                 output.append(resolved)
                 seen.insert(key)
@@ -1385,20 +1771,91 @@ private struct UniFiAppBlockService {
         throw LLMError.invalidResponse("\(kind.capitalized) selector '\(selector)' did not match.")
     }
 
+    private func bestClientMatch(_ selector: String, in rows: [[String: Any]]) -> (client: [String: Any], score: Int)? {
+        bestMatch(selector, in: rows) { clientCandidateValues($0) }.map { ($0.row, $0.score) }
+    }
+
+    private func bestNamedMatch(_ selector: String, in rows: [[String: Any]]) -> (row: [String: Any], score: Int)? {
+        bestMatch(selector, in: rows, candidates: namedCandidateValues)
+    }
+
+    private func bestMatch(
+        _ selector: String,
+        in rows: [[String: Any]],
+        candidates: ([String: Any]) -> [String]
+    ) -> (row: [String: Any], score: Int)? {
+        let query = normalizeMatchText(selector)
+        guard !query.isEmpty else { return nil }
+
+        var bestRow: [String: Any]?
+        var bestScore = Int.min
+        for row in rows {
+            let values = candidates(row).map(normalizeMatchText).filter { !$0.isEmpty }
+            var localBest = Int.min
+            for value in values {
+                localBest = max(localBest, matchScore(query: query, candidate: value))
+            }
+            if localBest > bestScore {
+                bestScore = localBest
+                bestRow = row
+            }
+        }
+        guard let bestRow, bestScore >= 35 else { return nil }
+        return (bestRow, bestScore)
+    }
+
+    private func matchScore(query: String, candidate: String) -> Int {
+        if candidate == query { return 120 }
+        if candidate.hasPrefix(query) || query.hasPrefix(candidate) { return 95 }
+        if candidate.contains(query) { return 85 }
+        if query.contains(candidate), candidate.count >= 4 { return 70 }
+
+        let distance = editDistance(query, candidate)
+        if distance <= 1 { return 72 }
+        if distance <= 2 { return 62 }
+        if distance <= 3, min(query.count, candidate.count) >= 6 { return 48 }
+        return 0
+    }
+
+    private func normalizeMatchText(_ input: String) -> String {
+        var text = input.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if text.hasSuffix(".local") {
+            text = String(text.dropLast(6))
+        }
+        let allowed = CharacterSet.alphanumerics
+        let scalars = text.unicodeScalars.map { scalar in
+            allowed.contains(scalar) ? Character(scalar) : Character(" ")
+        }
+        return String(scalars)
+            .split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+    }
+
+    private func editDistance(_ lhs: String, _ rhs: String) -> Int {
+        if lhs == rhs { return 0 }
+        if lhs.isEmpty { return rhs.count }
+        if rhs.isEmpty { return lhs.count }
+        let a = Array(lhs)
+        let b = Array(rhs)
+        var previous = Array(0...b.count)
+        for i in 1...a.count {
+            var current = Array(repeating: 0, count: b.count + 1)
+            current[0] = i
+            for j in 1...b.count {
+                let cost = a[i - 1] == b[j - 1] ? 0 : 1
+                current[j] = min(
+                    previous[j] + 1,
+                    current[j - 1] + 1,
+                    previous[j - 1] + cost
+                )
+            }
+            previous = current
+        }
+        return previous[b.count]
+    }
+
     private func isClientAllowed(_ client: [String: Any]) -> Bool {
-        let fields = [
-            client["id"] as? String,
-            client["name"] as? String,
-            client["displayName"] as? String,
-            client["clientName"] as? String,
-            client["hostname"] as? String,
-            client["hostName"] as? String,
-            client["dhcpHostname"] as? String,
-            client["mac"] as? String,
-            client["macAddress"] as? String,
-            client["ip"] as? String,
-            client["ipAddress"] as? String,
-        ].compactMap { normalize($0) }
+        let fields = clientCandidateValues(client).map(normalize)
 
         for allow in allowedClientSelectors {
             if fields.contains(where: { $0 == allow || $0.contains(allow) }) {
@@ -1421,9 +1878,207 @@ private struct UniFiAppBlockService {
     }
 
     private func normalize(_ value: Any?) -> String {
-        String(describing: value ?? "")
+        let cleaned = String(describing: value ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
+        if cleaned.isEmpty || cleaned == "null" || cleaned == "<null>" || cleaned == "(null)" {
+            return ""
+        }
+        return cleaned
+    }
+
+    private func clientCandidateValues(_ client: [String: Any]) -> [String] {
+        let raw: [String?] = [
+            client["id"] as? String,
+            client["_id"] as? String,
+            client["clientId"] as? String,
+            client["client_id"] as? String,
+            client["guid"] as? String,
+            client["name"] as? String,
+            client["displayName"] as? String,
+            client["clientName"] as? String,
+            client["hostname"] as? String,
+            client["hostName"] as? String,
+            client["dhcpHostname"] as? String,
+            client["mac"] as? String,
+            client["macAddress"] as? String,
+            client["ip"] as? String,
+            client["ipAddress"] as? String,
+            client["last_ip"] as? String,
+            client["lastIp"] as? String,
+            client["fixed_ip"] as? String,
+            client["fixedIp"] as? String,
+        ]
+        var values = raw.compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+
+        // Add canonicalized variants so selector matching is resilient to MAC separator/casing differences.
+        for value in values {
+            let macCanonical = value.replacingOccurrences(of: "-", with: ":").lowercased()
+            if macCanonical != value.lowercased() {
+                values.append(macCanonical)
+            }
+        }
+        return Array(Set(values))
+    }
+
+    private func namedCandidateValues(_ row: [String: Any]) -> [String] {
+        let raw: [Any?] = [
+            row["id"],
+            row["appId"],
+            row["app_id"],
+            row["categoryId"],
+            row["category_id"],
+            row["name"],
+            row["displayName"],
+        ]
+        return raw.compactMap { stringValue($0) }
+    }
+
+    private func namedIdentifier(_ row: [String: Any]) -> String? {
+        stringValue(row["id"])
+            ?? stringValue(row["appId"])
+            ?? stringValue(row["app_id"])
+            ?? stringValue(row["categoryId"])
+            ?? stringValue(row["category_id"])
+            ?? stringValue(row["name"])
+    }
+
+    private func stringValue(_ any: Any?) -> String? {
+        guard let any else { return nil }
+        let text = String(describing: any).trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
+    }
+
+    private func isNumericSelector(_ value: String) -> Bool {
+        let text = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return false }
+        return text.unicodeScalars.allSatisfy { CharacterSet.decimalDigits.contains($0) }
+    }
+
+    private func canonicalMAC(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let hexOnly = trimmed
+            .replacingOccurrences(of: ":", with: "")
+            .replacingOccurrences(of: "-", with: "")
+            .lowercased()
+        guard hexOnly.count == 12 else { return nil }
+        guard hexOnly.unicodeScalars.allSatisfy({ CharacterSet(charactersIn: "0123456789abcdef").contains($0) }) else {
+            return nil
+        }
+        var chunks: [String] = []
+        var idx = hexOnly.startIndex
+        while idx < hexOnly.endIndex {
+            let next = hexOnly.index(idx, offsetBy: 2)
+            chunks.append(String(hexOnly[idx..<next]).lowercased())
+            idx = next
+        }
+        return chunks.joined(separator: ":")
+    }
+
+    private func clientMergeKey(_ row: [String: Any]) -> String {
+        let mac = normalize(
+            row["mac"] as? String
+                ?? row["macAddress"] as? String
+                ?? row["clientMac"] as? String
+                ?? row["staMac"] as? String
+        )
+        if !mac.isEmpty { return "mac:\(mac)" }
+        let ip = normalize(
+            row["ip"] as? String
+                ?? row["ipAddress"] as? String
+                ?? row["last_ip"] as? String
+                ?? row["lastIp"] as? String
+        )
+        if !ip.isEmpty { return "ip:\(ip)" }
+        let id = normalize(
+            row["id"] as? String
+                ?? row["_id"] as? String
+                ?? row["clientId"] as? String
+                ?? row["client_id"] as? String
+                ?? row["guid"] as? String
+        )
+        if !id.isEmpty { return "id:\(id)" }
+        return "row:\(UUID().uuidString.lowercased())"
+    }
+
+    private func mergeClientRow(existing: [String: Any], incoming: [String: Any]) -> [String: Any] {
+        var merged = existing
+        for (key, value) in incoming {
+            if let current = merged[key] as? String,
+               !current.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            {
+                continue
+            }
+            merged[key] = value
+        }
+        return merged
+    }
+
+    private func resolvedClientMAC(_ client: [String: Any], allClients: [[String: Any]]) -> String {
+        if let direct = canonicalMAC(trimmedString(
+            client["mac"] as? String
+                ?? client["macAddress"] as? String
+                ?? client["clientMac"] as? String
+                ?? client["staMac"] as? String
+        )) {
+            return direct
+        }
+
+        let identity = Set(clientCandidateValues(client).map(normalize).filter { !$0.isEmpty })
+        guard !identity.isEmpty else { return "" }
+        for candidate in allClients {
+            let candidateIdentity = Set(clientCandidateValues(candidate).map(normalize).filter { !$0.isEmpty })
+            if identity.isDisjoint(with: candidateIdentity) { continue }
+            let candidateMAC = trimmedString(
+                candidate["mac"] as? String
+                    ?? candidate["macAddress"] as? String
+                    ?? candidate["clientMac"] as? String
+                    ?? candidate["staMac"] as? String
+            )
+            if let canonical = canonicalMAC(candidateMAC) {
+                return canonical
+            }
+        }
+        return ""
+    }
+
+    private func trimmedString(_ value: String?) -> String {
+        (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+private actor DPICatalogCache {
+    private let ttlSeconds: TimeInterval = 600
+    private var applications: [[String: Any]]?
+    private var applicationsFetchedAt: Date?
+    private var categories: [[String: Any]]?
+    private var categoriesFetchedAt: Date?
+
+    func applicationsIfFresh() -> [[String: Any]]? {
+        guard let applications, let fetchedAt = applicationsFetchedAt else { return nil }
+        guard Date().timeIntervalSince(fetchedAt) <= ttlSeconds else { return nil }
+        debugLog("DPI applications cache hit (\(applications.count) items)", category: "Tools")
+        return applications
+    }
+
+    func categoriesIfFresh() -> [[String: Any]]? {
+        guard let categories, let fetchedAt = categoriesFetchedAt else { return nil }
+        guard Date().timeIntervalSince(fetchedAt) <= ttlSeconds else { return nil }
+        debugLog("DPI categories cache hit (\(categories.count) items)", category: "Tools")
+        return categories
+    }
+
+    func storeApplications(_ rows: [[String: Any]]) {
+        applications = rows
+        applicationsFetchedAt = Date()
+        debugLog("DPI applications cache store (\(rows.count) items)", category: "Tools")
+    }
+
+    func storeCategories(_ rows: [[String: Any]]) {
+        categories = rows
+        categoriesFetchedAt = Date()
+        debugLog("DPI categories cache store (\(rows.count) items)", category: "Tools")
     }
 }
 

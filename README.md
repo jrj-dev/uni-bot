@@ -188,7 +188,7 @@ python3 skills/unifi-network-local/scripts/app_block.py apply-block --site-ref d
 python3 skills/unifi-network-local/scripts/app_block.py remove-block --site-ref default --client "Kid iPad" --app YouTube
 ```
 
-The app-block helper now targets UniFi's private CyberSecure `trafficrules` API and emits `simple_app_block_payloads` derived from the live UI model. It uses separate `APP_ID` and `APP_CATEGORY` rule types, so mixed app-plus-category requests are submitted as two rules. Apply uses upsert behavior: it updates an existing rule only when target type and schedule match for the same client; otherwise it creates a new rule. Remove can delete all app-block rules for a client, or selectively remove app/category IDs from matching rules.
+The app-block helper now targets UniFi's private CyberSecure `firewall-app-blocks` API and emits `simple_app_block_payloads` derived from the live UI model. UniFi saves Simple App Blocking as a full collection replace, so apply fetches the current block list, merges the requested rule set, and posts the full collection back. It uses separate `APP_ID` and `APP_CATEGORY` rule types, so mixed app-plus-category requests are submitted as two rules. Apply uses upsert behavior: it updates an existing rule only when target type and schedule match for the same client; otherwise it creates a new rule. Remove can delete all app-block rules for a client, or selectively remove app/category IDs from matching rules.
 
 Loki:
 

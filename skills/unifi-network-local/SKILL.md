@@ -18,6 +18,7 @@ Use the bundled script to talk to the local UniFi Network API.
 - Never speculate; use tools to verify before concluding.
 - Never disclose or expose API keys, passwords, tokens, or private credentials.
 - If the user asks about a specific client/device, first resolve identity with `list_clients` and/or `lookup_client_identity` (name/hostname/IP/MAC) before deeper checks.
+- For app-block workflows, prefer `app_block.py resolve-client` first to keep context small and return exactly one client.
 - Do not assume "the current phone/device" unless the user explicitly asks about their current phone/device.
 - Tool reference (purpose and parameters):
 - `list_devices`: List UniFi infrastructure devices (APs, switches, gateways). Parameters: none.
@@ -34,6 +35,9 @@ Use the bundled script to talk to the local UniFi Network API.
 - `get_device_stats`: Get latest statistics for one device. Parameters: `device_id` (required).
 - `get_client_details`: Get detailed information for one client. Parameters: `client_id` (required).
 - `lookup_client_identity`: Resolve a client by GUID/IP/MAC/name fragment and return friendly identity fields.
+- `app_block.py resolve-client`: Resolve one app-block client by fuzzy query (name/hostname/IP/MAC/id), including inactive-capable sources.
+- `app_block.py resolve-app`: Resolve one DPI application by fuzzy name/id.
+- `app_block.py resolve-category`: Resolve one DPI category by fuzzy name/id.
 - `ping_client`: Probe reachability for a client host/IP. Parameters: `target` (required), `timeout_seconds` (optional).
 - `resolve_client_dns`: Resolve DNS (forward/reverse) for a client host/IP. Parameters: `target` (required).
 - `network_traceroute`: Run traceroute to inspect path hops/latency. Parameters: `target` (required), `max_hops` (optional), `timeout_seconds` (optional).
@@ -99,7 +103,7 @@ set -a
 
 ## Common Workflow
 
-1. If a specific client/device is mentioned, resolve it first with `list_clients` or `lookup_client_identity` and carry friendly name + IP + MAC through the rest of the workflow. For app-block planning or inactive-client questions, use the inactive-inclusive client inventory.
+1. If a specific client/device is mentioned, resolve it first with `list_clients` or `lookup_client_identity` and carry friendly name + IP + MAC through the rest of the workflow. For app-block planning, use `app_block.py resolve-client` first to resolve exactly one client with fuzzy match and inactive-capable inventory.
 2. Start with a read-only request to inspect current state.
 3. If the endpoint is unclear, check the local Network API docs exposed by the console.
 4. Use the helper script for the request.
@@ -115,11 +119,12 @@ Run the generic request client:
 python3 skills/unifi-network-local/scripts/unifi_request.py GET /proxy/network/integration/v1/sites
 ```
 
-Plan app blocking for a specific client from the DPI application catalog:
+Plan app blocking for a specific client from the DPI application catalog with narrow resolvers first:
 
 ```bash
-python3 skills/unifi-network-local/scripts/app_block.py list-apps --search zoom --insecure
-python3 skills/unifi-network-local/scripts/app_block.py list-categories --search streaming --insecure
+python3 skills/unifi-network-local/scripts/app_block.py resolve-client --query "Kid iPad" --site-ref default --insecure
+python3 skills/unifi-network-local/scripts/app_block.py resolve-app --query youtube --insecure
+python3 skills/unifi-network-local/scripts/app_block.py resolve-category --query streaming --insecure
 python3 skills/unifi-network-local/scripts/app_block.py plan-block \
   --site-ref default \
   --client "Kid iPad" \
@@ -167,11 +172,16 @@ It emits `simple_app_block_payloads` matching the live CyberSecure UI object mod
 - `client_macs`
 - `schedule.mode`, `date`, `date_start`, `date_end`, `time_range_start`, `time_range_end`, `repeat_on_days`, `time_all_day`
 
-The live UniFi frontend bundle confirms the private CRUD path:
+The live UniFi frontend bundle confirms that Simple App Blocking is saved through the collection endpoint:
 
-- `POST /proxy/network/v2/api/site/{site_ref}/trafficrules`
-- `PUT /proxy/network/v2/api/site/{site_ref}/trafficrules/{_id}`
-- `DELETE /proxy/network/v2/api/site/{site_ref}/trafficrules/{_id}`
+- `GET /proxy/network/v2/api/site/{site_ref}/firewall-app-blocks`
+- `POST /proxy/network/v2/api/site/{site_ref}/firewall-app-blocks`
+
+Apply and remove both use collection replacement semantics:
+
+- fetch the current simple-app-block list
+- merge or prune rules in memory
+- `POST` the full resulting collection back to UniFi
 
 The live UI enum exposes separate target types for apps and categories, so when both `--app` and `--category` are supplied the helper emits or applies two rules instead of fabricating a combined target type.
 Apply uses smart upsert behavior:

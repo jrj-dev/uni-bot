@@ -139,8 +139,30 @@ enum ToolCatalog {
             ]
         ),
         ToolDefinition(
+            name: "resolve_client_for_app_block",
+            description: "Resolve one client for app-block changes using fuzzy matching (inactive clients included). Prefer this over list tools to avoid large responses.",
+            parameters: [
+                ToolParameter(name: "query", type: "string", description: "Client name/hostname/IP/MAC/id fragment.", required: true),
+                ToolParameter(name: "site_ref", type: "string", description: "Optional site reference. Default: default.", required: false),
+            ]
+        ),
+        ToolDefinition(
+            name: "resolve_dpi_application",
+            description: "Resolve one DPI application by fuzzy name/id for app-block planning. Prefer this over list tools to avoid large responses.",
+            parameters: [
+                ToolParameter(name: "query", type: "string", description: "Application name or id fragment.", required: true),
+            ]
+        ),
+        ToolDefinition(
+            name: "resolve_dpi_category",
+            description: "Resolve one DPI category by fuzzy name/id for app-block planning. Prefer this over list tools to avoid large responses.",
+            parameters: [
+                ToolParameter(name: "query", type: "string", description: "Category name or id fragment.", required: true),
+            ]
+        ),
+        ToolDefinition(
             name: "list_dpi_applications",
-            description: "List/search UniFi DPI application catalog for app-block planning.",
+            description: "List/search UniFi DPI application catalog for app-block planning. Use only when resolve_dpi_application is insufficient.",
             parameters: [
                 ToolParameter(name: "search", type: "string", description: "Optional case-insensitive name/id filter.", required: false),
                 ToolParameter(name: "limit", type: "integer", description: "Max results (1-200). Default: 50.", required: false),
@@ -148,7 +170,7 @@ enum ToolCatalog {
         ),
         ToolDefinition(
             name: "list_dpi_categories",
-            description: "List/search UniFi DPI category catalog for app-block planning.",
+            description: "List/search UniFi DPI category catalog for app-block planning. Use only when resolve_dpi_category is insufficient.",
             parameters: [
                 ToolParameter(name: "search", type: "string", description: "Optional case-insensitive name/id filter.", required: false),
                 ToolParameter(name: "limit", type: "integer", description: "Max results (1-200). Default: 50.", required: false),
@@ -156,7 +178,7 @@ enum ToolCatalog {
         ),
         ToolDefinition(
             name: "plan_client_app_block",
-            description: "Create a guarded plan to block selected DPI apps/categories for one client. Returns an approve_token for apply.",
+            description: "Create a guarded plan to block selected DPI apps/categories for one client. Prefer resolve_client_for_app_block, resolve_dpi_application, and resolve_dpi_category before calling this. Returns an approve_token for apply.",
             parameters: [
                 ToolParameter(name: "client", type: "string", description: "Client selector (name/hostname/IP/MAC/id).", required: true),
                 ToolParameter(name: "apps", type: "string", description: "Optional comma-separated DPI app names/ids.", required: false),
@@ -180,6 +202,14 @@ enum ToolCatalog {
                 ToolParameter(name: "apps", type: "string", description: "Optional comma-separated DPI app names/ids to remove.", required: false),
                 ToolParameter(name: "categories", type: "string", description: "Optional comma-separated DPI category names/ids to remove.", required: false),
                 ToolParameter(name: "site_ref", type: "string", description: "Optional site reference for apply path. Default: default.", required: false),
+            ]
+        ),
+        ToolDefinition(
+            name: "list_client_app_block",
+            description: "List current app-block rules affecting one client, including app/category IDs and names when resolvable.",
+            parameters: [
+                ToolParameter(name: "client", type: "string", description: "Client selector (name/hostname/IP/MAC/id).", required: true),
+                ToolParameter(name: "site_ref", type: "string", description: "Optional site reference for lookup path. Default: default.", required: false),
             ]
         ),
         ToolDefinition(

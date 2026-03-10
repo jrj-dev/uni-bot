@@ -8,6 +8,7 @@ import json
 import subprocess
 import sys
 from datetime import datetime
+from functools import lru_cache
 from typing import Any
 
 from _paths import SCRIPT_DIR
@@ -25,7 +26,7 @@ DAY_VALUES = {
     "fri": 5,
     "sat": 6,
 }
-SIMPLE_APP_BLOCK_PATH = "/proxy/network/v2/api/site/{site_ref}/trafficrules"
+SIMPLE_APP_BLOCK_PATH = "/proxy/network/v2/api/site/{site_ref}/firewall-app-blocks"
 
 
 def parse_args() -> argparse.Namespace:
@@ -77,6 +78,56 @@ def parse_args() -> argparse.Namespace:
         help="Pass through for self-signed TLS certificates.",
     )
 
+    resolve_client = subparsers.add_parser(
+        "resolve-client",
+        help="Resolve one client by fuzzy match (name/hostname/IP/MAC/id).",
+    )
+    resolve_client.add_argument(
+        "--query",
+        required=True,
+        help="Client selector fragment.",
+    )
+    resolve_client.add_argument("--site-id", help="Site ID for site-scoped queries.")
+    resolve_client.add_argument(
+        "--site-ref",
+        help="Site internal reference (for example 'default') to resolve into a site ID.",
+    )
+    resolve_client.add_argument(
+        "--insecure",
+        action="store_true",
+        help="Pass through for self-signed TLS certificates.",
+    )
+
+    resolve_app = subparsers.add_parser(
+        "resolve-app",
+        help="Resolve one DPI application by fuzzy name or ID.",
+    )
+    resolve_app.add_argument(
+        "--query",
+        required=True,
+        help="Application name or ID fragment.",
+    )
+    resolve_app.add_argument(
+        "--insecure",
+        action="store_true",
+        help="Pass through for self-signed TLS certificates.",
+    )
+
+    resolve_category = subparsers.add_parser(
+        "resolve-category",
+        help="Resolve one DPI category by fuzzy name or ID.",
+    )
+    resolve_category.add_argument(
+        "--query",
+        required=True,
+        help="Category name or ID fragment.",
+    )
+    resolve_category.add_argument(
+        "--insecure",
+        action="store_true",
+        help="Pass through for self-signed TLS certificates.",
+    )
+
     plan = subparsers.add_parser(
         "plan-block",
         help="Resolve a client and list of apps/categories into a simple app-block plan.",
@@ -84,11 +135,15 @@ def parse_args() -> argparse.Namespace:
 
     apply_block = subparsers.add_parser(
         "apply-block",
-        help="Create one or more simple app-block rules through the private trafficrules API.",
+        help="Create one or more simple app-block rules through the private firewall-app-blocks API.",
     )
     remove_block = subparsers.add_parser(
         "remove-block",
         help="Remove app-block rules for a client, or remove selected apps/categories from existing rules.",
+    )
+    list_block = subparsers.add_parser(
+        "list-block",
+        help="List app-block rules that currently target a specific client.",
     )
 
     for subparser in (plan, apply_block, remove_block):
@@ -150,6 +205,22 @@ def parse_args() -> argparse.Namespace:
             help="For weekly/custom schedules, omit start/end times and block all day.",
         )
         subparser.add_argument(
+        "--insecure",
+        action="store_true",
+        help="Pass through for self-signed TLS certificates.",
+    )
+
+    list_block.add_argument(
+        "--client",
+        required=True,
+        help="Client selector. Matches client name, hostname, MAC, IP, or ID.",
+    )
+    list_block.add_argument("--site-id", help="Site ID for site-scoped queries.")
+    list_block.add_argument(
+        "--site-ref",
+        help="Site internal reference (for example 'default') to resolve into a site ID.",
+    )
+    list_block.add_argument(
         "--insecure",
         action="store_true",
         help="Pass through for self-signed TLS certificates.",
@@ -273,6 +344,29 @@ def normalized(value: Any) -> str:
     return str(value or "").strip().lower()
 
 
+def canonical_mac(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    hex_only = text.replace(":", "").replace("-", "")
+    if len(hex_only) != 12:
+        return ""
+    if any(ch not in "0123456789abcdef" for ch in hex_only):
+        return ""
+    return ":".join(hex_only[i:i + 2] for i in range(0, 12, 2))
+
+
+def normalize_mac_list(values: Any) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    out: list[str] = []
+    for item in values:
+        mac = canonical_mac(item)
+        if mac:
+            out.append(mac)
+    return out
+
+
 def candidate_fields(item: dict[str, Any], keys: tuple[str, ...]) -> list[str]:
     return [normalized(item.get(key)) for key in keys if normalized(item.get(key))]
 
@@ -333,11 +427,105 @@ def resolve_single_match(
     raise SystemExit(f"{label} not found for selector {selector!r}. Sample values: {sample}")
 
 
+def normalize_match_text(value: str) -> str:
+    text = str(value or "").strip().lower()
+    if text.endswith(".local"):
+        text = text[:-6]
+    normalized_chars = [ch if ch.isalnum() else " " for ch in text]
+    return " ".join("".join(normalized_chars).split())
+
+
+@lru_cache(maxsize=2048)
+def edit_distance(lhs: str, rhs: str) -> int:
+    if lhs == rhs:
+        return 0
+    if not lhs:
+        return len(rhs)
+    if not rhs:
+        return len(lhs)
+    prev = list(range(len(rhs) + 1))
+    for i, lhs_char in enumerate(lhs, start=1):
+        cur = [i] + [0] * len(rhs)
+        for j, rhs_char in enumerate(rhs, start=1):
+            cost = 0 if lhs_char == rhs_char else 1
+            cur[j] = min(
+                prev[j] + 1,
+                cur[j - 1] + 1,
+                prev[j - 1] + cost,
+            )
+        prev = cur
+    return prev[-1]
+
+
+def fuzzy_score(query: str, candidate: str) -> int:
+    if candidate == query:
+        return 120
+    if candidate.startswith(query) or query.startswith(candidate):
+        return 95
+    if query in candidate:
+        return 85
+    if candidate in query and len(candidate) >= 4:
+        return 70
+    dist = edit_distance(query, candidate)
+    if dist <= 1:
+        return 72
+    if dist <= 2:
+        return 62
+    if dist <= 3 and min(len(query), len(candidate)) >= 6:
+        return 48
+    return 0
+
+
+def resolve_fuzzy_best(
+    selector: str,
+    items: list[dict[str, Any]],
+    *,
+    keys: tuple[str, ...],
+    label: str,
+    minimum_score: int = 35,
+) -> tuple[dict[str, Any], int]:
+    query = normalize_match_text(selector)
+    if not query:
+        raise SystemExit(f"missing {label} selector")
+
+    best_item: dict[str, Any] | None = None
+    best_score = -1
+    for item in items:
+        fields = [normalize_match_text(field) for field in candidate_fields(item, keys)]
+        fields = [field for field in fields if field]
+        if not fields:
+            continue
+        score = max((fuzzy_score(query, field) for field in fields), default=0)
+        if score > best_score:
+            best_score = score
+            best_item = item
+
+    if best_item is None or best_score < minimum_score:
+        raise SystemExit(f"{label} not found for selector {selector!r}")
+    return best_item, best_score
+
+
 def resolve_client(selector: str, clients: list[dict[str, Any]]) -> dict[str, Any]:
     return resolve_single_match(
         selector,
         clients,
-        keys=("id", "name", "displayName", "clientName", "hostname", "hostName", "dhcpHostname", "mac", "macAddress", "ip", "ipAddress"),
+        keys=(
+            "id",
+            "name",
+            "displayName",
+            "clientName",
+            "hostname",
+            "hostName",
+            "dhcpHostname",
+            "mac",
+            "macAddress",
+            "ip",
+            "ipAddress",
+            "last_ip",
+            "lastIp",
+            "fixed_ip",
+            "fixedIp",
+        ),
         label="client",
         display=display_client,
     )
@@ -477,15 +665,21 @@ def build_simple_app_block_payload(
     target_type: str,
     ids: list[Any],
 ) -> dict[str, Any]:
+    # Match the compact rule shape the UniFi Simple App Blocking collection API stores.
+    client_mac = (
+        canonical_mac(client.get("mac"))
+        or canonical_mac(client.get("macAddress"))
+        or canonical_mac(client.get("id"))
+    )
+    if not client_mac:
+        raise SystemExit("could not resolve client MAC for app-block payload")
     payload: dict[str, Any] = {
         "name": policy_name,
         "type": "DEVICE",
         "target_type": target_type,
-        "client_macs": [client.get("mac") or client.get("id")],
+        "client_macs": [client_mac],
         "network_ids": [],
         "schedule": schedule,
-        "source_devices": [],
-        "source_networks": [],
     }
     if target_type == "APP_ID":
         payload["app_ids"] = ids
@@ -614,6 +808,14 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
     policy_name = args.policy_name or (
         f"Block {', '.join(selected_labels)} for {display_client(client)}"
     )
+    client_mac = (
+        canonical_mac(client.get("mac"))
+        or canonical_mac(client.get("macAddress"))
+        or canonical_mac(client.get("id"))
+    )
+    if not client_mac:
+        raise SystemExit(f"could not resolve client MAC for {display_client(client)!r}")
+
     site_scope = args.site_id or args.site_ref or "resolved-by-controller"
     payloads = build_simple_app_block_payloads(
         client=client,
@@ -631,7 +833,7 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
             "id": client.get("id"),
             "name": client.get("name"),
             "hostname": client.get("hostname"),
-            "mac": client.get("mac"),
+            "mac": client_mac,
             "ip": client.get("ip"),
         },
         "resolved_applications": [
@@ -654,7 +856,7 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
             "target_type": "CLIENT",
             "target_selector": {
                 "client_id": client.get("id"),
-                "mac": client.get("mac"),
+                "mac": client_mac,
                 "name": client.get("name"),
             },
             "application_ids": [app.get("id") for app in resolved_apps if app.get("id")],
@@ -745,6 +947,91 @@ def command_plan_block(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_resolve_client(args: argparse.Namespace) -> int:
+    clients = load_clients_for_app_block(args)
+    client, score = resolve_fuzzy_best(
+        args.query,
+        clients,
+        keys=(
+            "id",
+            "name",
+            "displayName",
+            "clientName",
+            "hostname",
+            "hostName",
+            "dhcpHostname",
+            "mac",
+            "macAddress",
+            "ip",
+            "ipAddress",
+            "last_ip",
+            "lastIp",
+            "fixed_ip",
+            "fixedIp",
+        ),
+        label="client",
+    )
+    output = {
+        "kind": "unifi_client_resolution",
+        "query": args.query,
+        "score": score,
+        "resolved_client": {
+            "id": client.get("id") or client.get("_id") or client.get("clientId"),
+            "name": client.get("name") or client.get("displayName") or client.get("hostname"),
+            "hostname": client.get("hostname") or client.get("dhcpHostname"),
+            "mac": client.get("mac") or client.get("macAddress"),
+            "ip": client.get("ip") or client.get("ipAddress") or client.get("last_ip"),
+        },
+    }
+    json.dump(output, sys.stdout, indent=2, sort_keys=True)
+    sys.stdout.write("\n")
+    return 0
+
+
+def command_resolve_app(args: argparse.Namespace) -> int:
+    applications = rows(run_named_query("dpi-applications", insecure=args.insecure))
+    app, score = resolve_fuzzy_best(
+        args.query,
+        applications,
+        keys=("id", "name"),
+        label="application",
+    )
+    output = {
+        "kind": "unifi_dpi_application_resolution",
+        "query": args.query,
+        "score": score,
+        "resolved_application": {
+            "id": app.get("id"),
+            "name": app.get("name"),
+        },
+    }
+    json.dump(output, sys.stdout, indent=2, sort_keys=True)
+    sys.stdout.write("\n")
+    return 0
+
+
+def command_resolve_category(args: argparse.Namespace) -> int:
+    categories = rows(run_named_query("dpi-categories", insecure=args.insecure))
+    category, score = resolve_fuzzy_best(
+        args.query,
+        categories,
+        keys=("id", "name"),
+        label="category",
+    )
+    output = {
+        "kind": "unifi_dpi_category_resolution",
+        "query": args.query,
+        "score": score,
+        "resolved_category": {
+            "id": category.get("id"),
+            "name": category.get("name"),
+        },
+    }
+    json.dump(output, sys.stdout, indent=2, sort_keys=True)
+    sys.stdout.write("\n")
+    return 0
+
+
 def command_list_categories(args: argparse.Namespace) -> int:
     payload = run_named_query("dpi-categories", insecure=args.insecure)
     categories = rows(payload)
@@ -774,17 +1061,16 @@ def command_apply_block(args: argparse.Namespace) -> int:
     existing_rules = rows(run_unifi_request("GET", path, insecure=args.insecure))
     responses: list[dict[str, Any]] = []
 
+    # UniFi saves Simple App Blocking by replacing the full collection in one POST,
+    # so we merge each planned change into the fetched list before submitting it.
     for payload in payloads:
         if args.rule_id:
-            payload = dict(payload)
-            payload["_id"] = args.rule_id
-            response = run_unifi_request(
-                "PUT",
-                f"{path}/{args.rule_id}",
-                body=payload,
-                insecure=args.insecure,
-            )
-            responses.append({"method": "PUT", "path": f"{path}/{args.rule_id}", "response": response})
+            replacement = dict(payload)
+            replacement["_id"] = args.rule_id
+            existing_rules = [
+                replacement if str(rule.get("_id") or rule.get("id") or "").strip() == args.rule_id else rule
+                for rule in existing_rules
+            ]
             continue
 
         match = find_matching_rule(payload, existing_rules)
@@ -792,17 +1078,16 @@ def command_apply_block(args: argparse.Namespace) -> int:
             rule_id = str(match.get("_id") or match.get("id") or "").strip()
             if rule_id:
                 merged = merge_rule(match, payload)
-                response = run_unifi_request(
-                    "PUT",
-                    f"{path}/{rule_id}",
-                    body=merged,
-                    insecure=args.insecure,
-                )
-                responses.append({"method": "PUT", "path": f"{path}/{rule_id}", "response": response})
+                existing_rules = [
+                    merged if str(rule.get("_id") or rule.get("id") or "").strip() == rule_id else rule
+                    for rule in existing_rules
+                ]
                 continue
 
-        response = run_unifi_request("POST", path, body=payload, insecure=args.insecure)
-        responses.append({"method": "POST", "path": path, "response": response})
+        existing_rules.append(payload)
+
+    response = run_unifi_request("POST", path, body=existing_rules, insecure=args.insecure)
+    responses.append({"method": "POST", "path": path, "response": response})
 
     output = {
         "kind": "unifi_app_block_apply_result",
@@ -833,8 +1118,10 @@ def is_simple_app_rule(rule: dict[str, Any]) -> bool:
 
 
 def find_matching_rule(payload: dict[str, Any], rules: list[dict[str, Any]]) -> dict[str, Any] | None:
+    # Simple app blocks are matched by target kind, client, and schedule so app IDs
+    # can be merged into an existing rule instead of creating duplicates.
     payload_target = str(payload.get("target_type") or "").strip().lower()
-    payload_macs = set(normalize_list(payload.get("client_macs")))
+    payload_macs = set(normalize_mac_list(payload.get("client_macs")))
     payload_schedule = schedule_signature(payload.get("schedule"))
     for rule in rules:
         if not is_simple_app_rule(rule):
@@ -842,7 +1129,7 @@ def find_matching_rule(payload: dict[str, Any], rules: list[dict[str, Any]]) -> 
         rule_target = str(rule.get("target_type") or rule.get("targetType") or "").strip().lower()
         if rule_target != payload_target:
             continue
-        if set(normalize_list(rule.get("client_macs"))) != payload_macs:
+        if set(normalize_mac_list(rule.get("client_macs"))) != payload_macs:
             continue
         if schedule_signature(rule.get("schedule")) != payload_schedule:
             continue
@@ -851,8 +1138,16 @@ def find_matching_rule(payload: dict[str, Any], rules: list[dict[str, Any]]) -> 
 
 
 def merge_rule(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+    # Preserve the existing rule identity while expanding its app/category target set.
     merged = dict(existing)
-    for key in ("name", "type", "target_type", "client_macs", "network_ids", "source_devices", "source_networks", "schedule"):
+    for key in (
+        "name",
+        "type",
+        "target_type",
+        "client_macs",
+        "network_ids",
+        "schedule",
+    ):
         if key in incoming:
             merged[key] = incoming[key]
     target = str(incoming.get("target_type") or "").strip().lower()
@@ -869,7 +1164,7 @@ def command_remove_block(args: argparse.Namespace) -> int:
     site_ref = resolve_site_ref(args)
     clients = load_clients_for_app_block(args)
     client = resolve_client(args.client, clients)
-    client_mac = str(client.get("mac") or client.get("macAddress") or "").strip().lower()
+    client_mac = canonical_mac(client.get("mac")) or canonical_mac(client.get("macAddress"))
     if not client_mac:
         raise SystemExit("could not resolve client MAC for removal")
 
@@ -892,47 +1187,49 @@ def command_remove_block(args: argparse.Namespace) -> int:
     rules = rows(run_unifi_request("GET", path, insecure=args.insecure))
     deleted = 0
     updated = 0
-    actions: list[dict[str, Any]] = []
 
+    # Removals also use collection replacement: edit the local rule list, then POST
+    # the resulting full set back to UniFi once.
     for rule in rules:
         if not is_simple_app_rule(rule):
             continue
         rule_id = str(rule.get("_id") or rule.get("id") or "").strip()
         if not rule_id:
             continue
-        if client_mac not in set(normalize_list(rule.get("client_macs"))):
+        if client_mac not in set(normalize_mac_list(rule.get("client_macs"))):
             continue
 
         target = str(rule.get("target_type") or rule.get("targetType") or "").strip().lower()
         if not app_ids and not category_ids:
-            response = run_unifi_request("DELETE", f"{path}/{rule_id}", insecure=args.insecure)
+            rules = [item for item in rules if str(item.get("_id") or item.get("id") or "").strip() != rule_id]
             deleted += 1
-            actions.append({"method": "DELETE", "path": f"{path}/{rule_id}", "response": response})
             continue
 
         next_rule = dict(rule)
         if target == "app_id" and app_ids:
             kept = [v for v in normalize_list(rule.get("app_ids")) if v not in app_ids]
             if not kept:
-                response = run_unifi_request("DELETE", f"{path}/{rule_id}", insecure=args.insecure)
+                rules = [item for item in rules if str(item.get("_id") or item.get("id") or "").strip() != rule_id]
                 deleted += 1
-                actions.append({"method": "DELETE", "path": f"{path}/{rule_id}", "response": response})
                 continue
             next_rule["app_ids"] = kept
         elif target == "app_category" and category_ids:
             kept = [v for v in normalize_list(rule.get("app_category_ids")) if v not in category_ids]
             if not kept:
-                response = run_unifi_request("DELETE", f"{path}/{rule_id}", insecure=args.insecure)
+                rules = [item for item in rules if str(item.get("_id") or item.get("id") or "").strip() != rule_id]
                 deleted += 1
-                actions.append({"method": "DELETE", "path": f"{path}/{rule_id}", "response": response})
                 continue
             next_rule["app_category_ids"] = kept
         else:
             continue
 
-        response = run_unifi_request("PUT", f"{path}/{rule_id}", body=next_rule, insecure=args.insecure)
+        rules = [
+            next_rule if str(item.get("_id") or item.get("id") or "").strip() == rule_id else item
+            for item in rules
+        ]
         updated += 1
-        actions.append({"method": "PUT", "path": f"{path}/{rule_id}", "response": response})
+
+    response = run_unifi_request("POST", path, body=rules, insecure=args.insecure)
 
     output = {
         "kind": "unifi_app_block_remove_result",
@@ -944,7 +1241,85 @@ def command_remove_block(args: argparse.Namespace) -> int:
         },
         "rules_deleted": deleted,
         "rules_updated": updated,
-        "actions": actions,
+        "response": response,
+    }
+    json.dump(output, sys.stdout, indent=2, sort_keys=True)
+    sys.stdout.write("\n")
+    return 0
+
+
+def command_list_block(args: argparse.Namespace) -> int:
+    site_ref = resolve_site_ref(args)
+    clients = load_clients_for_app_block(args)
+    client = resolve_client(args.client, clients)
+    client_mac = canonical_mac(client.get("mac")) or canonical_mac(client.get("macAddress"))
+    if not client_mac:
+        raise SystemExit("could not resolve client MAC for listing")
+
+    applications = rows(run_named_query("dpi-applications", insecure=args.insecure))
+    categories = rows(run_named_query("dpi-categories", insecure=args.insecure))
+    app_name_by_id = {
+        normalized(item.get("id")): str(item.get("name") or "").strip()
+        for item in applications
+        if normalized(item.get("id")) and str(item.get("name") or "").strip()
+    }
+    category_name_by_id = {
+        normalized(item.get("id")): str(item.get("name") or "").strip()
+        for item in categories
+        if normalized(item.get("id")) and str(item.get("name") or "").strip()
+    }
+
+    path = SIMPLE_APP_BLOCK_PATH.format(site_ref=site_ref)
+    rules = rows(run_unifi_request("GET", path, insecure=args.insecure))
+
+    matched_rules: list[dict[str, Any]] = []
+    for rule in rules:
+        if not is_simple_app_rule(rule):
+            continue
+        rule_macs = set(normalize_mac_list(rule.get("client_macs")))
+        if client_mac not in rule_macs:
+            continue
+        target_type = str(rule.get("target_type") or rule.get("targetType") or "").strip().upper()
+        app_ids = sorted(
+            set(
+                normalize_list(rule.get("app_ids"))
+                + normalize_list(rule.get("appIds"))
+            )
+        )
+        category_ids = sorted(
+            set(
+                normalize_list(rule.get("app_category_ids"))
+                + normalize_list(rule.get("appCategoryIds"))
+            )
+        )
+        matched_rules.append(
+            {
+                "rule_id": str(rule.get("_id") or rule.get("id") or "").strip(),
+                "name": str(rule.get("name") or "").strip(),
+                "target_type": target_type,
+                "action": str(rule.get("action") or "").strip().upper() or "BLOCK",
+                "schedule": rule.get("schedule") if isinstance(rule.get("schedule"), dict) else {},
+                "app_ids": app_ids,
+                "app_names": [app_name_by_id[item_id] for item_id in app_ids if item_id in app_name_by_id],
+                "category_ids": category_ids,
+                "category_names": [
+                    category_name_by_id[item_id]
+                    for item_id in category_ids
+                    if item_id in category_name_by_id
+                ],
+            }
+        )
+
+    output = {
+        "kind": "unifi_app_block_list_result",
+        "site_ref": site_ref,
+        "resolved_client": {
+            "name": client.get("name") or client.get("displayName") or client.get("hostname"),
+            "mac": client.get("mac") or client.get("macAddress"),
+            "ip": client.get("ip") or client.get("ipAddress"),
+        },
+        "rule_count": len(matched_rules),
+        "rules": matched_rules,
     }
     json.dump(output, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")
@@ -953,6 +1328,12 @@ def command_remove_block(args: argparse.Namespace) -> int:
 
 def main() -> int:
     args = parse_args()
+    if args.command == "resolve-client":
+        return command_resolve_client(args)
+    if args.command == "resolve-app":
+        return command_resolve_app(args)
+    if args.command == "resolve-category":
+        return command_resolve_category(args)
     if args.command == "list-apps":
         return command_list_apps(args)
     if args.command == "list-categories":
@@ -963,6 +1344,8 @@ def main() -> int:
         return command_apply_block(args)
     if args.command == "remove-block":
         return command_remove_block(args)
+    if args.command == "list-block":
+        return command_list_block(args)
     raise SystemExit(f"unknown command: {args.command}")
 
 

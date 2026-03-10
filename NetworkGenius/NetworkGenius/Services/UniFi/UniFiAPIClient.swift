@@ -118,6 +118,16 @@ final class UniFiAPIClient {
     }
 
     func postJSON(path: String, body: [String: Any]) async throws -> Any {
+        try await sendJSON(method: "POST", path: path, body: body)
+    }
+
+    func postJSON(path: String, body: [[String: Any]]) async throws -> Any {
+        try await sendJSON(method: "POST", path: path, body: body)
+    }
+
+    private func sendJSON(method: String, path: String, body: Any) async throws -> Any {
+        // Shared JSON transport so app-block writes can send either a single object
+        // or the full collection array through the same authenticated request path.
         guard let apiKey = KeychainHelper.loadString(key: .unifiAPIKey) else {
             throw UniFiAPIError.missingAPIKey
         }
@@ -126,7 +136,7 @@ final class UniFiAPIClient {
         }
 
         var request = URLRequest(url: url)
-        request.httpMethod = "POST"
+        request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
@@ -135,11 +145,11 @@ final class UniFiAPIClient {
 
         let session = URLSessionFactory.makeSession(allowSelfSigned: allowSelfSigned)
         let startedAt = Date()
-        debugLog("POST \(path) started", category: "UniFiAPI")
+        debugLog("\(method) \(path) started body=\(previewJSON(body))", category: "UniFiAPI")
         let (data, response) = try await session.data(for: request)
         if let http = response as? HTTPURLResponse {
             let elapsedMS = Int(Date().timeIntervalSince(startedAt) * 1000)
-            debugLog("POST \(path) -> HTTP \(http.statusCode) in \(elapsedMS)ms", category: "UniFiAPI")
+            debugLog("\(method) \(path) -> HTTP \(http.statusCode) in \(elapsedMS)ms", category: "UniFiAPI")
             if !(200..<300).contains(http.statusCode) {
                 let bodyText = String(data: data, encoding: .utf8) ?? ""
                 throw UniFiAPIError.httpError(http.statusCode, bodyText)
@@ -166,7 +176,7 @@ final class UniFiAPIClient {
 
         let session = URLSessionFactory.makeSession(allowSelfSigned: allowSelfSigned)
         let startedAt = Date()
-        debugLog("PUT \(path) started", category: "UniFiAPI")
+        debugLog("PUT \(path) started body=\(previewJSON(body))", category: "UniFiAPI")
         let (data, response) = try await session.data(for: request)
         if let http = response as? HTTPURLResponse {
             let elapsedMS = Int(Date().timeIntervalSince(startedAt) * 1000)
@@ -243,5 +253,16 @@ final class UniFiAPIClient {
         }
         debugLog("GET \(path) completed pagination with \(allItems.count) items", category: "UniFiAPI")
         return allItems
+    }
+
+    private func previewJSON(_ value: Any, limit: Int = 800) -> String {
+        guard JSONSerialization.isValidJSONObject(value),
+              let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]),
+              let text = String(data: data, encoding: .utf8)
+        else {
+            let fallback = String(describing: value)
+            return String(fallback.prefix(limit))
+        }
+        return String(text.prefix(limit))
     }
 }

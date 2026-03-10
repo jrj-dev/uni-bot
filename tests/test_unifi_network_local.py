@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import io
+import json
 import sys
 import unittest
 import urllib.error
@@ -387,7 +388,7 @@ class AppBlockTests(unittest.TestCase):
         )
         self.assertEqual(
             plan["simple_app_block_payloads"][0]["client_macs"],
-            ["AA:BB:CC:DD:EE:FF"],
+            ["aa:bb:cc:dd:ee:ff"],
         )
         self.assertEqual(
             plan["simple_app_block_payloads"][0]["schedule"]["mode"],
@@ -405,7 +406,7 @@ class AppBlockTests(unittest.TestCase):
         self.assertEqual(plan["schedule"]["time_range_start"], "20:00")
         self.assertEqual(plan["schedule"]["time_range_end"], "22:00")
 
-    def test_apply_block_posts_to_private_trafficrules_endpoint(self) -> None:
+    def test_apply_block_posts_full_collection_to_firewall_app_blocks_endpoint(self) -> None:
         module = load_module("app_block_test_apply", "app_block.py")
         args = SimpleNamespace(
             site_id=None,
@@ -441,16 +442,71 @@ class AppBlockTests(unittest.TestCase):
                     exit_code = module.command_apply_block(args)
 
         self.assertEqual(exit_code, 0)
-        request_mock.assert_called_once()
+        self.assertGreaterEqual(request_mock.call_count, 1)
+        post_call = next(call for call in request_mock.call_args_list if call.args[:2] == ("POST", "/proxy/network/v2/api/site/default/firewall-app-blocks"))
         self.assertEqual(
-            request_mock.call_args.args[:2],
-            ("POST", "/proxy/network/v2/api/site/default/trafficrules"),
+            post_call.args[:2],
+            ("POST", "/proxy/network/v2/api/site/default/firewall-app-blocks"),
         )
         self.assertEqual(
-            request_mock.call_args.kwargs["body"]["target_type"],
+            post_call.kwargs["body"][-1]["target_type"],
             "APP_ID",
         )
         self.assertIn('"site_ref": "default"', stdout.getvalue())
+
+    def test_list_block_returns_matching_rules_for_client(self) -> None:
+        module = load_module("app_block_test_list_block", "app_block.py")
+        args = SimpleNamespace(
+            site_id=None,
+            site_ref="default",
+            insecure=True,
+            client="macbook",
+        )
+
+        def fake_query(query: str, **_: object) -> object:
+            if query == "clients-all":
+                return {"data": [{"id": "client-1", "name": "MacBook Pro", "mac": "A8E29161BE34"}]}
+            if query == "clients":
+                return {"data": [{"id": "client-1", "name": "MacBook Pro", "mac": "a8:e2:91:61:be:34"}]}
+            if query == "dpi-applications":
+                return {"data": [{"id": "39", "name": "Zoom"}]}
+            if query == "dpi-categories":
+                return {"data": [{"id": "3", "name": "Streaming Media"}]}
+            raise AssertionError(f"unexpected query: {query}")
+
+        def fake_request(method: str, path: str, **_: object) -> object:
+            if method == "GET" and path == "/proxy/network/v2/api/site/default/firewall-app-blocks":
+                return {
+                    "data": [
+                        {
+                            "_id": "rule-1",
+                            "name": "Block Zoom",
+                            "type": "DEVICE",
+                            "target_type": "APP_ID",
+                            "client_macs": ["a8:e2:91:61:be:34"],
+                            "app_ids": ["39"],
+                            "app_category_ids": [],
+                            "schedule": {"mode": "ALWAYS"},
+                            "action": "BLOCK",
+                        }
+                    ]
+                }
+            if method == "GET" and path == "/proxy/network/api/s/default/stat/alluser":
+                return {"data": []}
+            raise AssertionError(f"unexpected request: {method} {path}")
+
+        with mock.patch.object(module, "run_named_query", side_effect=fake_query):
+            with mock.patch.object(module, "run_unifi_request", side_effect=fake_request):
+                stdout = io.StringIO()
+                with contextlib.redirect_stdout(stdout):
+                    exit_code = module.command_list_block(args)
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["kind"], "unifi_app_block_list_result")
+        self.assertEqual(payload["rule_count"], 1)
+        self.assertEqual(payload["rules"][0]["rule_id"], "rule-1")
+        self.assertEqual(payload["rules"][0]["app_names"], ["Zoom"])
 
     def test_build_simple_app_block_payload_category_only(self) -> None:
         module = load_module("app_block_test_simple_category", "app_block.py")
@@ -467,6 +523,33 @@ class AppBlockTests(unittest.TestCase):
         self.assertEqual(payload["app_ids"], [])
         self.assertEqual(payload["app_category_ids"], [3])
         self.assertEqual(payload["client_macs"], ["72:79:0b:7b:ed:25"])
+        self.assertEqual(payload["network_ids"], [])
+        self.assertEqual(payload["schedule"], {"mode": "ALWAYS"})
+
+    def test_build_simple_app_block_payload_matches_submit_shape(self) -> None:
+        module = load_module("app_block_test_submit_shape", "app_block.py")
+
+        payload = module.build_simple_app_block_payload(
+            client={"mac": "a8:e2:91:61:be:34"},
+            schedule={"mode": "ALWAYS"},
+            policy_name="Block TikTok on Axiom",
+            target_type="APP_ID",
+            ids=[262392],
+        )
+
+        self.assertEqual(
+            payload,
+            {
+                "name": "Block TikTok on Axiom",
+                "type": "DEVICE",
+                "target_type": "APP_ID",
+                "client_macs": ["a8:e2:91:61:be:34"],
+                "network_ids": [],
+                "schedule": {"mode": "ALWAYS"},
+                "app_ids": [262392],
+                "app_category_ids": [],
+            },
+        )
 
     def test_build_plan_requires_app_or_category(self) -> None:
         module = load_module("app_block_test_requires_target", "app_block.py")

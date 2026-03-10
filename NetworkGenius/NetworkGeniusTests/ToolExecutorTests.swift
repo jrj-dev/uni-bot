@@ -2,8 +2,8 @@ import XCTest
 @testable import NetworkGenius
 
 final class ToolExecutorTests: XCTestCase {
-    func testToolCatalogHas18Tools() {
-        XCTAssertEqual(ToolCatalog.all.count, 18)
+    func testToolCatalogHas44Tools() {
+        XCTAssertEqual(ToolCatalog.all.count, 44)
     }
 
     func testClaudeToolSchemasHaveRequiredFields() {
