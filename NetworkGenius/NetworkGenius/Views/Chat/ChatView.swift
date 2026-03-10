@@ -112,6 +112,11 @@ struct ChatView: View {
                 debugLog("Chat view appeared", category: "UI")
                 showSettings = false
                 showConversationList = false
+                DispatchQueue.main.async {
+                    // Extra pass after view restoration/state replay.
+                    showSettings = false
+                    showConversationList = false
+                }
                 viewModel.speechService = speechService
                 viewModel.configure(appState: appState, networkMonitor: networkMonitor, modelContext: modelContext)
                 Task {
@@ -134,15 +139,23 @@ struct ChatView: View {
                 }
             }
             .onChange(of: scenePhase) { _, phase in
-                guard phase == .active else { return }
-                showSettings = false
-                showConversationList = false
-                Task {
-                    debugLog("App became active; re-probing console reachability", category: "UI")
-                    await networkMonitor.probeConsole(
-                        baseURL: appState.consoleURL,
-                        allowSelfSigned: appState.allowSelfSignedCerts
-                    )
+                switch phase {
+                case .active:
+                    showSettings = false
+                    showConversationList = false
+                    Task {
+                        debugLog("App became active; re-probing console reachability", category: "UI")
+                        await networkMonitor.probeConsole(
+                            baseURL: appState.consoleURL,
+                            allowSelfSigned: appState.allowSelfSignedCerts
+                        )
+                    }
+                case .inactive, .background:
+                    // Prevent sheet restoration from dropping users back into settings/chats.
+                    showSettings = false
+                    showConversationList = false
+                @unknown default:
+                    break
                 }
             }
             .onChange(of: networkMonitor.isWiFiConnected) { _, _ in

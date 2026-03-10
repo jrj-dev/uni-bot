@@ -7,6 +7,7 @@ final class UniFiQueryService {
     private static let siteQueries: [String: String] = [
         "devices": "/proxy/network/integration/v1/sites/{site_id}/devices",
         "clients": "/proxy/network/integration/v1/sites/{site_id}/clients",
+        "clients-all": "/proxy/network/integration/v1/sites/{site_id}/clients?includeInactive=true",
         "networks": "/proxy/network/integration/v1/sites/{site_id}/networks",
         "wifi-broadcasts": "/proxy/network/integration/v1/sites/{site_id}/wifi/broadcasts",
         "firewall-policies": "/proxy/network/integration/v1/sites/{site_id}/firewall/policies",
@@ -22,6 +23,8 @@ final class UniFiQueryService {
     private static let globalQueries: [String: String] = [
         "sites": "/proxy/network/integration/v1/sites",
         "pending-devices": "/proxy/network/integration/v1/pending-devices",
+        "dpi-applications": "/proxy/network/integration/v1/dpi/applications",
+        "dpi-categories": "/proxy/network/integration/v1/dpi/categories",
     ]
 
     private static let resourceQueries: [String: (idParam: String, template: String)] = [

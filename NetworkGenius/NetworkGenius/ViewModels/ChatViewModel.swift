@@ -70,10 +70,12 @@ final class ChatViewModel: ObservableObject {
         )
         let summaryService = UniFiSummaryService(queryService: queryService)
         self.toolExecutor = ToolExecutor(
+            apiClient: client,
             queryService: queryService,
             summaryService: summaryService,
             networkMonitor: networkMonitor,
-            lokiBaseURL: appState.grafanaLokiURL
+            lokiBaseURL: appState.grafanaLokiURL,
+            appBlockAllowedClients: appState.appBlockAllowedClients
         )
 
         switch appState.llmProvider {

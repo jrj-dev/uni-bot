@@ -77,5 +77,126 @@ struct UniFiSettingsSection: View {
                 }
             }
         }
+
+        Section("Change Guardrails") {
+            Text("App Block Allowed Clients")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if viewModel.appBlockAllowedClientSelectors.isEmpty {
+                Text("No clients allowlisted.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(viewModel.appBlockAllowedClientSelectors, id: \.self) { selector in
+                    let matched = viewModel.availableGuardrailClients.first(where: { $0.selector == selector })
+                    let cachedName = viewModel.cachedGuardrailClientName(for: selector)
+                    HStack(spacing: 8) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            if let matched {
+                                HStack(spacing: 6) {
+                                    Circle()
+                                        .fill(matched.isActive ? Color.green : Color.gray)
+                                        .frame(width: 8, height: 8)
+                                    Text(matched.title)
+                                        .font(.caption)
+                                }
+                                Text(selector)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                            } else if let cachedName, !cachedName.isEmpty {
+                                Text(cachedName)
+                                    .font(.caption)
+                                Text(selector)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                            } else {
+                                Text(selector)
+                                    .font(.caption)
+                                    .textSelection(.enabled)
+                            }
+                        }
+                        Spacer(minLength: 8)
+                        Button("Remove", role: .destructive) {
+                            viewModel.removeGuardrailClient(selector: selector)
+                        }
+                        .font(.caption)
+                        .buttonStyle(.bordered)
+                    }
+                }
+            }
+
+            Button {
+                Task { await viewModel.loadGuardrailClients() }
+            } label: {
+                HStack {
+                    if viewModel.isLoadingGuardrailClients {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                    Text("Load Clients")
+                }
+            }
+            .disabled(
+                UniFiAPIClient.normalizeBaseURL(viewModel.consoleURL).isEmpty
+                    || viewModel.isLoadingGuardrailClients
+            )
+
+            if let result = viewModel.guardrailClientsLoadResult {
+                Text(result)
+                    .font(.caption)
+                    .foregroundStyle(result.hasPrefix("Loaded") ? .green : .red)
+            }
+
+            let selectable = viewModel.availableGuardrailClients.filter { option in
+                !viewModel.appBlockAllowedClientSelectors.contains(option.selector)
+            }
+            if !selectable.isEmpty {
+                TextField("Search clients", text: $viewModel.guardrailClientSearchText)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+
+                Text("Add Clients")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                let search = viewModel.guardrailClientSearchText
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .lowercased()
+                let filtered = search.isEmpty
+                    ? selectable
+                    : selectable.filter { $0.searchText.contains(search) }
+
+                ForEach(filtered) { option in
+                    HStack(alignment: .top, spacing: 8) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 6) {
+                                Circle()
+                                    .fill(option.isActive ? Color.green : Color.gray)
+                                    .frame(width: 8, height: 8)
+                                Text(option.title)
+                            }
+                            Text(option.subtitle)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 8)
+                        Button("Add") {
+                            viewModel.addGuardrailClient(option)
+                        }
+                        .font(.caption)
+                        .buttonStyle(.bordered)
+                    }
+                }
+
+                if filtered.isEmpty {
+                    Text("No clients match your search.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
     }
 }

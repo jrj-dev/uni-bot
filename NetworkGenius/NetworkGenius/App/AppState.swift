@@ -18,6 +18,8 @@ final class AppState: ObservableObject {
     @AppStorage("hideReasoningOutput") var hideReasoningOutput: Bool = true
     @AppStorage("darkModeEnabled") var darkModeEnabled: Bool = true
     @AppStorage("grafanaLokiURL") var grafanaLokiURL: String = ""
+    @AppStorage("appBlockAllowedClients") var appBlockAllowedClients: String = ""
+    @AppStorage("appBlockAllowedClientNameMap") var appBlockAllowedClientNameMap: String = ""
     @AppStorage("lmStudioBaseURL") var lmStudioBaseURL: String = ""
     @AppStorage("lmStudioModel") var lmStudioModel: String = ""
     @AppStorage("lmStudioMaxPromptChars") var lmStudioMaxPromptChars: Int = 4098

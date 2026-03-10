@@ -22,8 +22,10 @@ enum ToolCatalog {
         ),
         ToolDefinition(
             name: "list_clients",
-            description: "List all currently connected network clients.",
-            parameters: []
+            description: "List network clients. By default returns active clients; can include inactive/known clients.",
+            parameters: [
+                ToolParameter(name: "include_inactive", type: "boolean", description: "Set true to include inactive/known clients when supported.", required: false),
+            ]
         ),
         ToolDefinition(
             name: "list_networks",
@@ -134,6 +136,50 @@ enum ToolCatalog {
             description: "Resolve a UniFi client by GUID/IP/MAC/name and return friendly identity fields.",
             parameters: [
                 ToolParameter(name: "query", type: "string", description: "Client id, IP, MAC, hostname, or display name fragment.", required: true),
+            ]
+        ),
+        ToolDefinition(
+            name: "list_dpi_applications",
+            description: "List/search UniFi DPI application catalog for app-block planning.",
+            parameters: [
+                ToolParameter(name: "search", type: "string", description: "Optional case-insensitive name/id filter.", required: false),
+                ToolParameter(name: "limit", type: "integer", description: "Max results (1-200). Default: 50.", required: false),
+            ]
+        ),
+        ToolDefinition(
+            name: "list_dpi_categories",
+            description: "List/search UniFi DPI category catalog for app-block planning.",
+            parameters: [
+                ToolParameter(name: "search", type: "string", description: "Optional case-insensitive name/id filter.", required: false),
+                ToolParameter(name: "limit", type: "integer", description: "Max results (1-200). Default: 50.", required: false),
+            ]
+        ),
+        ToolDefinition(
+            name: "plan_client_app_block",
+            description: "Create a guarded plan to block selected DPI apps/categories for one client. Returns an approve_token for apply.",
+            parameters: [
+                ToolParameter(name: "client", type: "string", description: "Client selector (name/hostname/IP/MAC/id).", required: true),
+                ToolParameter(name: "apps", type: "string", description: "Optional comma-separated DPI app names/ids.", required: false),
+                ToolParameter(name: "categories", type: "string", description: "Optional comma-separated DPI category names/ids.", required: false),
+                ToolParameter(name: "policy_name", type: "string", description: "Optional friendly rule name.", required: false),
+                ToolParameter(name: "site_ref", type: "string", description: "Optional site reference for apply path. Default: default.", required: false),
+            ]
+        ),
+        ToolDefinition(
+            name: "apply_client_app_block",
+            description: "Apply a previously planned client app-block rule using approve_token.",
+            parameters: [
+                ToolParameter(name: "approve_token", type: "string", description: "Token returned by plan_client_app_block.", required: true),
+            ]
+        ),
+        ToolDefinition(
+            name: "remove_client_app_block",
+            description: "Remove app-block rule(s) for a client, or remove selected apps/categories from existing rules.",
+            parameters: [
+                ToolParameter(name: "client", type: "string", description: "Client selector (name/hostname/IP/MAC/id).", required: true),
+                ToolParameter(name: "apps", type: "string", description: "Optional comma-separated DPI app names/ids to remove.", required: false),
+                ToolParameter(name: "categories", type: "string", description: "Optional comma-separated DPI category names/ids to remove.", required: false),
+                ToolParameter(name: "site_ref", type: "string", description: "Optional site reference for apply path. Default: default.", required: false),
             ]
         ),
         ToolDefinition(

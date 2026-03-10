@@ -21,7 +21,7 @@ Use the bundled script to talk to the local UniFi Network API.
 - Do not assume "the current phone/device" unless the user explicitly asks about their current phone/device.
 - Tool reference (purpose and parameters):
 - `list_devices`: List UniFi infrastructure devices (APs, switches, gateways). Parameters: none.
-- `list_clients`: List connected clients. Parameters: none.
+- `list_clients`: List clients. Default is active clients; include inactive/known clients when specifically requested (for example inactive-history questions) and during app-block targeting.
 - `list_networks`: List configured networks/VLANs. Parameters: none.
 - `list_wifi_broadcasts`: List SSIDs and WiFi broadcast settings. Parameters: none.
 - `list_firewall_policies`: List firewall policies. Parameters: none.
@@ -99,7 +99,7 @@ set -a
 
 ## Common Workflow
 
-1. If a specific client/device is mentioned, resolve it first with `list_clients` or `lookup_client_identity` and carry friendly name + IP + MAC through the rest of the workflow.
+1. If a specific client/device is mentioned, resolve it first with `list_clients` or `lookup_client_identity` and carry friendly name + IP + MAC through the rest of the workflow. For app-block planning or inactive-client questions, use the inactive-inclusive client inventory.
 2. Start with a read-only request to inspect current state.
 3. If the endpoint is unclear, check the local Network API docs exposed by the console.
 4. Use the helper script for the request.
@@ -143,6 +143,12 @@ python3 skills/unifi-network-local/scripts/app_block.py apply-block \
   --start-time 20:00 \
   --end-time 22:00 \
   --insecure
+
+python3 skills/unifi-network-local/scripts/app_block.py remove-block \
+  --site-ref default \
+  --client "Kid iPad" \
+  --app YouTube \
+  --insecure
 ```
 
 The helper resolves:
@@ -168,6 +174,11 @@ The live UniFi frontend bundle confirms the private CRUD path:
 - `DELETE /proxy/network/v2/api/site/{site_ref}/trafficrules/{_id}`
 
 The live UI enum exposes separate target types for apps and categories, so when both `--app` and `--category` are supplied the helper emits or applies two rules instead of fabricating a combined target type.
+Apply uses smart upsert behavior:
+- it updates an existing rule only when `client + target_type + schedule` match
+- otherwise it creates a new rule
+- it never merges APP_ID and APP_CATEGORY rules together.
+`remove-block` can either delete all client app-block rules or remove selected app/category IDs from existing rules.
 
 The integration API uses:
 

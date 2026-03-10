@@ -68,7 +68,8 @@ final class UniFiAPIClient {
         var urlString = "\(baseURL)\(path)"
         if !queryItems.isEmpty {
             var components = URLComponents(string: urlString)
-            components?.queryItems = queryItems
+            let existing = components?.queryItems ?? []
+            components?.queryItems = existing + queryItems
             urlString = components?.string ?? urlString
         }
 
@@ -113,6 +114,99 @@ final class UniFiAPIClient {
 
     func getJSON(path: String, queryItems: [URLQueryItem] = []) async throws -> Any {
         let data = try await get(path: path, queryItems: queryItems)
+        return try JSONSerialization.jsonObject(with: data)
+    }
+
+    func postJSON(path: String, body: [String: Any]) async throws -> Any {
+        guard let apiKey = KeychainHelper.loadString(key: .unifiAPIKey) else {
+            throw UniFiAPIError.missingAPIKey
+        }
+        guard let url = URL(string: "\(baseURL)\(path)") else {
+            throw UniFiAPIError.invalidURL("\(baseURL)\(path)")
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        request.timeoutInterval = 20
+
+        let session = URLSessionFactory.makeSession(allowSelfSigned: allowSelfSigned)
+        let startedAt = Date()
+        debugLog("POST \(path) started", category: "UniFiAPI")
+        let (data, response) = try await session.data(for: request)
+        if let http = response as? HTTPURLResponse {
+            let elapsedMS = Int(Date().timeIntervalSince(startedAt) * 1000)
+            debugLog("POST \(path) -> HTTP \(http.statusCode) in \(elapsedMS)ms", category: "UniFiAPI")
+            if !(200..<300).contains(http.statusCode) {
+                let bodyText = String(data: data, encoding: .utf8) ?? ""
+                throw UniFiAPIError.httpError(http.statusCode, bodyText)
+            }
+        }
+        return try JSONSerialization.jsonObject(with: data)
+    }
+
+    func putJSON(path: String, body: [String: Any]) async throws -> Any {
+        guard let apiKey = KeychainHelper.loadString(key: .unifiAPIKey) else {
+            throw UniFiAPIError.missingAPIKey
+        }
+        guard let url = URL(string: "\(baseURL)\(path)") else {
+            throw UniFiAPIError.invalidURL("\(baseURL)\(path)")
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        request.timeoutInterval = 20
+
+        let session = URLSessionFactory.makeSession(allowSelfSigned: allowSelfSigned)
+        let startedAt = Date()
+        debugLog("PUT \(path) started", category: "UniFiAPI")
+        let (data, response) = try await session.data(for: request)
+        if let http = response as? HTTPURLResponse {
+            let elapsedMS = Int(Date().timeIntervalSince(startedAt) * 1000)
+            debugLog("PUT \(path) -> HTTP \(http.statusCode) in \(elapsedMS)ms", category: "UniFiAPI")
+            if !(200..<300).contains(http.statusCode) {
+                let bodyText = String(data: data, encoding: .utf8) ?? ""
+                throw UniFiAPIError.httpError(http.statusCode, bodyText)
+            }
+        }
+        if data.isEmpty { return ["status": "ok"] }
+        return try JSONSerialization.jsonObject(with: data)
+    }
+
+    func deleteJSON(path: String) async throws -> Any {
+        guard let apiKey = KeychainHelper.loadString(key: .unifiAPIKey) else {
+            throw UniFiAPIError.missingAPIKey
+        }
+        guard let url = URL(string: "\(baseURL)\(path)") else {
+            throw UniFiAPIError.invalidURL("\(baseURL)\(path)")
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
+        request.timeoutInterval = 20
+
+        let session = URLSessionFactory.makeSession(allowSelfSigned: allowSelfSigned)
+        let startedAt = Date()
+        debugLog("DELETE \(path) started", category: "UniFiAPI")
+        let (data, response) = try await session.data(for: request)
+        if let http = response as? HTTPURLResponse {
+            let elapsedMS = Int(Date().timeIntervalSince(startedAt) * 1000)
+            debugLog("DELETE \(path) -> HTTP \(http.statusCode) in \(elapsedMS)ms", category: "UniFiAPI")
+            if !(200..<300).contains(http.statusCode) {
+                let bodyText = String(data: data, encoding: .utf8) ?? ""
+                throw UniFiAPIError.httpError(http.statusCode, bodyText)
+            }
+        }
+        if data.isEmpty { return ["status": "ok"] }
         return try JSONSerialization.jsonObject(with: data)
     }
 

@@ -15,6 +15,7 @@ REQUEST_SCRIPT = SCRIPT_DIR / "unifi_request.py"
 SITE_ID_QUERIES = {
     "devices": "/proxy/network/integration/v1/sites/{site_id}/devices",
     "clients": "/proxy/network/integration/v1/sites/{site_id}/clients",
+    "clients-all": "/proxy/network/integration/v1/sites/{site_id}/clients?includeInactive=true",
     "networks": "/proxy/network/integration/v1/sites/{site_id}/networks",
     "wifi-broadcasts": "/proxy/network/integration/v1/sites/{site_id}/wifi/broadcasts",
     "hotspot-vouchers": "/proxy/network/integration/v1/sites/{site_id}/hotspot/vouchers",

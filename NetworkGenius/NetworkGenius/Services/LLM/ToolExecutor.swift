@@ -3,6 +3,7 @@ import Network
 import Darwin
 
 final class ToolExecutor {
+    private let apiClient: UniFiAPIClient
     private let queryService: UniFiQueryService
     private let summaryService: UniFiSummaryService
     private let networkMonitor: NetworkMonitor
@@ -10,17 +11,25 @@ final class ToolExecutor {
     private let lokiService: GrafanaLokiService
     private let diagnosticsService = ClientDiagnosticsService()
     private let sshLogService = UniFiSSHLogService()
+    private let appBlockService: UniFiAppBlockService
 
     init(
+        apiClient: UniFiAPIClient,
         queryService: UniFiQueryService,
         summaryService: UniFiSummaryService,
         networkMonitor: NetworkMonitor,
-        lokiBaseURL: String
+        lokiBaseURL: String,
+        appBlockAllowedClients: String
     ) {
+        self.apiClient = apiClient
         self.queryService = queryService
         self.summaryService = summaryService
         self.networkMonitor = networkMonitor
         self.lokiService = GrafanaLokiService(baseURL: lokiBaseURL)
+        self.appBlockService = UniFiAppBlockService(
+            apiClient: apiClient,
+            allowlistCSV: appBlockAllowedClients
+        )
     }
 
     @MainActor
@@ -39,7 +48,7 @@ final class ToolExecutor {
             case "list_devices":
                 output = try await queryService.query("devices")
             case "list_clients":
-                output = try await queryService.query("clients")
+                output = try await listClients(includeInactiveRaw: toolCall.arguments["include_inactive"])
             case "list_networks":
                 output = try await queryService.query("networks")
             case "list_wifi_broadcasts":
@@ -92,6 +101,39 @@ final class ToolExecutor {
                 output = try await diagnosticsService.lookupClientIdentity(
                     queryService: queryService,
                     query: toolCall.arguments["query"]
+                )
+            case "list_dpi_applications":
+                output = try await appBlockService.listDPIApplications(
+                    queryService: queryService,
+                    search: toolCall.arguments["search"],
+                    limit: Int(toolCall.arguments["limit"] ?? "")
+                )
+            case "list_dpi_categories":
+                output = try await appBlockService.listDPICategories(
+                    queryService: queryService,
+                    search: toolCall.arguments["search"],
+                    limit: Int(toolCall.arguments["limit"] ?? "")
+                )
+            case "plan_client_app_block":
+                output = try await appBlockService.planClientAppBlock(
+                    queryService: queryService,
+                    clientSelector: toolCall.arguments["client"],
+                    appsCSV: toolCall.arguments["apps"],
+                    categoriesCSV: toolCall.arguments["categories"],
+                    policyName: toolCall.arguments["policy_name"],
+                    siteRef: toolCall.arguments["site_ref"]
+                )
+            case "apply_client_app_block":
+                output = try await appBlockService.applyClientAppBlock(
+                    approveToken: toolCall.arguments["approve_token"]
+                )
+            case "remove_client_app_block":
+                output = try await appBlockService.removeClientAppBlock(
+                    queryService: queryService,
+                    clientSelector: toolCall.arguments["client"],
+                    appsCSV: toolCall.arguments["apps"],
+                    categoriesCSV: toolCall.arguments["categories"],
+                    siteRef: toolCall.arguments["site_ref"]
                 )
             case "ssh_collect_unifi_logs":
                 output = await sshLogService.run(
@@ -235,6 +277,75 @@ final class ToolExecutor {
             }
         }
         return nil
+    }
+
+    private func listClients(includeInactiveRaw: String?) async throws -> String {
+        let includeInactive = parseFlexibleBool(includeInactiveRaw)
+        if !includeInactive {
+            return try await queryService.query("clients")
+        }
+        let rows = try await resolveClientsIncludingInactive()
+        let data = try JSONSerialization.data(withJSONObject: rows, options: [.prettyPrinted, .sortedKeys])
+        return String(data: data, encoding: .utf8) ?? "[]"
+    }
+
+    private func resolveClientsIncludingInactive(siteRefHint: String? = nil) async throws -> [[String: Any]] {
+        var bestRows: [[String: Any]] = []
+
+        if let rows = try? await queryService.queryItems("clients-all"), rows.count > bestRows.count {
+            bestRows = rows
+        }
+        if let rows = try? await queryService.queryItems("clients"), rows.count > bestRows.count {
+            bestRows = rows
+        }
+
+        var siteRef = (siteRefHint ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if siteRef.isEmpty, let sites = try? await queryService.queryItems("sites") {
+            if let defaultRef = sites.first(where: { (($0["internalReference"] as? String) ?? "") == "default" })?["internalReference"] as? String,
+               !defaultRef.isEmpty
+            {
+                siteRef = defaultRef
+            } else if let firstRef = sites.first?["internalReference"] as? String, !firstRef.isEmpty {
+                siteRef = firstRef
+            }
+        }
+        if siteRef.isEmpty {
+            siteRef = "default"
+        }
+
+        let legacyPath = "/proxy/network/api/s/\(siteRef)/stat/alluser"
+        if let legacyPayload = try? await apiClient.getJSON(path: legacyPath) {
+            let legacyRows = rowsFromAnyPayload(legacyPayload)
+            if legacyRows.count > bestRows.count {
+                bestRows = legacyRows
+            }
+        }
+        return bestRows
+    }
+
+    private func rowsFromAnyPayload(_ payload: Any) -> [[String: Any]] {
+        if let rows = payload as? [[String: Any]] {
+            return rows
+        }
+        if let dict = payload as? [String: Any] {
+            if let data = dict["data"] as? [[String: Any]] {
+                return data
+            }
+            if let result = dict["result"] as? [[String: Any]] {
+                return result
+            }
+        }
+        return []
+    }
+
+    private func parseFlexibleBool(_ raw: String?) -> Bool {
+        let value = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch value {
+        case "1", "true", "yes", "y", "on":
+            return true
+        default:
+            return false
+        }
     }
 }
 
@@ -750,6 +861,569 @@ private struct UniFiDocumentationService {
         output.dateStyle = .medium
         output.timeStyle = .none
         return output.string(from: date)
+    }
+}
+
+private actor AppBlockApprovalStore {
+    struct PendingPlan {
+        let token: String
+        let expiresAt: Date
+        let siteRef: String
+        let clientName: String
+        let payloads: [[String: Any]]
+    }
+
+    private var pending: [String: PendingPlan] = [:]
+
+    func issue(siteRef: String, clientName: String, payloads: [[String: Any]]) -> String {
+        let token = String(UUID().uuidString.prefix(8)).lowercased()
+        pending[token] = PendingPlan(
+            token: token,
+            expiresAt: Date().addingTimeInterval(300),
+            siteRef: siteRef,
+            clientName: clientName,
+            payloads: payloads
+        )
+        return token
+    }
+
+    func consume(token: String) -> PendingPlan? {
+        let key = token.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard let plan = pending[key] else { return nil }
+        pending[key] = nil
+        guard plan.expiresAt > Date() else { return nil }
+        return plan
+    }
+}
+
+private struct UniFiAppBlockService {
+    private let apiClient: UniFiAPIClient
+    private let allowedClientSelectors: [String]
+    private let approvals = AppBlockApprovalStore()
+
+    init(apiClient: UniFiAPIClient, allowlistCSV: String) {
+        self.apiClient = apiClient
+        self.allowedClientSelectors = allowlistCSV
+            .split(separator: ",")
+            .map {
+                String($0)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .lowercased()
+            }
+            .filter { !$0.isEmpty }
+    }
+
+    func listDPIApplications(
+        queryService: UniFiQueryService,
+        search rawSearch: String?,
+        limit rawLimit: Int?
+    ) async throws -> String {
+        let items = try await queryService.queryItems("dpi-applications")
+        return formatDPIList(
+            items: items,
+            search: rawSearch,
+            limit: rawLimit,
+            title: "DPI applications"
+        )
+    }
+
+    func listDPICategories(
+        queryService: UniFiQueryService,
+        search rawSearch: String?,
+        limit rawLimit: Int?
+    ) async throws -> String {
+        let items = try await queryService.queryItems("dpi-categories")
+        return formatDPIList(
+            items: items,
+            search: rawSearch,
+            limit: rawLimit,
+            title: "DPI categories"
+        )
+    }
+
+    func planClientAppBlock(
+        queryService: UniFiQueryService,
+        clientSelector rawClientSelector: String?,
+        appsCSV rawApps: String?,
+        categoriesCSV rawCategories: String?,
+        policyName rawPolicyName: String?,
+        siteRef rawSiteRef: String?
+    ) async throws -> String {
+        let clientSelector = (rawClientSelector ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clientSelector.isEmpty else {
+            return "Error: plan_client_app_block requires 'client'."
+        }
+        guard !allowedClientSelectors.isEmpty else {
+            return "Error: No app-block allowlist configured. Add allowed clients in Settings -> Change Guardrails."
+        }
+
+        let appSelectors = parseCSV(rawApps)
+        let categorySelectors = parseCSV(rawCategories)
+        guard !appSelectors.isEmpty || !categorySelectors.isEmpty else {
+            return "Error: Provide at least one app or category selector."
+        }
+        let siteRef = {
+            let candidate = (rawSiteRef ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return candidate.isEmpty ? "default" : candidate
+        }()
+
+        let clients = try await resolveClientsForAppBlock(queryService: queryService, siteRef: siteRef)
+        let applications = try await queryService.queryItems("dpi-applications")
+        let categories = try await queryService.queryItems("dpi-categories")
+        let client = try resolveClient(clientSelector, in: clients)
+        guard isClientAllowed(client) else {
+            let display = clientDisplayName(client)
+            return "Error: Client '\(display)' is not in the app-block allowlist. Update Settings -> Change Guardrails."
+        }
+
+        let resolvedApps = try resolveNamedSelectors(appSelectors, in: applications, kind: "application")
+        let resolvedCategories = try resolveNamedSelectors(categorySelectors, in: categories, kind: "category")
+        let policyName = (rawPolicyName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let effectivePolicyName = policyName.isEmpty
+            ? "Block for \(clientDisplayName(client))"
+            : policyName
+
+        var payloads: [[String: Any]] = []
+        let clientMac = client["mac"] as? String ?? client["macAddress"] as? String ?? ""
+        if !resolvedApps.isEmpty {
+            payloads.append([
+                "name": effectivePolicyName,
+                "type": "DEVICE",
+                "target_type": "APP_ID",
+                "client_macs": [clientMac],
+                "network_ids": [],
+                "source_devices": [],
+                "source_networks": [],
+                "schedule": ["mode": "ALWAYS"],
+                "app_ids": resolvedApps.compactMap { $0["id"] },
+                "app_category_ids": [],
+            ])
+        }
+        if !resolvedCategories.isEmpty {
+            let categoryName = resolvedApps.isEmpty ? effectivePolicyName : "\(effectivePolicyName) (Categories)"
+            payloads.append([
+                "name": categoryName,
+                "type": "DEVICE",
+                "target_type": "APP_CATEGORY",
+                "client_macs": [clientMac],
+                "network_ids": [],
+                "source_devices": [],
+                "source_networks": [],
+                "schedule": ["mode": "ALWAYS"],
+                "app_ids": [],
+                "app_category_ids": resolvedCategories.compactMap { $0["id"] },
+            ])
+        }
+        if payloads.isEmpty {
+            return "Error: No app/category IDs could be resolved from provided selectors."
+        }
+
+        let token = await approvals.issue(
+            siteRef: siteRef,
+            clientName: clientDisplayName(client),
+            payloads: payloads
+        )
+        let appNames = resolvedApps.compactMap { $0["name"] as? String }
+        let categoryNames = resolvedCategories.compactMap { $0["name"] as? String }
+        return """
+        App-block plan ready:
+        - client: \(clientDisplayName(client))
+        - site_ref: \(siteRef)
+        - apps: \(appNames.isEmpty ? "none" : appNames.joined(separator: ", "))
+        - categories: \(categoryNames.isEmpty ? "none" : categoryNames.joined(separator: ", "))
+        - payload_count: \(payloads.count)
+        Re-run apply_client_app_block with:
+        - approve_token: \(token)
+        Token expires in 5 minutes.
+        """
+    }
+
+    func applyClientAppBlock(approveToken rawToken: String?) async throws -> String {
+        let token = (rawToken ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty else {
+            return "Error: apply_client_app_block requires 'approve_token'."
+        }
+        guard let plan = await approvals.consume(token: token) else {
+            return "Error: approve_token is invalid or expired. Run plan_client_app_block again."
+        }
+
+        let path = "/proxy/network/v2/api/site/\(plan.siteRef)/trafficrules"
+        var existingRules = try await fetchTrafficRules(siteRef: plan.siteRef)
+        var createdCount = 0
+        var updatedCount = 0
+        var resultLines: [String] = []
+        for payload in plan.payloads {
+            if let existing = findMatchingRule(for: payload, in: existingRules),
+               let ruleID = trafficRuleID(existing)
+            {
+                let merged = mergeRule(existing: existing, incoming: payload)
+                let response = try await apiClient.putJSON(path: "\(path)/\(ruleID)", body: merged)
+                updatedCount += 1
+                if let updatedRule = normalizeTrafficRule(response) {
+                    existingRules.removeAll { trafficRuleID($0) == ruleID }
+                    existingRules.append(updatedRule)
+                }
+                let jsonData = try JSONSerialization.data(withJSONObject: response, options: [.sortedKeys])
+                let snippet = String(data: jsonData, encoding: .utf8) ?? "{}"
+                resultLines.append("updated \(ruleID): \(String(snippet.prefix(220)))")
+                continue
+            }
+
+            let response = try await apiClient.postJSON(path: path, body: payload)
+            createdCount += 1
+            if let createdRule = normalizeTrafficRule(response) {
+                existingRules.append(createdRule)
+            }
+            let jsonData = try JSONSerialization.data(withJSONObject: response, options: [.sortedKeys])
+            let snippet = String(data: jsonData, encoding: .utf8) ?? "{}"
+            resultLines.append("created: \(String(snippet.prefix(220)))")
+        }
+        return """
+        App-block apply completed:
+        - client: \(plan.clientName)
+        - site_ref: \(plan.siteRef)
+        - rules_created: \(createdCount)
+        - rules_updated: \(updatedCount)
+        - response_preview:
+        \(resultLines.joined(separator: "\n"))
+        """
+    }
+
+    func removeClientAppBlock(
+        queryService: UniFiQueryService,
+        clientSelector rawClientSelector: String?,
+        appsCSV rawApps: String?,
+        categoriesCSV rawCategories: String?,
+        siteRef rawSiteRef: String?
+    ) async throws -> String {
+        let clientSelector = (rawClientSelector ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clientSelector.isEmpty else {
+            return "Error: remove_client_app_block requires 'client'."
+        }
+        let siteRef = {
+            let candidate = (rawSiteRef ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return candidate.isEmpty ? "default" : candidate
+        }()
+
+        let clients = try await resolveClientsForAppBlock(queryService: queryService, siteRef: siteRef)
+        let client = try resolveClient(clientSelector, in: clients)
+        guard isClientAllowed(client) else {
+            let display = clientDisplayName(client)
+            return "Error: Client '\(display)' is not in the app-block allowlist. Update Settings -> Change Guardrails."
+        }
+        let clientMac = normalize(client["mac"] as? String ?? client["macAddress"] as? String ?? "")
+        guard !clientMac.isEmpty else {
+            return "Error: Could not resolve client MAC for removal."
+        }
+
+        let appSelectors = parseCSV(rawApps)
+        let categorySelectors = parseCSV(rawCategories)
+        let applications = appSelectors.isEmpty ? [] : try await queryService.queryItems("dpi-applications")
+        let categories = categorySelectors.isEmpty ? [] : try await queryService.queryItems("dpi-categories")
+        let appIDs = Set(try resolveNamedSelectors(appSelectors, in: applications, kind: "application")
+            .compactMap { normalize($0["id"]) })
+        let categoryIDs = Set(try resolveNamedSelectors(categorySelectors, in: categories, kind: "category")
+            .compactMap { normalize($0["id"]) })
+
+        var rules = try await fetchTrafficRules(siteRef: siteRef)
+        let path = "/proxy/network/v2/api/site/\(siteRef)/trafficrules"
+        var deleted = 0
+        var updated = 0
+
+        for rule in rules {
+            guard isSimpleAppRule(rule), ruleTargetsClient(rule, mac: clientMac) else { continue }
+            guard let ruleID = trafficRuleID(rule) else { continue }
+            let targetType = normalize(rule["target_type"] ?? rule["targetType"])
+
+            if appIDs.isEmpty, categoryIDs.isEmpty {
+                _ = try await apiClient.deleteJSON(path: "\(path)/\(ruleID)")
+                deleted += 1
+                continue
+            }
+
+            var next = rule
+            if targetType == "app_id", !appIDs.isEmpty {
+                let kept = arrayStrings(rule["app_ids"]).filter { !appIDs.contains(normalize($0)) }
+                next["app_ids"] = kept
+                if kept.isEmpty {
+                    _ = try await apiClient.deleteJSON(path: "\(path)/\(ruleID)")
+                    deleted += 1
+                    continue
+                }
+            } else if targetType == "app_category", !categoryIDs.isEmpty {
+                let kept = arrayStrings(rule["app_category_ids"]).filter { !categoryIDs.contains(normalize($0)) }
+                next["app_category_ids"] = kept
+                if kept.isEmpty {
+                    _ = try await apiClient.deleteJSON(path: "\(path)/\(ruleID)")
+                    deleted += 1
+                    continue
+                }
+            } else {
+                continue
+            }
+
+            _ = try await apiClient.putJSON(path: "\(path)/\(ruleID)", body: next)
+            updated += 1
+        }
+
+        return """
+        App-block removal completed:
+        - client: \(clientDisplayName(client))
+        - site_ref: \(siteRef)
+        - rules_deleted: \(deleted)
+        - rules_updated: \(updated)
+        """
+    }
+
+    private func formatDPIList(
+        items: [[String: Any]],
+        search rawSearch: String?,
+        limit rawLimit: Int?,
+        title: String
+    ) -> String {
+        let search = normalize(rawSearch)
+        let limit = max(1, min(rawLimit ?? 50, 200))
+        let filtered = items.filter { item in
+            guard !search.isEmpty else { return true }
+            let name = normalize(item["name"])
+            let id = normalize(item["id"])
+            return name.contains(search) || id.contains(search)
+        }
+        let lines = filtered.prefix(limit).enumerated().map { index, item in
+            let name = (item["name"] as? String) ?? "unknown"
+            let id = "\(item["id"] ?? "unknown")"
+            return "\(index + 1). name=\(name), id=\(id)"
+        }
+        return """
+        \(title) (\(lines.count) of \(filtered.count)):
+        \(lines.joined(separator: "\n"))
+        """
+    }
+
+    private func resolveClientsForAppBlock(queryService: UniFiQueryService, siteRef: String) async throws -> [[String: Any]] {
+        var bestRows: [[String: Any]] = []
+        if let rows = try? await queryService.queryItems("clients-all"), rows.count > bestRows.count {
+            bestRows = rows
+        }
+        if let rows = try? await queryService.queryItems("clients"), rows.count > bestRows.count {
+            bestRows = rows
+        }
+
+        let legacyPath = "/proxy/network/api/s/\(siteRef)/stat/alluser"
+        if let payload = try? await apiClient.getJSON(path: legacyPath) {
+            let rows = rowsFromPayload(payload)
+            if rows.count > bestRows.count {
+                bestRows = rows
+            }
+        }
+        return bestRows
+    }
+
+    private func rowsFromPayload(_ payload: Any) -> [[String: Any]] {
+        if let rows = payload as? [[String: Any]] {
+            return rows
+        }
+        if let dict = payload as? [String: Any] {
+            if let data = dict["data"] as? [[String: Any]] {
+                return data
+            }
+            if let result = dict["result"] as? [[String: Any]] {
+                return result
+            }
+        }
+        return []
+    }
+
+    private func fetchTrafficRules(siteRef: String) async throws -> [[String: Any]] {
+        let path = "/proxy/network/v2/api/site/\(siteRef)/trafficrules"
+        let payload = try await apiClient.getJSON(path: path)
+        if let rows = payload as? [[String: Any]] {
+            return rows
+        }
+        if let dict = payload as? [String: Any], let data = dict["data"] as? [[String: Any]] {
+            return data
+        }
+        return []
+    }
+
+    private func normalizeTrafficRule(_ payload: Any) -> [String: Any]? {
+        if let dict = payload as? [String: Any] {
+            if let data = dict["data"] as? [[String: Any]], let first = data.first {
+                return first
+            }
+            return dict
+        }
+        return nil
+    }
+
+    private func trafficRuleID(_ rule: [String: Any]) -> String? {
+        let id = (rule["_id"] as? String) ?? (rule["id"] as? String)
+        let trimmed = (id ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func isSimpleAppRule(_ rule: [String: Any]) -> Bool {
+        let type = normalize(rule["type"])
+        let targetType = normalize(rule["target_type"] ?? rule["targetType"])
+        return type == "device" && (targetType == "app_id" || targetType == "app_category")
+    }
+
+    private func ruleTargetsClient(_ rule: [String: Any], mac: String) -> Bool {
+        let macs = Set(arrayStrings(rule["client_macs"]).map(normalize))
+        return macs.contains(mac)
+    }
+
+    private func findMatchingRule(for payload: [String: Any], in rules: [[String: Any]]) -> [String: Any]? {
+        let payloadType = normalize(payload["target_type"] ?? payload["targetType"])
+        let payloadMacs = Set(arrayStrings(payload["client_macs"]).map(normalize))
+        let payloadSchedule = scheduleSignature(payload["schedule"])
+        guard !payloadMacs.isEmpty else { return nil }
+        return rules.first(where: { rule in
+            guard isSimpleAppRule(rule) else { return false }
+            let ruleType = normalize(rule["target_type"] ?? rule["targetType"])
+            if ruleType != payloadType { return false }
+            let ruleMacs = Set(arrayStrings(rule["client_macs"]).map(normalize))
+            if ruleMacs != payloadMacs { return false }
+            return scheduleSignature(rule["schedule"]) == payloadSchedule
+        })
+    }
+
+    private func mergeRule(existing: [String: Any], incoming: [String: Any]) -> [String: Any] {
+        var merged = existing
+        for key in ["name", "type", "target_type", "client_macs", "network_ids", "source_devices", "source_networks", "schedule"] {
+            if let value = incoming[key] {
+                merged[key] = value
+            }
+        }
+
+        let targetType = normalize(incoming["target_type"] ?? incoming["targetType"])
+        if targetType == "app_id" {
+            let ids = Set(arrayStrings(existing["app_ids"]) + arrayStrings(incoming["app_ids"]))
+            merged["app_ids"] = Array(ids).sorted()
+            merged["app_category_ids"] = []
+        } else if targetType == "app_category" {
+            let ids = Set(arrayStrings(existing["app_category_ids"]) + arrayStrings(incoming["app_category_ids"]))
+            merged["app_category_ids"] = Array(ids).sorted()
+            merged["app_ids"] = []
+        }
+        return merged
+    }
+
+    private func arrayStrings(_ any: Any?) -> [String] {
+        guard let array = any as? [Any] else { return [] }
+        return array.map { String(describing: $0) }.filter { !$0.isEmpty }
+    }
+
+    private func scheduleSignature(_ value: Any?) -> String {
+        guard let schedule = value as? [String: Any],
+              let data = try? JSONSerialization.data(withJSONObject: schedule, options: [.sortedKeys]),
+              let text = String(data: data, encoding: .utf8)
+        else {
+            return "{}"
+        }
+        return text
+    }
+
+    private func parseCSV(_ value: String?) -> [String] {
+        (value ?? "")
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    private func resolveClient(_ selector: String, in clients: [[String: Any]]) throws -> [String: Any] {
+        try resolveSingle(selector, in: clients, kind: "client") { item in
+            [
+                item["id"] as? String,
+                item["name"] as? String,
+                item["displayName"] as? String,
+                item["clientName"] as? String,
+                item["hostname"] as? String,
+                item["hostName"] as? String,
+                item["dhcpHostname"] as? String,
+                item["mac"] as? String,
+                item["macAddress"] as? String,
+                item["ip"] as? String,
+                item["ipAddress"] as? String,
+            ].compactMap { $0 }
+        }
+    }
+
+    private func resolveNamedSelectors(_ selectors: [String], in rows: [[String: Any]], kind: String) throws -> [[String: Any]] {
+        var output: [[String: Any]] = []
+        var seen: Set<String> = []
+        for selector in selectors {
+            let resolved = try resolveSingle(selector, in: rows, kind: kind) { item in
+                [item["id"] as? String, item["name"] as? String].compactMap { $0 }
+            }
+            let key = normalize(resolved["id"] as? String ?? resolved["name"] as? String ?? UUID().uuidString)
+            if !seen.contains(key) {
+                output.append(resolved)
+                seen.insert(key)
+            }
+        }
+        return output
+    }
+
+    private func resolveSingle(
+        _ selector: String,
+        in rows: [[String: Any]],
+        kind: String,
+        candidates: ([String: Any]) -> [String]
+    ) throws -> [String: Any] {
+        let query = normalize(selector)
+        let exact = rows.filter { row in candidates(row).map(normalize).contains(query) }
+        if exact.count == 1, let one = exact.first { return one }
+        if exact.count > 1 {
+            throw LLMError.invalidResponse("Ambiguous \(kind) selector '\(selector)'.")
+        }
+        let contains = rows.filter { row in candidates(row).map(normalize).contains(where: { $0.contains(query) }) }
+        if contains.count == 1, let one = contains.first { return one }
+        if contains.count > 1 {
+            throw LLMError.invalidResponse("Ambiguous \(kind) selector '\(selector)'; multiple matches.")
+        }
+        throw LLMError.invalidResponse("\(kind.capitalized) selector '\(selector)' did not match.")
+    }
+
+    private func isClientAllowed(_ client: [String: Any]) -> Bool {
+        let fields = [
+            client["id"] as? String,
+            client["name"] as? String,
+            client["displayName"] as? String,
+            client["clientName"] as? String,
+            client["hostname"] as? String,
+            client["hostName"] as? String,
+            client["dhcpHostname"] as? String,
+            client["mac"] as? String,
+            client["macAddress"] as? String,
+            client["ip"] as? String,
+            client["ipAddress"] as? String,
+        ].compactMap { normalize($0) }
+
+        for allow in allowedClientSelectors {
+            if fields.contains(where: { $0 == allow || $0.contains(allow) }) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func clientDisplayName(_ client: [String: Any]) -> String {
+        (client["name"] as? String)
+            ?? (client["displayName"] as? String)
+            ?? (client["clientName"] as? String)
+            ?? (client["hostname"] as? String)
+            ?? (client["hostName"] as? String)
+            ?? (client["dhcpHostname"] as? String)
+            ?? (client["ip"] as? String)
+            ?? (client["ipAddress"] as? String)
+            ?? "unknown-client"
+    }
+
+    private func normalize(_ value: Any?) -> String {
+        String(describing: value ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
     }
 }
 

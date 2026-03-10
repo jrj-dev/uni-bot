@@ -32,6 +32,8 @@ This repo contains two parts:
   - ping-style reachability probe
   - DNS forward/reverse resolution
   - traceroute path analysis
+- Client inventory tools:
+  - `list_clients` supports `include_inactive=true` to return known/inactive clients when supported.
 - WAN and change-analysis tools in app:
   - WAN/gateway health snapshot (`wan_gateway_health`)
   - SIEM config/admin/security diff summary (`config_diff_from_logs`)
@@ -39,6 +41,10 @@ This repo contains two parts:
   - explicit approval token required before execution
   - strict read-only command allowlist
 - Loki/Grafana tools for event logs and security/network event analysis.
+- App-block tools in app:
+  - `plan_client_app_block` + `apply_client_app_block` with allowlist guardrails
+  - smart upsert behavior (update existing rule when `client + target_type + schedule` match; create otherwise)
+  - `remove_client_app_block` to delete full client blocks or remove selected app/category IDs.
 - LM Studio model loading in Settings via `/v1/models` with model picker.
 - Reasoning-output controls:
   - Prompt instruction to keep reasoning internal for LM Studio.
@@ -73,6 +79,10 @@ This repo contains two parts:
 - Dedicated alarm-analysis skill module (`skills/unifi-alarm-manager-local`) for Loki queries scoped to `job="unifi_siem"` with client/IP/device narrowing.
 - Dedicated SIEM security-analysis skill module (`skills/unifi-siem-security-local`) for security-focused Loki queries scoped to `job="unifi_siem"`.
 - UniFi event poller module (`skills/unifi-event-poller`) that polls UniFi events every 30s and forwards new events to Loki (supports endpoint auto-discovery plus explicit `UNIFI_EVENT_PATH` override).
+- App-block CLI helper (`app_block.py`) now supports:
+  - inactive-inclusive client resolution for plan/apply/remove
+  - upsert behavior on apply (target type + schedule aware)
+  - explicit remove flow (`remove-block`) for pruning app/category blocks.
 
 ## Project Layout
 
@@ -175,9 +185,10 @@ python3 skills/unifi-network-local/scripts/app_block.py list-apps --search zoom
 python3 skills/unifi-network-local/scripts/app_block.py list-categories --search streaming
 python3 skills/unifi-network-local/scripts/app_block.py plan-block --site-ref default --client "Kid iPad" --app YouTube --category "Streaming Media" --schedule-mode daily --start-time 20:00 --end-time 22:00
 python3 skills/unifi-network-local/scripts/app_block.py apply-block --site-ref default --client "Kid iPad" --app YouTube --category "Streaming Media" --schedule-mode daily --start-time 20:00 --end-time 22:00
+python3 skills/unifi-network-local/scripts/app_block.py remove-block --site-ref default --client "Kid iPad" --app YouTube
 ```
 
-The app-block helper now targets UniFi's private CyberSecure `trafficrules` API and emits `simple_app_block_payloads` derived from the live UI model. It uses separate `APP_ID` and `APP_CATEGORY` rule types, so mixed app-plus-category requests are submitted as two rules.
+The app-block helper now targets UniFi's private CyberSecure `trafficrules` API and emits `simple_app_block_payloads` derived from the live UI model. It uses separate `APP_ID` and `APP_CATEGORY` rule types, so mixed app-plus-category requests are submitted as two rules. Apply uses upsert behavior: it updates an existing rule only when target type and schedule match for the same client; otherwise it creates a new rule. Remove can delete all app-block rules for a client, or selectively remove app/category IDs from matching rules.
 
 Loki:
 
