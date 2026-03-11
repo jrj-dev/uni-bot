@@ -25,6 +25,7 @@ final class AppState: ObservableObject {
     @AppStorage("shareDeviceContextWithLLM") var shareDeviceContextWithLLM: Bool = false
     @AppStorage("hideReasoningOutput") var hideReasoningOutput: Bool = true
     @AppStorage("darkModeEnabled") var darkModeEnabled: Bool = true
+    @AppStorage("hapticFeedbackEnabled") var hapticFeedbackEnabled: Bool = true
     @AppStorage("grafanaLokiURL") var grafanaLokiURL: String = ""
     @AppStorage("appBlockAllowedClients") var appBlockAllowedClients: String = ""
     @AppStorage("appBlockAllowedClientNameMap") var appBlockAllowedClientNameMap: String = ""

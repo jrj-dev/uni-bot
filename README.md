@@ -21,6 +21,7 @@ This repo contains two parts:
 - Voice support:
   - Local iOS speech
   - OpenAI neural TTS
+  - Optional response haptics on reply completion
 - Secure secret storage in iOS Keychain:
   - UniFi key
   - UniFi SSH username + private key
@@ -160,6 +161,7 @@ Notes:
    - Configure UniFi URL + key.
    - Configure preferred LLM provider + key.
    - For LM Studio: set base URL/key, then use `Load Models` and select one.
+   - Optional: enable or disable `Response Haptics` for a subtle completion tap when replies finish.
 
 ## Local-Network Constraints
 

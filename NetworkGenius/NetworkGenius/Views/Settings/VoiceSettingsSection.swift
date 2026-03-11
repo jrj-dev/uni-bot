@@ -6,6 +6,11 @@ struct VoiceSettingsSection: View {
     var body: some View {
         Section("Voice") {
             Toggle("Voice Responses", isOn: $viewModel.voiceEnabled)
+            Toggle("Response Haptics", isOn: $viewModel.hapticFeedbackEnabled)
+
+            Text("Plays a subtle haptic when a chat reply finishes.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
             if viewModel.voiceEnabled {
                 Picker("Speech Engine", selection: $viewModel.ttsProvider) {

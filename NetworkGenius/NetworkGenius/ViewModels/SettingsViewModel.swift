@@ -44,6 +44,7 @@ final class SettingsViewModel: ObservableObject {
     @Published var shareDeviceContextWithLLM: Bool = false
     @Published var hideReasoningOutput: Bool = true
     @Published var darkModeEnabled: Bool = true
+    @Published var hapticFeedbackEnabled: Bool = true
     @Published var clientModificationApprovals: [ClientModificationApproval] = []
     @Published var isLoadingClientModificationApprovals = false
     @Published var clientModificationApprovalResult: String?
@@ -107,6 +108,7 @@ final class SettingsViewModel: ObservableObject {
         shareDeviceContextWithLLM = appState.shareDeviceContextWithLLM
         hideReasoningOutput = appState.hideReasoningOutput
         darkModeEnabled = appState.darkModeEnabled
+        hapticFeedbackEnabled = appState.hapticFeedbackEnabled
         clientModificationApprovals = appState.clientModificationApprovals
             .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
         unifiAPIKey = KeychainHelper.loadString(key: .unifiAPIKey) ?? ""
@@ -152,6 +154,7 @@ final class SettingsViewModel: ObservableObject {
         appState.shareDeviceContextWithLLM = shareDeviceContextWithLLM
         appState.hideReasoningOutput = hideReasoningOutput
         appState.darkModeEnabled = darkModeEnabled
+        appState.hapticFeedbackEnabled = hapticFeedbackEnabled
         appState.clientModificationApprovals = clientModificationApprovals
 
         let normalizedUniFiKey = normalizedKey(unifiAPIKey)

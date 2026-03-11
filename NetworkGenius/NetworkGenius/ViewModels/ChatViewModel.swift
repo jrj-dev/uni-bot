@@ -4,6 +4,25 @@ import UIKit
 import SwiftData
 
 @MainActor
+protocol HapticFeedbackPerforming {
+    func prepareForResponseNotification()
+    func notifyResponseReturned()
+}
+
+@MainActor
+final class SystemHapticFeedbackPerformer: HapticFeedbackPerforming {
+    private let generator = UINotificationFeedbackGenerator()
+
+    func prepareForResponseNotification() {
+        generator.prepare()
+    }
+
+    func notifyResponseReturned() {
+        generator.notificationOccurred(.success)
+    }
+}
+
+@MainActor
 final class ChatViewModel: ObservableObject {
     @Published var messages: [ChatMessage] = []
     @Published var isLoading = false
@@ -24,6 +43,7 @@ final class ChatViewModel: ObservableObject {
     private var activeLMStudioBaseURL: String = ""
     private var activeLMStudioModel: String = ""
     private var activeLMStudioMaxPromptChars: Int = 4098
+    var hapticFeedback: HapticFeedbackPerforming = SystemHapticFeedbackPerformer()
     var speechService: SpeechService?
     private var startupValidationAttempted = false
 
@@ -154,6 +174,9 @@ final class ChatViewModel: ObservableObject {
         trimHistory()
         persistConversationState()
         debugLog("User message queued (\(text.count) chars)", category: "Chat")
+        if appState?.hapticFeedbackEnabled == true {
+            hapticFeedback.prepareForResponseNotification()
+        }
 
         isLoading = true
         defer { isLoading = false; currentToolName = nil }
@@ -198,6 +221,9 @@ final class ChatViewModel: ObservableObject {
             trimHistory()
             persistConversationState()
             speechService?.speak(finalText)
+            if appState?.hapticFeedbackEnabled == true {
+                hapticFeedback.notifyResponseReturned()
+            }
             debugLog("Assistant response delivered (\(finalText.count) chars)", category: "Chat")
 
         } catch {
