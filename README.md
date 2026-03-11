@@ -55,6 +55,7 @@ This repo contains two parts:
 
 - Query UniFi local integration APIs (read workflows).
 - Named queries for common resources (clients/devices/firewall/VPN/etc).
+- Legacy/private read-only UniFi wrappers for event feed, WLAN config, and network config.
 - Snapshot capture and summary workflows for offline analysis.
 - Loki query helpers:
   - `query_range`
@@ -181,6 +182,9 @@ UniFi:
 python3 skills/unifi-network-local/scripts/unifi_request.py GET /proxy/network/integration/v1/sites
 python3 skills/unifi-network-local/scripts/named_query.py clients --site-ref default
 python3 skills/unifi-network-local/scripts/query_summary.py overview --site-ref default
+python3 skills/unifi-network-local/scripts/named_query.py events --site-ref default
+python3 skills/unifi-network-local/scripts/named_query.py wlanconf --site-ref default
+python3 skills/unifi-network-local/scripts/named_query.py networkconf --site-ref default
 python3 skills/unifi-network-local/scripts/app_block.py list-apps --search zoom
 python3 skills/unifi-network-local/scripts/app_block.py list-categories --search streaming
 python3 skills/unifi-network-local/scripts/app_block.py plan-block --site-ref default --client "Kid iPad" --app YouTube --category "Streaming Media" --schedule-mode daily --start-time 20:00 --end-time 22:00

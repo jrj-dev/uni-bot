@@ -118,6 +118,7 @@ final class SpeechService: ObservableObject {
 
     // MARK: - Permissions
 
+    /// Requests microphone and speech-recognition permissions needed for push-to-talk.
     func requestPermissions() async {
         let micStatus = await withCheckedContinuation { continuation in
             AVAudioApplication.requestRecordPermission { granted in
@@ -136,6 +137,7 @@ final class SpeechService: ObservableObject {
 
     // MARK: - Speech-to-Text
 
+    /// Starts a new speech-recognition session and begins streaming microphone audio.
     func startListening() {
         guard !isListening, micPermissionGranted, speechPermissionGranted else { return }
         guard let recognizer, recognizer.isAvailable else { return }
@@ -194,6 +196,7 @@ final class SpeechService: ObservableObject {
         isListening = true
     }
 
+    /// Stops the active recognition session and returns the final transcribed text.
     func stopListening() async -> String {
         recognitionRequest?.endAudio()
         // Stop UI transcript mirroring immediately.
@@ -205,6 +208,7 @@ final class SpeechService: ObservableObject {
         return finalText
     }
 
+    /// Tears down the current recognition request, task, and audio tap.
     private func cleanupRecognition() {
         audioEngine.stop()
         if hasInputTap {
@@ -219,6 +223,7 @@ final class SpeechService: ObservableObject {
 
     // MARK: - Text-to-Speech
 
+    /// Speaks a response using either OpenAI TTS or the local system voice.
     func speak(_ text: String) {
         guard voiceEnabled, !text.isEmpty else { return }
 
@@ -241,6 +246,7 @@ final class SpeechService: ObservableObject {
         }
     }
 
+    /// Speaks text with AVSpeechSynthesizer when cloud TTS is unavailable or disabled.
     private func speakLocal(_ text: String) {
         let utterance = AVSpeechUtterance(string: text)
         utterance.rate = defaultSpeechRate
@@ -258,6 +264,7 @@ final class SpeechService: ObservableObject {
         synthesizer.speak(utterance)
     }
 
+    /// Stops any in-flight speech playback and resets speaking state.
     func stopSpeaking() {
         if cloudSpeakTask != nil || audioPlayer != nil || synthesizer.isSpeaking || isSpeaking {
             debugLog(
@@ -278,6 +285,7 @@ final class SpeechService: ObservableObject {
         isSpeaking = false
     }
 
+    /// Requests OpenAI TTS audio, retries transient failures, and plays the returned clip.
     private func speakWithOpenAI(_ text: String) async {
         pendingCloudFallbackText = text
         let cloudInput = trimmedCloudTTSInput(from: text)
@@ -333,6 +341,7 @@ final class SpeechService: ObservableObject {
         }
     }
 
+    /// Trims and bounds text before it is sent to the cloud TTS endpoint.
     private func trimmedCloudTTSInput(from text: String) -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count > openAITTSMaxCharacters else { return trimmed }
@@ -344,6 +353,7 @@ final class SpeechService: ObservableObject {
         return prefix
     }
 
+    /// Fetches synthesized speech audio from the OpenAI TTS API.
     private func fetchOpenAITTSAudio(apiKey: String, voice: String, input: String) async throws -> Data {
         guard let url = URL(string: "https://api.openai.com/v1/audio/speech") else {
             throw URLError(.badURL)
@@ -428,6 +438,7 @@ final class SpeechService: ObservableObject {
         }
     }
 
+    /// Configures the audio player and starts playback of OpenAI TTS data.
     private func playOpenAITTSAudio(_ data: Data) throws {
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playback, mode: .default, options: [.duckOthers])
@@ -449,6 +460,7 @@ final class SpeechService: ObservableObject {
         debugLog("OpenAI TTS playback started", category: "Speech")
     }
 
+    /// Runs the OpenAI TTS request with an explicit timeout wrapper.
     private func dataForOpenAITTS(_ request: URLRequest, timeoutSeconds: TimeInterval) async throws -> (Data, URLResponse) {
         try await withThrowingTaskGroup(of: (Data, URLResponse).self) { group in
             group.addTask {
@@ -464,6 +476,7 @@ final class SpeechService: ObservableObject {
         }
     }
 
+    /// Returns true when an error represents a timeout condition.
     private func isTimeoutError(_ error: Error) -> Bool {
         let nsError = error as NSError
         if nsError.domain == NSURLErrorDomain, nsError.code == URLError.timedOut.rawValue {
@@ -475,10 +488,12 @@ final class SpeechService: ObservableObject {
         return false
     }
 
+    /// Returns true when an OpenAI TTS HTTP status should be retried.
     private func shouldRetryOpenAITTS(statusCode: Int) -> Bool {
         statusCode == 429 || statusCode == 408 || statusCode == 500 || statusCode == 502 || statusCode == 503 || statusCode == 504
     }
 
+    /// Calculates the backoff delay before retrying an OpenAI TTS request.
     private func openAITTSRetryDelay(statusCode: Int?, headers: [AnyHashable: Any], attempt: Int) -> TimeInterval {
         if statusCode == 429 {
             if let retryAfter = headerValue("Retry-After", headers: headers),
@@ -496,6 +511,7 @@ final class SpeechService: ObservableObject {
         return base + jitter
     }
 
+    /// Looks up an HTTP header value case-insensitively.
     private func headerValue(_ key: String, headers: [AnyHashable: Any]) -> String? {
         for (headerKey, value) in headers {
             if String(describing: headerKey).caseInsensitiveCompare(key) == .orderedSame {
@@ -505,6 +521,7 @@ final class SpeechService: ObservableObject {
         return nil
     }
 
+    /// Parses a Retry-After header value expressed in seconds.
     private func parseRetryAfterSeconds(_ value: String) -> TimeInterval? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         if let seconds = Double(trimmed) { return seconds }
@@ -517,6 +534,7 @@ final class SpeechService: ObservableObject {
         return date.timeIntervalSinceNow
     }
 
+    /// Parses a reset-duration header value expressed in seconds.
     private func parseResetDurationSeconds(_ value: String) -> TimeInterval? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if let seconds = Double(trimmed) { return seconds }
@@ -526,6 +544,7 @@ final class SpeechService: ObservableObject {
         return nil
     }
 
+    /// Returns true when the OpenAI TTS network error is likely transient.
     private func isRetryableOpenAITTSNetworkError(_ error: Error) -> Bool {
         guard let urlError = error as? URLError else { return false }
         switch urlError.code {
@@ -536,6 +555,7 @@ final class SpeechService: ObservableObject {
         }
     }
 
+    /// Returns the preferred local system voice for on-device speech fallback.
     private func defaultVoice() -> AVSpeechSynthesisVoice? {
         let englishVoices = AVSpeechSynthesisVoice.speechVoices().filter { $0.language.hasPrefix("en") }
         if let premiumUS = englishVoices.first(where: { $0.language == "en-US" && $0.quality == .premium }) {
@@ -554,9 +574,11 @@ private final class SynthDelegate: NSObject, AVSpeechSynthesizerDelegate, @unche
     let onFinish: () -> Void
     init(onFinish: @escaping () -> Void) { self.onFinish = onFinish }
 
+    /// Resets state after the local speech synthesizer finishes or is cancelled.
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
         onFinish()
     }
+    /// Resets state after the local speech synthesizer finishes or is cancelled.
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
         onFinish()
     }
@@ -571,11 +593,13 @@ private final class PlayerDelegate: NSObject, AVAudioPlayerDelegate, @unchecked 
         self.onDecodeError = onDecodeError
     }
 
+    /// Clears playback state after OpenAI TTS audio finishes.
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         debugLog("OpenAI TTS playback finished (success=\(flag))", category: "Speech")
         onFinish(flag)
     }
 
+    /// Clears playback state when the audio player cannot decode TTS audio.
     func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
         if let error {
             let nsError = error as NSError

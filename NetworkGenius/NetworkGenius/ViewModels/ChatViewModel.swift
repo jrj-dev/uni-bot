@@ -36,7 +36,11 @@ final class ChatViewModel: ObservableObject {
         You are Network Genius, a helpful assistant for home network troubleshooting and management. \
         You have access to tools that query a local UniFi Network console. Use them to answer questions \
         about the user's network with real data. When tools are unavailable (off-network), provide \
-        general networking advice based on your knowledge.
+        general networking advice based on your knowledge. \
+        Prefer compact ranking and resolver tools over raw list tools whenever the user asks for \
+        the top, bottom, most, least, slowest, fastest, weakest, busiest, or highest item. \
+        Only call broad list tools like list_clients or list_devices when a narrow ranking or \
+        targeted lookup tool cannot answer the question.
         """
     }()
     private let agentInstructions: String = {
@@ -48,6 +52,7 @@ final class ChatViewModel: ObservableObject {
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }()
 
+    /// Injects shared app dependencies into the chat view model and restores persisted state.
     func configure(appState: AppState, networkMonitor: NetworkMonitor, modelContext: ModelContext) {
         self.appState = appState
         self.networkMonitor = networkMonitor
@@ -96,6 +101,7 @@ final class ChatViewModel: ObservableObject {
         activeLMStudioMaxPromptChars = appState.lmStudioMaxPromptChars
     }
 
+    /// Creates a new conversation thread and resets the current chat state.
     func startNewChat() async {
         guard let persistenceStore else { return }
         let thread = persistenceStore.createConversation()
@@ -108,6 +114,7 @@ final class ChatViewModel: ObservableObject {
         refreshConversationSummaries()
     }
 
+    /// Loads a saved conversation into the current chat session.
     func loadConversation(id: UUID) async {
         guard let persistenceStore else { return }
         guard let restored = persistenceStore.loadConversation(id: id) else { return }
@@ -120,6 +127,7 @@ final class ChatViewModel: ObservableObject {
         refreshConversationSummaries()
     }
 
+    /// Appends a user message, runs the active LLM flow, and records the assistant response.
     func sendMessage(_ text: String, retryingMessageID: UUID? = nil) async {
         refreshLLMServiceIfNeeded()
         guard canUseSelectedLLMOnCurrentNetwork() else {
@@ -198,6 +206,7 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    /// Replays a failed or previous user message through the current LLM flow.
     func retryMessage(_ messageID: UUID) async {
         guard let message = messages.first(where: { $0.id == messageID && $0.role == .user && $0.sendFailed }) else {
             return
@@ -205,6 +214,7 @@ final class ChatViewModel: ObservableObject {
         await sendMessage(message.content, retryingMessageID: message.id)
     }
 
+    /// Shows the one-time onboarding intro after settings have been validated.
     func showValidatedIntroIfNeeded() async {
         guard !startupValidationAttempted else { return }
         startupValidationAttempted = true
@@ -248,6 +258,7 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    /// Returns the tool schema set allowed for the current network and settings state.
     private func toolsForCurrentState() -> [[String: Any]] {
         guard let networkMonitor, networkMonitor.isOnNetwork else {
             return []
@@ -259,6 +270,7 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    /// Trims older conversation history before sending it to the LLM.
     private func trimHistory() {
         if llmMessages.count > maxHistoryMessages {
             llmMessages = Array(llmMessages.suffix(maxHistoryMessages))
@@ -266,6 +278,7 @@ final class ChatViewModel: ObservableObject {
         llmMessages = normalizedLLMHistory(llmMessages)
     }
 
+    /// Returns true when the selected LLM can be used from the current network context.
     private func canUseSelectedLLMOnCurrentNetwork() -> Bool {
         guard let appState else { return true }
         guard appState.llmProvider == .lmStudio else { return true }
@@ -273,6 +286,7 @@ final class ChatViewModel: ObservableObject {
         return networkMonitor.isWiFiConnected || networkMonitor.isVPNConnected
     }
 
+    /// Builds the system prompt that describes the current environment and guardrails.
     private func buildSystemPrompt() -> String {
         let injectedPrefix: String
         if agentInstructions.isEmpty {
@@ -302,6 +316,7 @@ final class ChatViewModel: ObservableObject {
         return systemPrompt
     }
 
+    /// Cleans assistant output before it is shown in the chat transcript.
     private func sanitizeAssistantText(_ text: String) -> String {
         guard appState?.hideReasoningOutput == true else {
             return text
@@ -342,6 +357,7 @@ final class ChatViewModel: ObservableObject {
         return cleaned
     }
 
+    /// Restores the most recent saved conversation into the active chat.
     private func restoreMostRecentConversation() {
         guard let persistenceStore else { return }
         if let restored = persistenceStore.loadMostRecentConversation() {
@@ -357,6 +373,7 @@ final class ChatViewModel: ObservableObject {
         refreshConversationSummaries()
     }
 
+    /// Reloads the conversation sidebar summaries from persisted storage.
     private func refreshConversationSummaries() {
         guard let persistenceStore else { return }
         conversationSummaries = persistenceStore.listConversations().map {
@@ -364,6 +381,7 @@ final class ChatViewModel: ObservableObject {
         }
     }
 
+    /// Persists the current thread, transcript, and LLM history to storage.
     private func persistConversationState() {
         guard let persistenceStore else { return }
         let thread: ConversationThread
@@ -377,6 +395,7 @@ final class ChatViewModel: ObservableObject {
         refreshConversationSummaries()
     }
 
+    /// Marks a user message as failed when the send flow does not complete.
     private func markUserMessageFailed(_ messageID: UUID) {
         guard let index = messages.firstIndex(where: { $0.id == messageID && $0.role == .user }) else {
             return
@@ -384,6 +403,7 @@ final class ChatViewModel: ObservableObject {
         messages[index].sendFailed = true
     }
 
+    /// Normalizes stored LLM history before it is sent back to a provider.
     private func normalizedLLMHistory(_ input: [LLMMessage]) -> [LLMMessage] {
         var output: [LLMMessage] = []
         var pendingToolCallIDs: Set<String> = []
@@ -414,6 +434,7 @@ final class ChatViewModel: ObservableObject {
         return output
     }
 
+    /// Rebuilds the active LLM service when provider settings have changed.
     private func refreshLLMServiceIfNeeded() {
         guard let appState else { return }
         let providerChanged = activeLLMProvider != appState.llmProvider
@@ -459,6 +480,7 @@ struct ConversationSummary: Identifiable {
 }
 
 private extension String {
+    /// Replaces regex matches in a string while preserving unmatched text.
     func replacingRegex(_ pattern: String, with template: String) -> String {
         guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
             return self
@@ -478,6 +500,7 @@ private final class ChatPersistenceStore {
         self.context = context
     }
 
+    /// Returns the saved conversation threads ordered for display.
     func listConversations() -> [ConversationThread] {
         let descriptor = FetchDescriptor<ConversationThread>(
             sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
@@ -485,16 +508,19 @@ private final class ChatPersistenceStore {
         return (try? context.fetch(descriptor)) ?? []
     }
 
+    /// Loads the most recently updated saved conversation thread.
     func loadMostRecentConversation() -> RestoredConversation? {
         guard let thread = listConversations().first else { return nil }
         return restoredConversation(from: thread)
     }
 
+    /// Loads a saved conversation into the current chat session.
     func loadConversation(id: UUID) -> RestoredConversation? {
         guard let thread = thread(id: id) else { return nil }
         return restoredConversation(from: thread)
     }
 
+    /// Returns the saved conversation thread for the given identifier.
     func thread(id: UUID) -> ConversationThread? {
         var descriptor = FetchDescriptor<ConversationThread>(
             predicate: #Predicate { $0.id == id }
@@ -504,6 +530,7 @@ private final class ChatPersistenceStore {
     }
 
     @discardableResult
+    /// Creates a new empty conversation thread model.
     func createConversation() -> ConversationThread {
         let thread = ConversationThread()
         context.insert(thread)
@@ -511,6 +538,7 @@ private final class ChatPersistenceStore {
         return thread
     }
 
+    /// Saves a conversation thread together with its chat and LLM message history.
     func save(thread: ConversationThread, messages: [ChatMessage], llmMessages: [LLMMessage]) {
         thread.updatedAt = Date()
         thread.title = title(from: messages)
@@ -538,6 +566,7 @@ private final class ChatPersistenceStore {
         try? context.save()
     }
 
+    /// Converts a stored thread model back into the active chat view state.
     private func restoredConversation(from thread: ConversationThread) -> RestoredConversation {
         let uiMessages = thread.messages
             .sorted(by: { $0.timestamp < $1.timestamp })
@@ -581,6 +610,7 @@ private final class ChatPersistenceStore {
         )
     }
 
+    /// Builds a short conversation title from the earliest meaningful chat messages.
     private func title(from messages: [ChatMessage]) -> String {
         if let firstUser = messages.first(where: { $0.role == .user })?.content.trimmingCharacters(in: .whitespacesAndNewlines),
            !firstUser.isEmpty
@@ -630,6 +660,7 @@ private struct DeviceContextProvider {
         }
     }
 
+    /// Builds a serializable snapshot of the current chat state.
     static func snapshot(
         appState: AppState?,
         networkMonitor: NetworkMonitor?
@@ -650,6 +681,7 @@ private struct DeviceContextProvider {
         )
     }
 
+    /// Returns the device's current local IPv4 interface addresses.
     private static func localIPAddresses() -> [String] {
         var addresses: [String] = []
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
@@ -689,11 +721,13 @@ private struct DeviceContextProvider {
         return Array(Set(addresses)).sorted()
     }
 
+    /// Redacts the UniFi console host for inclusion in the system prompt.
     private static func maskedConsoleHost(from baseURL: String) -> String {
         guard let host = URL(string: baseURL)?.host else { return "unknown" }
         return maskedIP(host)
     }
 
+    /// Redacts the host portion of an IP address for prompt-safe display.
     private static func maskedIP(_ value: String) -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "unknown" }

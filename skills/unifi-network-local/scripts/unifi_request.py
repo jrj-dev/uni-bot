@@ -17,6 +17,7 @@ from typing import Any, TextIO
 READ_ONLY_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 
+# Parses CLI arguments for raw UniFi API requests.
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Send a request to a local UniFi Network API endpoint."
@@ -64,12 +65,14 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+# Returns a required value or exits with a helpful error when it is missing.
 def require(value: str | None, env_name: str) -> str:
     if value:
         return value
     raise SystemExit(f"missing required value: set {env_name} or pass the matching flag")
 
 
+# Parses repeated key=value query arguments into URL query tuples.
 def parse_query(items: list[str]) -> list[tuple[str, str]]:
     pairs: list[tuple[str, str]] = []
     for item in items:
@@ -80,6 +83,7 @@ def parse_query(items: list[str]) -> list[tuple[str, str]]:
     return pairs
 
 
+# Builds the final request URL from the base URL, path, and query items.
 def build_url(base_url: str, path: str, query_items: list[tuple[str, str]]) -> str:
     if not path.startswith("/"):
         raise SystemExit("path must begin with '/'")
@@ -90,6 +94,7 @@ def build_url(base_url: str, path: str, query_items: list[tuple[str, str]]) -> s
     return url
 
 
+# Parses an optional JSON request body into encoded bytes.
 def parse_body(json_body: str | None) -> bytes | None:
     if json_body is None:
         return None
@@ -100,6 +105,7 @@ def parse_body(json_body: str | None) -> bytes | None:
     return json.dumps(parsed).encode("utf-8")
 
 
+# Builds an SSL context that optionally allows self-signed certificates.
 def build_context(insecure: bool) -> ssl.SSLContext | None:
     if not insecure:
         return None
@@ -109,6 +115,7 @@ def build_context(insecure: bool) -> ssl.SSLContext | None:
     return context
 
 
+# Pretty-prints a JSON response body, or falls back to raw text.
 def print_response(body: bytes, stream: TextIO = sys.stdout) -> None:
     text = body.decode("utf-8", errors="replace")
     try:
@@ -122,6 +129,7 @@ def print_response(body: bytes, stream: TextIO = sys.stdout) -> None:
     stream.write("\n")
 
 
+# Dispatches the raw UniFi request CLI flow.
 def main() -> int:
     args = parse_args()
     method = args.method.upper()

@@ -72,6 +72,7 @@ final class SettingsViewModel: ObservableObject {
         return URLSession(configuration: config)
     }()
 
+    /// Loads persisted settings from AppState into the editable view-model fields.
     func load(from appState: AppState) {
         consoleURL = appState.consoleURL
         grafanaLokiURL = appState.grafanaLokiURL
@@ -113,6 +114,7 @@ final class SettingsViewModel: ObservableObject {
         openAICloudVoice = UserDefaults.standard.string(forKey: "openAICloudVoice") ?? "alloy"
     }
 
+    /// Writes the current settings fields back into AppState and persisted storage.
     func save(to appState: AppState) {
         appState.consoleURL = UniFiAPIClient.normalizeBaseURL(consoleURL)
         appState.grafanaLokiURL = UniFiAPIClient.normalizeBaseURL(grafanaLokiURL)
@@ -204,6 +206,7 @@ final class SettingsViewModel: ObservableObject {
         }
     }
 
+    /// Tests the configured UniFi connection and updates the settings UI with the result.
     func testConnection() async {
         isTesting = true
         connectionTestResult = nil
@@ -232,6 +235,7 @@ final class SettingsViewModel: ObservableObject {
         }
     }
 
+    /// Tests the API key for the currently selected LLM provider.
     func testSelectedLLMKey() async {
         isTestingLLMKey = true
         llmKeyTestResult = nil
@@ -256,6 +260,7 @@ final class SettingsViewModel: ObservableObject {
         }
     }
 
+    /// Loads and resolves the client options shown in the guardrail settings UI.
     func loadGuardrailClients() async {
         isLoadingGuardrailClients = true
         guardrailClientsLoadResult = nil
@@ -357,6 +362,7 @@ final class SettingsViewModel: ObservableObject {
         }
     }
 
+    /// Adds a resolved client option to the guardrail allowlist.
     func addGuardrailClient(_ option: GuardrailClientOption) {
         guard !appBlockAllowedClientSelectors.contains(option.selector) else { return }
         appBlockAllowedClientSelectors.append(option.selector)
@@ -365,16 +371,19 @@ final class SettingsViewModel: ObservableObject {
         appBlockAllowedClientNameMap[option.selector] = option.title
     }
 
+    /// Removes a client selector from the guardrail allowlist.
     func removeGuardrailClient(selector: String) {
         appBlockAllowedClientSelectors.removeAll { $0 == selector }
         appBlockAllowedClients = appBlockAllowedClientSelectors.joined(separator: ", ")
         appBlockAllowedClientNameMap.removeValue(forKey: selector)
     }
 
+    /// Returns the cached display name for a saved guardrail client selector.
     func cachedGuardrailClientName(for selector: String) -> String? {
         appBlockAllowedClientNameMap[selector]
     }
 
+    /// Tests the configured Grafana Loki connection and updates the settings UI.
     func testLokiConnection() async {
         isTestingLokiConnection = true
         lokiConnectionTestResult = nil
@@ -445,6 +454,7 @@ final class SettingsViewModel: ObservableObject {
         }
     }
 
+    /// Fetches the LM Studio model list for the settings picker.
     func loadLMStudioModels() async {
         isLoadingLMStudioModels = true
         lmStudioModelListResult = nil
@@ -470,6 +480,7 @@ final class SettingsViewModel: ObservableObject {
         }
     }
 
+    /// Runs a small chat request against LM Studio to validate end-to-end connectivity.
     func testLMStudioChat() async {
         isTestingLMStudioChat = true
         lmStudioChatTestResult = nil
@@ -522,6 +533,7 @@ final class SettingsViewModel: ObservableObject {
         }
     }
 
+    /// Runs a lightweight OpenAI request to validate the configured API key.
     private func testOpenAIKey() async throws {
         let apiKey = normalizedKey(openaiAPIKey)
         guard !apiKey.isEmpty else {
@@ -537,6 +549,7 @@ final class SettingsViewModel: ObservableObject {
         try validateHTTP(response: response, data: data)
     }
 
+    /// Builds the display option used for a saved guardrail client selector.
     private static func guardrailOption(from row: [String: Any]) -> GuardrailClientOption? {
         let name = (
             (row["name"] as? String)
@@ -578,6 +591,7 @@ final class SettingsViewModel: ObservableObject {
         )
     }
 
+    /// Returns true when the client row appears to be currently active.
     private static func detectClientIsActive(row: [String: Any]) -> Bool {
         if let value = row["isOnline"] as? Bool { return value }
         if let value = row["online"] as? Bool { return value }
@@ -598,12 +612,14 @@ final class SettingsViewModel: ObservableObject {
         return false
     }
 
+    /// Splits a comma-separated settings value into trimmed entries.
     private func parseCSV(_ csv: String) -> [String] {
         csv.split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
     }
 
+    /// Parses the stored selector-to-name mapping JSON used by guardrail settings.
     private func parseNameMapJSON(_ raw: String) -> [String: String] {
         guard let data = raw.data(using: .utf8),
               let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -621,6 +637,7 @@ final class SettingsViewModel: ObservableObject {
         return map
     }
 
+    /// Encodes the selector-to-name mapping JSON used by guardrail settings.
     private func encodeNameMapJSON(_ map: [String: String]) -> String {
         guard let data = try? JSONSerialization.data(withJSONObject: map, options: [.sortedKeys]),
               let string = String(data: data, encoding: .utf8)
@@ -630,6 +647,7 @@ final class SettingsViewModel: ObservableObject {
         return string
     }
 
+    /// Resolves the site path used when loading guardrail client choices.
     private func resolveSiteForGuardrailClientLoad(
         client: UniFiAPIClient,
         configuredSiteID: String
@@ -665,6 +683,7 @@ final class SettingsViewModel: ObservableObject {
         return (id, (reference?.isEmpty == false) ? reference! : "default")
     }
 
+    /// Fetches client rows from a UniFi endpoint used by guardrail settings.
     private func fetchGuardrailClientRows(path: String, client: UniFiAPIClient) async throws -> [[String: Any]] {
         if path.contains("/proxy/network/api/") {
             let payload = try await client.getJSON(path: path)
@@ -673,6 +692,7 @@ final class SettingsViewModel: ObservableObject {
         return try await client.getAllPages(path: path)
     }
 
+    /// Loads active client rows for the saved guardrail selectors.
     private func loadActiveClientRowsBySelector(
         client: UniFiAPIClient,
         siteIDPath: String
@@ -694,6 +714,7 @@ final class SettingsViewModel: ObservableObject {
         }
     }
 
+    /// Extracts row dictionaries from either a raw array payload or a paginated UniFi response wrapper.
     private func rowsFromAnyPayload(_ payload: Any) -> [[String: Any]] {
         if let rows = payload as? [[String: Any]] {
             return rows
@@ -709,6 +730,7 @@ final class SettingsViewModel: ObservableObject {
         return []
     }
 
+    /// Builds the stable selector string stored for a guardrail client row.
     private static func selectorForClientRow(_ row: [String: Any]) -> String? {
         let hostname = (
             (row["hostname"] as? String)
@@ -729,6 +751,7 @@ final class SettingsViewModel: ObservableObject {
         return nil
     }
 
+    /// Merges multiple client result sets into one deduplicated list.
     private static func mergeClientRows(primary: [String: Any], fallback: [String: Any]) -> [String: Any] {
         var merged = primary
         for (key, value) in fallback {
@@ -742,6 +765,7 @@ final class SettingsViewModel: ObservableObject {
         return merged
     }
 
+    /// Runs a lightweight Claude request to validate the configured API key.
     private func testClaudeKey() async throws {
         let apiKey = normalizedKey(claudeAPIKey)
         guard !apiKey.isEmpty else {
@@ -758,6 +782,7 @@ final class SettingsViewModel: ObservableObject {
         try validateHTTP(response: response, data: data)
     }
 
+    /// Runs a lightweight LM Studio request to validate the configured endpoint.
     private func testLMStudioKey() async throws {
         let apiKey = normalizedKey(lmStudioAPIKey)
         guard !apiKey.isEmpty else {
@@ -780,6 +805,7 @@ final class SettingsViewModel: ObservableObject {
         try validateHTTP(response: response, data: data)
     }
 
+    /// Chooses a model ID for LM Studio chat tests.
     private func resolveLMStudioModelForChat() async throws -> String {
         let selected = normalizedKey(lmStudioModel)
         let models = try await fetchLMStudioModels()
@@ -798,6 +824,7 @@ final class SettingsViewModel: ObservableObject {
         return fallback
     }
 
+    /// Fetches the list of model IDs exposed by LM Studio.
     private func fetchLMStudioModels() async throws -> [String] {
         let apiKey = normalizedKey(lmStudioAPIKey)
         guard !apiKey.isEmpty else {
@@ -829,6 +856,7 @@ final class SettingsViewModel: ObservableObject {
         return Array(Set(ids)).sorted()
     }
 
+    /// Throws a user-facing error when an HTTP response is missing or unsuccessful.
     private func validateHTTP(response: URLResponse, data: Data) throws {
         guard let http = response as? HTTPURLResponse else {
             throw LLMError.invalidResponse("missing HTTP response")
@@ -846,6 +874,7 @@ final class SettingsViewModel: ObservableObject {
         }
     }
 
+    /// Builds a validated LM Studio endpoint URL for the requested path.
     private func lmStudioURL(path: String) throws -> URL {
         let normalizedBase = UniFiAPIClient.normalizeBaseURL(lmStudioBaseURL)
         guard var components = URLComponents(string: normalizedBase) else {
@@ -869,6 +898,7 @@ final class SettingsViewModel: ObservableObject {
         return url
     }
 
+    /// Resolves a hostname to an IPv4 address when direct IP fallback is needed.
     private func resolvedIPv4Address(for host: String) -> String? {
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
@@ -912,14 +942,17 @@ final class SettingsViewModel: ObservableObject {
         return nil
     }
 
+    /// Returns true when the host already looks like an IPv4 address.
     private func looksLikeIPv4(_ host: String) -> Bool {
         host.split(separator: ".").count == 4 && host.allSatisfy { $0.isNumber || $0 == "." }
     }
 
+    /// Normalizes an API key string by trimming surrounding whitespace.
     private func normalizedKey(_ key: String) -> String {
         key.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Converts LM Studio transport failures into clearer settings-screen error text.
     private func friendlyLMStudioError(_ error: Error) -> String {
         let nsError = error as NSError
         if nsError.domain == NSURLErrorDomain && nsError.code == URLError.timedOut.rawValue {

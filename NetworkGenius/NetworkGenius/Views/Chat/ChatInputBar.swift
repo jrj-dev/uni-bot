@@ -70,6 +70,7 @@ struct ChatInputBar: View {
         }
     }
 
+    /// Sends the current text-entry value and clears the input field.
     private func sendCurrentText() {
         guard !isLoading else { return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -83,6 +84,7 @@ struct ChatInputBar: View {
         speechService.micPermissionGranted && speechService.speechPermissionGranted
     }
 
+    /// Starts push-to-talk recording when the current settings allow it.
     private func beginPushToTalkIfNeeded() {
         guard !isLoading else { return }
         guard !isPushToTalkActive else { return }
@@ -92,6 +94,7 @@ struct ChatInputBar: View {
         speechService.startListening()
     }
 
+    /// Stops push-to-talk recording and submits the captured transcript.
     private func endPushToTalkAndSubmit() {
         guard isPushToTalkActive else { return }
         isPushToTalkActive = false

@@ -3,6 +3,7 @@ import Foundation
 final class ClaudeLLMService: LLMService {
     private let model = "claude-sonnet-4-20250514"
 
+    /// Sends the current conversation and tool schema to Claude and normalizes the response.
     func sendMessages(_ messages: [LLMMessage], tools: [[String: Any]], systemPrompt: String) async throws -> LLMResponse {
         guard let rawKey = KeychainHelper.loadString(key: .claudeAPIKey) else {
             throw LLMError.missingAPIKey
@@ -72,6 +73,7 @@ final class ClaudeLLMService: LLMService {
         )
     }
 
+    /// Converts an internal chat message into Claude's message payload shape.
     private func claudeMessage(_ msg: LLMMessage) -> [String: Any] {
         switch msg.role {
         case .user:

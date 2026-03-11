@@ -11,6 +11,7 @@ import subprocess
 import sys
 
 
+# Parses CLI arguments for standalone client diagnostics.
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run local client diagnostics (ping or DNS resolution)."
@@ -39,6 +40,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+# Runs a ping probe against the requested target.
 def run_ping(target: str, count: int, timeout: int) -> int:
     cmd = [
         "ping",
@@ -63,6 +65,7 @@ def run_ping(target: str, count: int, timeout: int) -> int:
     return 0 if result.returncode == 0 else 1
 
 
+# Runs forward and reverse DNS lookups for the requested target.
 def run_dns(target: str) -> int:
     try:
         ip = ipaddress.ip_address(target)
@@ -123,6 +126,7 @@ def run_dns(target: str) -> int:
     return 0 if ips else 1
 
 
+# Runs an HTTP probe against the requested target and path.
 def run_http(target: str, scheme: str, path: str, timeout: int) -> int:
     import urllib.error
     import urllib.request
@@ -164,6 +168,7 @@ def run_http(target: str, scheme: str, path: str, timeout: int) -> int:
         return 1
 
 
+# Runs TCP port checks against the requested target.
 def run_ports(target: str, ports_csv: str, timeout: int) -> int:
     ports = []
     for item in ports_csv.split(","):
@@ -206,6 +211,7 @@ def run_ports(target: str, ports_csv: str, timeout: int) -> int:
     return 0 if all_open else 1
 
 
+# Dispatches the selected client diagnostics command.
 def main() -> int:
     args = parse_args()
     if args.action == "ping":

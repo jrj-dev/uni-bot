@@ -38,6 +38,7 @@ final class LMStudioLLMService: LLMService {
         }
     }
 
+    /// Sends the current conversation to an LM Studio-compatible OpenAI endpoint.
     func sendMessages(_ messages: [LLMMessage], tools: [[String: Any]], systemPrompt: String) async throws -> LLMResponse {
         guard !baseURL.isEmpty else {
             throw LLMError.invalidResponse("LM Studio base URL is not configured.")
@@ -116,6 +117,7 @@ final class LMStudioLLMService: LLMService {
         }
     }
 
+    /// Executes the LM Studio request and validates the HTTP response.
     private func executeRequest(
         url: URL,
         apiKey: String,
@@ -208,6 +210,7 @@ final class LMStudioLLMService: LLMService {
         }
     }
 
+    /// Converts an internal chat message into the OpenAI-style payload LM Studio expects.
     private func openAIMessage(_ msg: LLMMessage) -> [String: Any] {
         switch msg.role {
         case .user:
@@ -242,6 +245,7 @@ final class LMStudioLLMService: LLMService {
         }
     }
 
+    /// Shrinks the outgoing chat history when LM Studio cannot handle the full context.
     private func reducedContextMessages(from messages: [[String: Any]]) -> [[String: Any]] {
         guard !messages.isEmpty else { return messages }
         let system = messages.first
@@ -252,6 +256,7 @@ final class LMStudioLLMService: LLMService {
         return tail
     }
 
+    /// Keeps the newest messages that fit within the configured character budget.
     private func cappedMessagesByCharacterCount(_ messages: [[String: Any]], maxChars: Int) -> [[String: Any]] {
         guard !messages.isEmpty else { return messages }
         var working = messages
@@ -287,12 +292,14 @@ final class LMStudioLLMService: LLMService {
         return working
     }
 
+    /// Counts the total user-visible characters across a list of chat messages.
     private func totalContentCharacters(in messages: [[String: Any]]) -> Int {
         messages.reduce(0) { partial, message in
             partial + ((message["content"] as? String)?.count ?? 0)
         }
     }
 
+    /// Resolves a hostname to an IPv4 address when direct IP fallback is needed.
     private func resolvedIPv4Address(for host: String) -> String? {
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
@@ -337,10 +344,12 @@ final class LMStudioLLMService: LLMService {
         return nil
     }
 
+    /// Returns true when the host already looks like an IPv4 address.
     private func looksLikeIPv4(_ host: String) -> Bool {
         host.split(separator: ".").count == 4 && host.allSatisfy { $0.isNumber || $0 == "." }
     }
 
+    /// Builds a validated LM Studio endpoint URL for the requested path.
     private func lmStudioURL(path: String) throws -> URL {
         guard var components = URLComponents(string: baseURL) else {
             throw LLMError.invalidResponse("Invalid LM Studio base URL.")
@@ -366,6 +375,7 @@ final class LMStudioLLMService: LLMService {
         return url
     }
 
+    /// Selects a usable LM Studio model before sending a chat request.
     private func preflightModelSelection(apiKey: String) async throws -> String {
         let modelsURL = try lmStudioURL(path: "/v1/models")
         var request = URLRequest(url: modelsURL)
@@ -430,6 +440,7 @@ final class LMStudioLLMService: LLMService {
         }
     }
 
+    /// Runs a network request with an explicit timeout wrapper.
     private func dataWithTimeout(for request: URLRequest, timeoutSeconds: TimeInterval) async throws -> (Data, URLResponse) {
         try await withThrowingTaskGroup(of: (Data, URLResponse).self) { group in
             group.addTask {
@@ -445,6 +456,7 @@ final class LMStudioLLMService: LLMService {
         }
     }
 
+    /// Returns true when an error represents a timeout condition.
     private func isTimeoutError(_ error: Error) -> Bool {
         if let urlError = error as? URLError, urlError.code == .timedOut {
             return true
@@ -453,6 +465,7 @@ final class LMStudioLLMService: LLMService {
         return nsError.domain == NSURLErrorDomain && nsError.code == URLError.timedOut.rawValue
     }
 
+    /// Returns true when a network error is likely transient.
     private func isRetryableNetworkError(_ error: Error) -> Bool {
         guard let urlError = error as? URLError else { return false }
         switch urlError.code {

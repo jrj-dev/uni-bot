@@ -16,6 +16,7 @@ CAPTURE_SCRIPT = SCRIPT_DIR / "capture_snapshot.py"
 ANALYZE_SCRIPT = SCRIPT_DIR / "analyze_snapshot.py"
 
 
+# Parses CLI arguments for the live summary helper.
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Capture and analyze a fresh UniFi snapshot."
@@ -33,6 +34,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+# Runs a child command and returns its standard output as text.
 def run_command(args: list[str]) -> str:
     result = subprocess.run(args, capture_output=True, text=True, check=False)
     if result.returncode != 0:
@@ -41,6 +43,7 @@ def run_command(args: list[str]) -> str:
     return result.stdout.strip()
 
 
+# Dispatches the requested live-summary mode.
 def main() -> int:
     args = parse_args()
     if not args.site_id:

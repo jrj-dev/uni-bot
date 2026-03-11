@@ -12,6 +12,7 @@ import urllib.error
 import urllib.request
 
 
+# Parses CLI arguments for a minimal LM Studio chat request.
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Query a local LM Studio chat/completions endpoint."
@@ -70,12 +71,14 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+# Returns a required value or exits with a helpful error when it is missing.
 def require(value: str | None, env_name: str) -> str:
     if value:
         return value
     raise SystemExit(f"missing required value: set {env_name} or pass the matching flag")
 
 
+# Builds an SSL context that optionally allows self-signed certificates.
 def context_for(insecure: bool) -> ssl.SSLContext | None:
     if not insecure:
         return None
@@ -85,6 +88,7 @@ def context_for(insecure: bool) -> ssl.SSLContext | None:
     return context
 
 
+# Runs a one-shot LM Studio chat request for connection testing.
 def main() -> int:
     args = parse_args()
     base_url = require(args.base_url, "LM_STUDIO_BASE_URL").rstrip("/")
@@ -129,6 +133,7 @@ def main() -> int:
             sys.stdout.write("\n")
         return 0
 
+    # Fetches the model IDs currently exposed by the LM Studio server.
     def fetch_model_ids() -> list[str]:
         url = f"{base_url}/v1/models"
         request = urllib.request.Request(

@@ -4,6 +4,7 @@ final class OpenAILLMService: LLMService {
     private let model = "gpt-4o"
     private let maxAttempts = 4
 
+    /// Sends the current conversation and tool schema to the OpenAI Chat Completions API.
     func sendMessages(_ messages: [LLMMessage], tools: [[String: Any]], systemPrompt: String) async throws -> LLMResponse {
         guard let rawKey = KeychainHelper.loadString(key: .openaiAPIKey) else {
             throw LLMError.missingAPIKey
@@ -39,6 +40,7 @@ final class OpenAILLMService: LLMService {
         return try await sendWithRetry(request: request)
     }
 
+    /// Converts an internal chat message into the OpenAI message payload shape.
     private func openAIMessage(_ msg: LLMMessage) -> [String: Any] {
         switch msg.role {
         case .user:
@@ -73,6 +75,7 @@ final class OpenAILLMService: LLMService {
         }
     }
 
+    /// Submits an OpenAI request with retry handling for throttling and transient failures.
     private func sendWithRetry(request: URLRequest) async throws -> LLMResponse {
         var attempt = 1
         while true {
@@ -120,6 +123,7 @@ final class OpenAILLMService: LLMService {
         }
     }
 
+    /// Parses the OpenAI response into the app's normalized LLM response model.
     private func parseLLMResponse(_ data: Data) throws -> LLMResponse {
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let choices = json["choices"] as? [[String: Any]],
@@ -152,10 +156,12 @@ final class OpenAILLMService: LLMService {
         )
     }
 
+    /// Returns true when an OpenAI HTTP status should be retried.
     private func shouldRetry(statusCode: Int) -> Bool {
         statusCode == 429 || statusCode == 408 || statusCode == 500 || statusCode == 502 || statusCode == 503 || statusCode == 504
     }
 
+    /// Calculates the backoff delay before retrying an OpenAI request.
     private func retryDelay(statusCode: Int?, headers: [AnyHashable: Any], attempt: Int) -> TimeInterval {
         if statusCode == 429 {
             if let retryAfter = headerValue("Retry-After", headers: headers),
@@ -173,6 +179,7 @@ final class OpenAILLMService: LLMService {
         return base + jitter
     }
 
+    /// Looks up an HTTP header value case-insensitively.
     private func headerValue(_ key: String, headers: [AnyHashable: Any]) -> String? {
         for (headerKey, value) in headers {
             if String(describing: headerKey).caseInsensitiveCompare(key) == .orderedSame {
@@ -182,6 +189,7 @@ final class OpenAILLMService: LLMService {
         return nil
     }
 
+    /// Parses a Retry-After header value expressed in seconds.
     private func parseRetryAfterSeconds(_ value: String) -> TimeInterval? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         if let seconds = Double(trimmed) { return seconds }
@@ -194,6 +202,7 @@ final class OpenAILLMService: LLMService {
         return date.timeIntervalSinceNow
     }
 
+    /// Parses a reset-duration header value expressed in seconds.
     private func parseResetDurationSeconds(_ value: String) -> TimeInterval? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if let seconds = Double(trimmed) { return seconds }
@@ -203,6 +212,7 @@ final class OpenAILLMService: LLMService {
         return nil
     }
 
+    /// Returns true when a network error is likely transient.
     private func isRetryableNetworkError(_ error: Error) -> Bool {
         guard let urlError = error as? URLError else { return false }
         switch urlError.code {

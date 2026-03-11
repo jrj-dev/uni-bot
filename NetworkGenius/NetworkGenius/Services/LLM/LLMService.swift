@@ -1,6 +1,7 @@
 import Foundation
 
 protocol LLMService {
+    /// Sends messages.
     func sendMessages(_ messages: [LLMMessage], tools: [[String: Any]], systemPrompt: String) async throws -> LLMResponse
 }
 
@@ -32,6 +33,7 @@ final class DebugLogStore: ObservableObject {
 
     private init() {}
 
+    /// Appends a sanitized debug log entry to the in-memory log buffer.
     func add(_ message: String, category: String) {
         let entry = DebugLogEntry(timestamp: Date(), category: category, message: message)
         DispatchQueue.main.async {
@@ -42,6 +44,7 @@ final class DebugLogStore: ObservableObject {
         }
     }
 
+    /// Clears all buffered debug log entries.
     func clear() {
         DispatchQueue.main.async {
             self.entries.removeAll()
@@ -49,6 +52,7 @@ final class DebugLogStore: ObservableObject {
     }
 }
 
+/// Writes a sanitized debug message to the shared in-memory logger.
 func debugLog(_ message: String, category: String = "App") {
     let sanitized = LogSanitizer.sanitize(message)
     DebugLogStore.shared.add(sanitized, category: category)
@@ -58,6 +62,7 @@ func debugLog(_ message: String, category: String = "App") {
 }
 
 private enum LogSanitizer {
+    /// Redacts secrets and sensitive headers from debug log text.
     static func sanitize(_ text: String) -> String {
         var output = text
         let patterns: [(String, String)] = [
@@ -74,6 +79,7 @@ private enum LogSanitizer {
         return output
     }
 
+    /// Replaces regex matches in a string while preserving unmatched text.
     private static func replacingRegexMatches(
         in text: String,
         pattern: String,

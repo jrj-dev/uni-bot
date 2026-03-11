@@ -31,6 +31,7 @@ final class NetworkMonitor: ObservableObject {
         (isWiFiConnected || isVPNConnected) && isConsoleReachable
     }
 
+    /// Probes the UniFi console host and updates the current on-network state.
     func probeConsole(baseURL: String, allowSelfSigned: Bool) async {
         let normalizedBaseURL = UniFiAPIClient.normalizeBaseURL(baseURL)
         guard let url = URL(string: normalizedBaseURL) else {
@@ -54,6 +55,7 @@ final class NetworkMonitor: ObservableObject {
         }
     }
 
+    /// Detects whether the device currently has an active VPN interface.
     nonisolated private static func detectActiveVPN(on path: NWPath) -> Bool {
         guard path.status == .satisfied else { return false }
         guard path.usesInterfaceType(.other) else { return false }
@@ -62,6 +64,7 @@ final class NetworkMonitor: ObservableObject {
         }
     }
 
+    /// Returns true when likely vpninterface.
     nonisolated private static func isLikelyVPNInterface(_ interfaceName: String) -> Bool {
         interfaceName.hasPrefix("utun")
             || interfaceName.hasPrefix("ipsec")

@@ -14,6 +14,7 @@ enum KeychainHelper {
     }
 
     @discardableResult
+    /// Stores a value in the iOS Keychain under the provided application key.
     static func save(key: Key, data: Data) -> Bool {
         delete(key: key)
         let query: [String: Any] = [
@@ -26,11 +27,13 @@ enum KeychainHelper {
     }
 
     @discardableResult
+    /// Stores a value in the iOS Keychain under the provided application key.
     static func save(key: Key, string: String) -> Bool {
         guard let data = string.data(using: .utf8) else { return false }
         return save(key: key, data: data)
     }
 
+    /// Loads raw data from the iOS Keychain for the provided application key.
     static func load(key: Key) -> Data? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -44,12 +47,14 @@ enum KeychainHelper {
         return result as? Data
     }
 
+    /// Loads a UTF-8 string value from the iOS Keychain.
     static func loadString(key: Key) -> String? {
         guard let data = load(key: key) else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
     @discardableResult
+    /// Deletes a stored Keychain item for the provided application key.
     static func delete(key: Key) -> Bool {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -58,6 +63,7 @@ enum KeychainHelper {
         return SecItemDelete(query as CFDictionary) == errSecSuccess
     }
 
+    /// Returns true when a Keychain item exists for the provided application key.
     static func exists(key: Key) -> Bool {
         load(key: key) != nil
     }

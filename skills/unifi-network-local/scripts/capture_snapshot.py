@@ -41,6 +41,7 @@ REQUEST_SCRIPT = SCRIPT_DIR / "unifi_request.py"
 ALL_ENDPOINT_NAMES = [name for name, _ in (*GLOBAL_ENDPOINTS, *SITE_SCOPED_ENDPOINTS)]
 
 
+# Parses CLI arguments for UniFi snapshot capture.
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Capture a standard UniFi troubleshooting snapshot."
@@ -75,6 +76,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+# Parses custom endpoint aliases supplied on the command line.
 def parse_custom_endpoints(items: list[str]) -> list[tuple[str, str]]:
     parsed: list[tuple[str, str]] = []
     for item in items:
@@ -89,6 +91,7 @@ def parse_custom_endpoints(items: list[str]) -> list[tuple[str, str]]:
     return parsed
 
 
+# Returns the endpoint list that should be included in the snapshot.
 def selected_endpoints(
     include: list[str] | None, custom: list[tuple[str, str]], site_id: str | None
 ) -> Iterable[tuple[str, str]]:
@@ -117,6 +120,7 @@ def selected_endpoints(
     return chosen
 
 
+# Runs one snapshot request and decodes the JSON response.
 def run_request(path: str, insecure: bool) -> dict:
     cmd = [
         sys.executable,
@@ -135,12 +139,14 @@ def run_request(path: str, insecure: bool) -> dict:
         raise RuntimeError(f"non-JSON response for {path}") from exc
 
 
+# Checks that the required UniFi request environment variables are present.
 def ensure_env() -> None:
     missing = [name for name in ("UNIFI_BASE_URL", "UNIFI_API_KEY") if not os.environ.get(name)]
     if missing:
         raise SystemExit(f"missing required environment: {', '.join(missing)}")
 
 
+# Dispatches the snapshot capture flow.
 def main() -> int:
     args = parse_args()
     ensure_env()

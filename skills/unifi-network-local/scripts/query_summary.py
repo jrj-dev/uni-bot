@@ -17,6 +17,7 @@ SITE_SUMMARIES = {"overview", "clients", "networks", "wifi", "firewall", "securi
 SITE_SUMMARIES = SITE_SUMMARIES | {"devices", "pending-devices", "guest-access"}
 
 
+# Parses CLI arguments for higher-level UniFi summary commands.
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run a higher-level UniFi summary using read-only named queries."
@@ -39,6 +40,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+# Returns the UUID site ID required for summary queries.
 def require_site_id(args: argparse.Namespace) -> str:
     if args.site_id:
         return args.site_id
@@ -56,6 +58,7 @@ def require_site_id(args: argparse.Namespace) -> str:
     raise SystemExit(f"site reference not found: {args.site_ref}")
 
 
+# Loads a named UniFi query through the existing CLI wrapper.
 def load_named_query(query: str, *, site_id: str | None = None, insecure: bool) -> dict:
     # Higher-level summaries deliberately build on the existing CLI wrapper so the
     # request rules, pagination behavior, and auth handling stay in one place.
@@ -72,6 +75,7 @@ def load_named_query(query: str, *, site_id: str | None = None, insecure: bool) 
     return json.loads(result.stdout)
 
 
+# Extracts row dictionaries from the standard UniFi response envelope.
 def rows(payload: dict) -> list[dict]:
     data = payload.get("data", [])
     if isinstance(data, list):
@@ -79,10 +83,12 @@ def rows(payload: dict) -> list[dict]:
     return []
 
 
+# Returns the best display name available for a UniFi row.
 def safe_name(item: dict, fallback: str) -> str:
     return item.get("name") or item.get("model") or fallback
 
 
+# Prints a compact overall network summary.
 def summarize_overview(site_id: str, insecure: bool) -> int:
     sites = rows(load_named_query("sites", insecure=insecure))
     devices = rows(load_named_query("devices", site_id=site_id, insecure=insecure))
@@ -109,6 +115,7 @@ def summarize_overview(site_id: str, insecure: bool) -> int:
     return 0
 
 
+# Prints a compact client inventory summary.
 def summarize_clients(site_id: str, insecure: bool) -> int:
     devices = rows(load_named_query("devices", site_id=site_id, insecure=insecure))
     clients = rows(load_named_query("clients", site_id=site_id, insecure=insecure))
@@ -132,6 +139,7 @@ def summarize_clients(site_id: str, insecure: bool) -> int:
     return 0
 
 
+# Prints a compact network and VLAN summary.
 def summarize_networks(site_id: str, insecure: bool) -> int:
     networks = rows(load_named_query("networks", site_id=site_id, insecure=insecure))
     print("Networks")
@@ -143,6 +151,7 @@ def summarize_networks(site_id: str, insecure: bool) -> int:
     return 0
 
 
+# Prints a compact WiFi summary.
 def summarize_wifi(site_id: str, insecure: bool) -> int:
     networks = rows(load_named_query("networks", site_id=site_id, insecure=insecure))
     wifi = rows(load_named_query("wifi-broadcasts", site_id=site_id, insecure=insecure))
@@ -165,6 +174,7 @@ def summarize_wifi(site_id: str, insecure: bool) -> int:
     return 0
 
 
+# Prints a compact firewall summary.
 def summarize_firewall(site_id: str, insecure: bool) -> int:
     policies = rows(load_named_query("firewall-policies", site_id=site_id, insecure=insecure))
     zones = rows(load_named_query("firewall-zones", site_id=site_id, insecure=insecure))
@@ -191,6 +201,7 @@ def summarize_firewall(site_id: str, insecure: bool) -> int:
     return 0
 
 
+# Prints a compact security summary.
 def summarize_security(site_id: str, insecure: bool) -> int:
     acl_rules = rows(load_named_query("acl-rules", site_id=site_id, insecure=insecure))
     dns_policies = rows(load_named_query("dns-policies", site_id=site_id, insecure=insecure))
@@ -209,6 +220,7 @@ def summarize_security(site_id: str, insecure: bool) -> int:
     return 0
 
 
+# Prints a compact UniFi device inventory summary.
 def summarize_devices(site_id: str, insecure: bool) -> int:
     devices = rows(load_named_query("devices", site_id=site_id, insecure=insecure))
     by_state = Counter(item.get("state", "UNKNOWN") for item in devices)
@@ -229,6 +241,7 @@ def summarize_devices(site_id: str, insecure: bool) -> int:
     return 0
 
 
+# Prints a compact summary of pending UniFi devices.
 def summarize_pending_devices(site_id: str, insecure: bool) -> int:
     del site_id
     pending = rows(load_named_query("pending-devices", insecure=insecure))
@@ -239,6 +252,7 @@ def summarize_pending_devices(site_id: str, insecure: bool) -> int:
     return 0
 
 
+# Prints a compact guest access summary.
 def summarize_guest_access(site_id: str, insecure: bool) -> int:
     clients = rows(load_named_query("clients", site_id=site_id, insecure=insecure))
     wifi = rows(load_named_query("wifi-broadcasts", site_id=site_id, insecure=insecure))
@@ -262,6 +276,7 @@ def summarize_guest_access(site_id: str, insecure: bool) -> int:
     return 0
 
 
+# Dispatches the selected summary mode.
 def main() -> int:
     args = parse_args()
     site_id = require_site_id(args)

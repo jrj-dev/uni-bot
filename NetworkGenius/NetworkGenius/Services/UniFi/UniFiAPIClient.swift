@@ -28,6 +28,7 @@ final class UniFiAPIClient {
         self.allowSelfSigned = allowSelfSigned
     }
 
+    /// Normalizes a user-supplied UniFi base URL before it is used for API requests.
     static func normalizeBaseURL(_ raw: String) -> String {
         var value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if value.hasPrefix("https//") {
@@ -49,6 +50,7 @@ final class UniFiAPIClient {
         return value
     }
 
+    /// Returns true when the host string looks like a malformed IPv4 address.
     private static func isInvalidIPv4Address(_ host: String) -> Bool {
         let parts = host.split(separator: ".", omittingEmptySubsequences: false)
         guard parts.count == 4 else { return false }
@@ -60,6 +62,7 @@ final class UniFiAPIClient {
         return false
     }
 
+    /// Performs an authenticated GET request against the UniFi API and returns the raw response body.
     func get(path: String, queryItems: [URLQueryItem] = []) async throws -> Data {
         guard let apiKey = KeychainHelper.loadString(key: .unifiAPIKey) else {
             throw UniFiAPIError.missingAPIKey
@@ -112,19 +115,23 @@ final class UniFiAPIClient {
         }
     }
 
+    /// Performs a GET request and decodes the response body as JSON.
     func getJSON(path: String, queryItems: [URLQueryItem] = []) async throws -> Any {
         let data = try await get(path: path, queryItems: queryItems)
         return try JSONSerialization.jsonObject(with: data)
     }
 
+    /// Performs an authenticated POST request with a JSON body and decodes the JSON response.
     func postJSON(path: String, body: [String: Any]) async throws -> Any {
         try await sendJSON(method: "POST", path: path, body: body)
     }
 
+    /// Performs an authenticated POST request with a JSON body and decodes the JSON response.
     func postJSON(path: String, body: [[String: Any]]) async throws -> Any {
         try await sendJSON(method: "POST", path: path, body: body)
     }
 
+    /// Sends a JSON request with UniFi authentication and returns the decoded JSON response.
     private func sendJSON(method: String, path: String, body: Any) async throws -> Any {
         // Shared JSON transport so app-block writes can send either a single object
         // or the full collection array through the same authenticated request path.
@@ -158,6 +165,7 @@ final class UniFiAPIClient {
         return try JSONSerialization.jsonObject(with: data)
     }
 
+    /// Performs an authenticated PUT request with a JSON object body.
     func putJSON(path: String, body: [String: Any]) async throws -> Any {
         guard let apiKey = KeychainHelper.loadString(key: .unifiAPIKey) else {
             throw UniFiAPIError.missingAPIKey
@@ -190,6 +198,7 @@ final class UniFiAPIClient {
         return try JSONSerialization.jsonObject(with: data)
     }
 
+    /// Performs an authenticated DELETE request and decodes the JSON response.
     func deleteJSON(path: String) async throws -> Any {
         guard let apiKey = KeychainHelper.loadString(key: .unifiAPIKey) else {
             throw UniFiAPIError.missingAPIKey
@@ -220,6 +229,7 @@ final class UniFiAPIClient {
         return try JSONSerialization.jsonObject(with: data)
     }
 
+    /// Walks a paginated UniFi endpoint until all rows have been fetched and merged.
     func getAllPages(path: String, pageSize: Int = 100) async throws -> [[String: Any]] {
         var allItems: [[String: Any]] = []
         var offset = 0
@@ -255,6 +265,7 @@ final class UniFiAPIClient {
         return allItems
     }
 
+    /// Builds a shortened JSON preview string for request and response logging.
     private func previewJSON(_ value: Any, limit: Int = 800) -> String {
         guard JSONSerialization.isValidJSONObject(value),
               let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]),

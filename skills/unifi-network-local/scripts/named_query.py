@@ -32,6 +32,11 @@ SITE_ID_QUERIES = {
     "site-to-site-vpn": "/proxy/network/integration/v1/sites/{site_id}/vpn/site-to-site-tunnels",
     "radius-profiles": "/proxy/network/integration/v1/sites/{site_id}/radius/profiles",
 }
+SITE_REF_QUERIES = {
+    "events": "/proxy/network/api/s/{site_ref}/stat/event",
+    "wlanconf": "/proxy/network/api/s/{site_ref}/rest/wlanconf",
+    "networkconf": "/proxy/network/api/s/{site_ref}/rest/networkconf",
+}
 RESOURCE_ID_QUERIES = {
     "device": (
         ("site_id", "device_id"),
@@ -90,15 +95,40 @@ GLOBAL_QUERIES = {
     "countries": "/proxy/network/integration/v1/countries",
 }
 QUERY_NAMES = tuple(
-    list(GLOBAL_QUERIES) + list(SITE_ID_QUERIES) + list(RESOURCE_ID_QUERIES)
+    list(GLOBAL_QUERIES) + list(SITE_ID_QUERIES) + list(SITE_REF_QUERIES) + list(RESOURCE_ID_QUERIES)
 )
 NON_PAGINATED_QUERIES = {
     "firewall-policies-ordering",
     "acl-rules-ordering",
     *RESOURCE_ID_QUERIES.keys(),
 }
+SANITIZED_QUERIES = {"events", "wlanconf", "networkconf"}
+REDACTED_VALUE = "<redacted>"
+SENSITIVE_KEY_FRAGMENTS = (
+    "passphrase",
+    "password",
+    "token",
+    "secret",
+    "private_key",
+    "privatekey",
+    "ssh_key",
+    "certificate",
+    "cert",
+    "fingerprint",
+    "hash",
+    "sha",
+    "api_key",
+    "apikey",
+    "psk",
+    "sae_psk",
+    "auth_key",
+    "encryption_key",
+    "x_ssh_password",
+    "x_iapp_key",
+)
 
 
+# Parses CLI arguments for named UniFi API queries.
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run a named read-only UniFi Network integration query."
@@ -158,14 +188,18 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+# Returns true when a named query requires a site-scoped path.
 def uses_site_scope(query_name: str) -> bool:
     if query_name in SITE_ID_QUERIES:
+        return True
+    if query_name in SITE_REF_QUERIES:
         return True
     if query_name in RESOURCE_ID_QUERIES:
         return "site_id" in RESOURCE_ID_QUERIES[query_name][0]
     return False
 
 
+# Loads the full UniFi site list used for site-ref resolution.
 def load_sites(insecure: bool) -> list[dict]:
     payload = run_json_query(GLOBAL_QUERIES["sites"], [], insecure)
     data = payload.get("data", [])
@@ -174,6 +208,7 @@ def load_sites(insecure: bool) -> list[dict]:
     return []
 
 
+# Resolves a human-friendly site reference into the UUID site ID the API expects.
 def resolve_site_id(args: argparse.Namespace) -> str | None:
     if not uses_site_scope(args.query):
         return None
@@ -196,6 +231,29 @@ def resolve_site_id(args: argparse.Namespace) -> str | None:
     raise SystemExit(f"site reference not found: {site_ref}")
 
 
+# Resolves a UUID site ID or human-friendly site-ref into the legacy site path reference.
+def resolve_site_ref(args: argparse.Namespace) -> str | None:
+    if args.query not in SITE_REF_QUERIES:
+        return None
+    site_ref = getattr(args, "site_ref", None)
+    if site_ref:
+        return site_ref
+
+    site_id = getattr(args, "site_id", None)
+    if not site_id:
+        raise SystemExit(f"{args.query} requires --site-id or --site-ref")
+
+    sites = load_sites(args.insecure)
+    for site in sites:
+        if site.get("id") == site_id:
+            resolved_site_ref = site.get("internalReference")
+            if isinstance(resolved_site_ref, str) and resolved_site_ref:
+                return resolved_site_ref
+            break
+    raise SystemExit(f"site id not found or missing internalReference: {site_id}")
+
+
+# Maps a named query onto the concrete UniFi API path it should call.
 def resolve_path(args: argparse.Namespace) -> str:
     if args.query in GLOBAL_QUERIES:
         return GLOBAL_QUERIES[args.query]
@@ -203,6 +261,10 @@ def resolve_path(args: argparse.Namespace) -> str:
     if args.query in SITE_ID_QUERIES:
         site_id = resolve_site_id(args)
         return SITE_ID_QUERIES[args.query].format(site_id=site_id)
+
+    if args.query in SITE_REF_QUERIES:
+        site_ref = resolve_site_ref(args)
+        return SITE_REF_QUERIES[args.query].format(site_ref=site_ref)
 
     required_fields, template = RESOURCE_ID_QUERIES[args.query]
     values: dict[str, str] = {}
@@ -217,6 +279,7 @@ def resolve_path(args: argparse.Namespace) -> str:
     return template.format(**values)
 
 
+# Parses repeated key=value CLI arguments into query tuples.
 def parse_query_items(items: list[str]) -> list[tuple[str, str]]:
     parsed: list[tuple[str, str]] = []
     for item in items:
@@ -227,6 +290,7 @@ def parse_query_items(items: list[str]) -> list[tuple[str, str]]:
     return parsed
 
 
+# Builds the `unifi_request.py` command used to execute the named query.
 def build_command(
     path: str,
     query_items: list[tuple[str, str]],
@@ -240,6 +304,7 @@ def build_command(
     return cmd
 
 
+# Runs the low-level UniFi request helper and decodes the JSON response.
 def run_json_query(
     path: str,
     query_items: list[tuple[str, str]],
@@ -260,6 +325,7 @@ def run_json_query(
         raise SystemExit(0)
 
 
+# Returns true when the response matches UniFi's standard pagination envelope.
 def is_paginated_payload(payload: dict) -> bool:
     return (
         isinstance(payload, dict)
@@ -271,6 +337,7 @@ def is_paginated_payload(payload: dict) -> bool:
     )
 
 
+# Merges multiple paginated UniFi responses into one payload.
 def merge_paginated_pages(pages: list[dict]) -> dict:
     merged = dict(pages[0])
     data: list[object] = []
@@ -287,6 +354,7 @@ def merge_paginated_pages(pages: list[dict]) -> dict:
     return merged
 
 
+# Walks a paginated UniFi endpoint until the reported total is exhausted.
 def fetch_all_pages(
     query_name: str,
     path: str,
@@ -321,6 +389,28 @@ def fetch_all_pages(
     return merge_paginated_pages(pages)
 
 
+# Returns true when a payload key likely contains credential-bearing data.
+def is_sensitive_key(key: str) -> bool:
+    normalized = key.strip().lower()
+    return any(fragment in normalized for fragment in SENSITIVE_KEY_FRAGMENTS)
+
+
+# Recursively redacts credential-bearing values from UniFi payloads.
+def sanitize_payload(value: object) -> object:
+    if isinstance(value, dict):
+        sanitized: dict[object, object] = {}
+        for key, item in value.items():
+            if isinstance(key, str) and is_sensitive_key(key):
+                sanitized[key] = REDACTED_VALUE
+            else:
+                sanitized[key] = sanitize_payload(item)
+        return sanitized
+    if isinstance(value, list):
+        return [sanitize_payload(item) for item in value]
+    return value
+
+
+# Dispatches the selected named query command.
 def main() -> int:
     args = parse_args()
     path = resolve_path(args)
@@ -329,6 +419,8 @@ def main() -> int:
         payload = fetch_all_pages(args.query, path, query_items, args.insecure, args.page_size)
     else:
         payload = run_json_query(path, query_items, args.insecure)
+    if args.query in SANITIZED_QUERIES:
+        payload = sanitize_payload(payload)
     json.dump(payload, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")
     return 0

@@ -7,6 +7,7 @@ final class UniFiSummaryService {
         self.queryService = queryService
     }
 
+    /// Builds one of the high-level UniFi summaries exposed to the chat tools.
     func summary(_ name: String) async throws -> String {
         switch name {
         case "overview": return try await overviewSummary()
@@ -18,6 +19,7 @@ final class UniFiSummaryService {
         }
     }
 
+    /// Builds the overall network summary from devices, clients, WiFi, and security data.
     private func overviewSummary() async throws -> String {
         async let sitesResult = queryService.queryItems("sites")
         async let devicesResult = queryService.queryItems("devices")
@@ -68,6 +70,7 @@ final class UniFiSummaryService {
         return lines.joined(separator: "\n")
     }
 
+    /// Builds a client-focused summary with counts, activity, and top devices.
     private func clientsSummary() async throws -> String {
         async let devicesResult = queryService.queryItems("devices")
         async let clientsResult = queryService.queryItems("clients")
@@ -111,6 +114,7 @@ final class UniFiSummaryService {
         return lines.joined(separator: "\n")
     }
 
+    /// Builds a WiFi summary with SSIDs, radio health, and client distribution.
     private func wifiSummary() async throws -> String {
         async let networksResult = queryService.queryItems("networks")
         async let wifiResult = queryService.queryItems("wifi-broadcasts")
@@ -145,6 +149,7 @@ final class UniFiSummaryService {
         return lines.joined(separator: "\n")
     }
 
+    /// Builds a firewall summary from policy, ACL, and DNS rule data.
     private func firewallSummary() async throws -> String {
         async let policiesResult = queryService.queryItems("firewall-policies")
         async let zonesResult = queryService.queryItems("firewall-zones")
@@ -181,6 +186,7 @@ final class UniFiSummaryService {
         return lines.joined(separator: "\n")
     }
 
+    /// Builds a security summary from CyberSecure and threat-related data.
     private func securitySummary() async throws -> String {
         async let aclResult = queryService.queryItems("acl-rules")
         async let dnsResult = queryService.queryItems("dns-policies")
@@ -207,6 +213,7 @@ final class UniFiSummaryService {
         ].joined(separator: "\n")
     }
 
+    /// Returns the best display name available for a UniFi row.
     private func safeName(_ item: [String: Any]?) -> String {
         item?["name"] as? String ?? item?["model"] as? String ?? "unknown"
     }

@@ -9,6 +9,7 @@ from collections import Counter
 from pathlib import Path
 
 
+# Parses CLI arguments for snapshot analysis.
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Analyze a saved UniFi snapshot directory."
@@ -20,12 +21,14 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+# Loads a JSON file from disk.
 def load_json(path: Path) -> dict:
     if not path.exists():
         return {}
     return json.loads(path.read_text())
 
 
+# Extracts row dictionaries from a UniFi snapshot payload.
 def extract_rows(payload: dict) -> list[dict]:
     data = payload.get("data", [])
     if isinstance(data, list):
@@ -33,10 +36,12 @@ def extract_rows(payload: dict) -> list[dict]:
     return []
 
 
+# Returns the best display name available for a snapshot row.
 def safe_name(item: dict, fallback: str) -> str:
     return item.get("name") or item.get("model") or fallback
 
 
+# Returns the normalized action name for a policy row.
 def policy_action_name(policy: dict) -> str:
     action = policy.get("action", "UNKNOWN")
     if isinstance(action, dict):
@@ -44,6 +49,7 @@ def policy_action_name(policy: dict) -> str:
     return str(action)
 
 
+# Dispatches the snapshot analysis flow.
 def main() -> int:
     args = parse_args()
     snap = Path(args.snapshot_dir)

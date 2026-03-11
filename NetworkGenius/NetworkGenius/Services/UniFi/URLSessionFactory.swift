@@ -1,6 +1,7 @@
 import Foundation
 
 enum URLSessionFactory {
+    /// Builds a URLSession configured for the project's UniFi TLS requirements.
     static func makeSession(allowSelfSigned: Bool) -> URLSession {
         if allowSelfSigned {
             return URLSession(
@@ -16,6 +17,7 @@ enum URLSessionFactory {
 private final class SelfSignedDelegate: NSObject, URLSessionDelegate {
     static let shared = SelfSignedDelegate()
 
+    /// Applies the self-signed-certificate policy to each URLSession challenge.
     func urlSession(
         _ session: URLSession,
         didReceive challenge: URLAuthenticationChallenge,

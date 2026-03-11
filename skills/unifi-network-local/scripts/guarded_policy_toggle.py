@@ -45,6 +45,7 @@ class RequestResult:
     stderr: str
 
 
+# Parses CLI arguments for guarded policy enable and disable requests.
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Guarded policy toggle for UniFi local integration."
@@ -90,6 +91,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+# Runs one authenticated UniFi API request for the guarded policy flow.
 def run_request(
     method: str,
     path: str,
@@ -116,6 +118,7 @@ def run_request(
     )
 
 
+# Parses JSON text or exits with a contextual error message.
 def parse_json_or_exit(text: str, *, context: str) -> dict:
     try:
         payload = json.loads(text)
@@ -126,6 +129,7 @@ def parse_json_or_exit(text: str, *, context: str) -> dict:
     return payload
 
 
+# Resolves a site reference into the UUID site ID used by the API.
 def resolve_site_id(site_id: str | None, site_ref: str, insecure: bool) -> str:
     if site_id:
         return site_id
@@ -145,17 +149,20 @@ def resolve_site_id(site_id: str | None, site_ref: str, insecure: bool) -> str:
     raise SystemExit(f"site reference not found: {site_ref}")
 
 
+# Parses the environment-configured policy allowlist into a set of IDs.
 def parse_allowlist(env_name: str) -> set[str]:
     raw = os.environ.get(env_name, "")
     items = [item.strip() for item in raw.split(",")]
     return {item for item in items if item}
 
 
+# Builds the confirmation token required before toggling a policy.
 def confirmation_token(rule_type: str, rule_id: str, enabled: bool) -> str:
     state = "enable" if enabled else "disable"
     return f"APPLY-{rule_type}-{rule_id[:8]}-{state}".upper()
 
 
+# Dispatches the guarded policy toggle flow.
 def main() -> int:
     args = parse_args()
     enabled = args.enabled == "true"

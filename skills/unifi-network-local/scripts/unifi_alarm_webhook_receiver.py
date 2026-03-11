@@ -21,6 +21,7 @@ from typing import Any
 LABEL_SAFE_RE = re.compile(r"[^a-zA-Z0-9_]")
 
 
+# Parses CLI arguments for the UniFi alarm webhook receiver.
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Receive UniFi Alarm Manager webhook events and push them to Loki."
@@ -75,6 +76,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+# Sanitizes a label value before it is attached to Loki log streams.
 def sanitize_label(value: Any, fallback: str = "unknown") -> str:
     text = str(value).strip()
     if not text:
@@ -82,6 +84,7 @@ def sanitize_label(value: Any, fallback: str = "unknown") -> str:
     return LABEL_SAFE_RE.sub("_", text.lower())[:120] or fallback
 
 
+# Builds an SSL context that optionally allows self-signed certificates.
 def build_context(insecure: bool) -> ssl.SSLContext | None:
     if not insecure:
         return None
@@ -91,6 +94,7 @@ def build_context(insecure: bool) -> ssl.SSLContext | None:
     return context
 
 
+# Normalizes the configured Loki base URL into a push endpoint URL.
 def normalize_loki_push_url(raw_base_url: str) -> str:
     base = (raw_base_url or "").strip().strip("'").strip('"')
     if not base:
@@ -118,6 +122,7 @@ def normalize_loki_push_url(raw_base_url: str) -> str:
     )
 
 
+# Builds the ordered list of Loki push URLs to try.
 def candidate_loki_push_urls(raw_base_url: str) -> list[str]:
     primary = normalize_loki_push_url(raw_base_url)
     parsed = urllib.parse.urlparse(primary)
@@ -148,6 +153,7 @@ class AppConfig:
     insecure: bool
 
 
+# Pushes one webhook payload into Loki using the configured endpoint fallback order.
 def push_to_loki(config: AppConfig, payload: dict[str, Any]) -> None:
     if not config.loki_base_url:
         raise RuntimeError("LOKI_BASE_URL is required")
@@ -198,6 +204,7 @@ def push_to_loki(config: AppConfig, payload: dict[str, Any]) -> None:
     raise RuntimeError("Loki push failed for unknown reason")
 
 
+# Returns true when the incoming webhook request includes the expected secret.
 def is_authorized(handler: BaseHTTPRequestHandler, secret: str) -> bool:
     if not secret:
         return True
@@ -214,8 +221,10 @@ def is_authorized(handler: BaseHTTPRequestHandler, secret: str) -> bool:
     return token == secret
 
 
+# Builds the HTTP request handler class used by the webhook server.
 def make_handler(config: AppConfig):
     class WebhookHandler(BaseHTTPRequestHandler):
+        # Accepts a UniFi webhook, validates it, and forwards the payload to Loki.
         def do_POST(self) -> None:  # noqa: N802
             if self.path != config.path:
                 self.send_response(404)
@@ -273,12 +282,14 @@ def make_handler(config: AppConfig):
             self.end_headers()
             self.wfile.write(b'{\"ok\":true}\n')
 
+        # Suppresses the default HTTP server log format in favor of the app logger.
         def log_message(self, format: str, *args) -> None:  # noqa: A003
             sys.stderr.write(f"[alarm-webhook] {self.address_string()} - {format % args}\n")
 
     return WebhookHandler
 
 
+# Starts the UniFi alarm webhook receiver server.
 def main() -> int:
     args = parse_args()
     config = AppConfig(

@@ -19,6 +19,7 @@ struct ToolCallIndicatorView: View {
         }
     }
 
+    /// Builds the relative status label shown while a tool call is running.
     private func statusText(at date: Date) -> String {
         let cycle = Int(date.timeIntervalSinceReferenceDate * 2) % 4
         let dots = String(repeating: ".", count: cycle)

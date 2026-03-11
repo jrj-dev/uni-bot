@@ -25,6 +25,9 @@ Use the bundled script to talk to the local UniFi Network API.
 - `list_clients`: List clients. Default is active clients; include inactive/known clients when specifically requested (for example inactive-history questions) and during app-block targeting.
 - `list_networks`: List configured networks/VLANs. Parameters: none.
 - `list_wifi_broadcasts`: List SSIDs and WiFi broadcast settings. Parameters: none.
+- `list_network_events`: List recent legacy UniFi controller events from the site event feed. Parameters: none.
+- `list_wlan_configs`: List legacy UniFi WLAN config objects, including lower-level SSID settings. Parameters: none.
+- `list_network_configs`: List legacy UniFi network config objects, including lower-level LAN/VLAN/WAN details. Parameters: none.
 - `list_firewall_policies`: List firewall policies. Parameters: none.
 - `list_firewall_zones`: List firewall zones. Parameters: none.
 - `list_acl_rules`: List ACL rules. Parameters: none.
@@ -279,6 +282,9 @@ python3 skills/unifi-network-local/scripts/named_query.py firewall-policies-orde
 Examples:
 
 - `named_query.py pending-devices`
+- `named_query.py events --site-ref <site-ref>`
+- `named_query.py wlanconf --site-ref <site-ref>`
+- `named_query.py networkconf --site-ref <site-ref>`
 - `named_query.py firewall-policies --site-id <site-id>`
 - `named_query.py firewall-policies-ordering --site-id <site-id>`
 - `named_query.py acl-rules --site-id <site-id>`

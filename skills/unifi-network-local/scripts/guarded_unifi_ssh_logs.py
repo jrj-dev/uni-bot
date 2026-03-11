@@ -25,6 +25,7 @@ ALLOWED_COMMANDS = {
 TOKEN_TTL_SECONDS = 300
 
 
+# Parses CLI arguments for guarded UniFi SSH log collection.
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run guarded, read-only SSH log commands on UniFi devices."
@@ -42,6 +43,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+# Returns the required environment variable value or exits when it is missing.
 def require_env(name: str) -> str:
     value = (os.environ.get(name) or "").strip()
     if not value:
@@ -49,6 +51,7 @@ def require_env(name: str) -> str:
     return value
 
 
+# Returns the secret used to sign and verify approval tokens.
 def approval_secret() -> str:
     secret = (os.environ.get("UNIFI_SSH_APPROVAL_SECRET") or "").strip()
     if secret:
@@ -58,6 +61,7 @@ def approval_secret() -> str:
     return hashlib.sha256(api_key.encode("utf-8")).hexdigest()
 
 
+# Builds an approval token for a specific SSH log command request.
 def make_token(host: str, command_id: str, expires_at: int) -> str:
     secret = approval_secret().encode("utf-8")
     payload = f"{host}|{command_id}|{expires_at}".encode("utf-8")
@@ -65,6 +69,7 @@ def make_token(host: str, command_id: str, expires_at: int) -> str:
     return f"{expires_at}:{sig}"
 
 
+# Returns true when an approval token matches the requested host and command.
 def verify_token(token: str, host: str, command_id: str) -> bool:
     try:
         expires_raw, sig = token.split(":", 1)
@@ -77,6 +82,7 @@ def verify_token(token: str, host: str, command_id: str) -> bool:
     return hmac.compare_digest(expected, token)
 
 
+# Returns the SSH private key path configured for UniFi log collection.
 def resolve_private_key_path() -> Path:
     key_path = (os.environ.get("UNIFI_SSH_PRIVATE_KEY_PATH") or "").strip()
     key_content = os.environ.get("UNIFI_SSH_PRIVATE_KEY") or ""
@@ -95,10 +101,12 @@ def resolve_private_key_path() -> Path:
     raise SystemExit("set UNIFI_SSH_PRIVATE_KEY_PATH or UNIFI_SSH_PRIVATE_KEY")
 
 
+# Returns the fallback SSH password for UniFi log collection.
 def resolve_password() -> str:
     return (os.environ.get("UNIFI_SSH_PASSWORD") or "").strip()
 
 
+# Dispatches the guarded UniFi SSH log collection flow.
 def main() -> int:
     args = parse_args()
     host = args.host.strip()

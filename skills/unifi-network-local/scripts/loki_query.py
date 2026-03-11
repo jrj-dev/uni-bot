@@ -18,6 +18,7 @@ QUERY_NAMES = ("query-range", "query-instant", "labels", "label-values")
 UNIFI_SELECTOR = '{job="unifi_siem"}'
 
 
+# Parses CLI arguments for Loki range and instant queries.
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Run a named read-only Grafana Loki query."
@@ -58,10 +59,12 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+# Formats a datetime as Unix nanoseconds for Loki query parameters.
 def unix_nanos(timestamp: dt.datetime) -> str:
     return str(int(timestamp.timestamp() * 1_000_000_000))
 
 
+# Ensures the LogQL query is restricted to UniFi log streams.
 def enforce_unifi_scope(raw_logql: str) -> str:
     query = (raw_logql or "").strip()
     if not query:
@@ -78,6 +81,7 @@ def enforce_unifi_scope(raw_logql: str) -> str:
     return f'{UNIFI_SELECTOR} |= "{escaped}"'
 
 
+# Builds the Loki query-string parameters from the parsed arguments.
 def build_query_items(args: argparse.Namespace) -> list[tuple[str, str]]:
     scoped_logql = enforce_unifi_scope(args.logql)
     query = args.query
@@ -99,6 +103,7 @@ def build_query_items(args: argparse.Namespace) -> list[tuple[str, str]]:
     return []
 
 
+# Chooses the Loki API path for the requested query mode.
 def path_for_query(args: argparse.Namespace) -> str:
     if args.query == "query-range":
         return "/loki/api/v1/query_range"
@@ -113,6 +118,7 @@ def path_for_query(args: argparse.Namespace) -> str:
     raise SystemExit(f"unsupported query: {args.query}")
 
 
+# Runs the Loki HTTP query and prints the JSON response.
 def run_query(path: str, query_items: list[tuple[str, str]], insecure: bool) -> int:
     cmd = [sys.executable, str(REQUEST_SCRIPT), "GET", path]
     for key, value in query_items:
@@ -133,6 +139,7 @@ def run_query(path: str, query_items: list[tuple[str, str]], insecure: bool) -> 
     return result.returncode
 
 
+# Dispatches the requested Loki query flow.
 def main() -> int:
     args = parse_args()
     path = path_for_query(args)

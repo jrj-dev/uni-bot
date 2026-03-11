@@ -29,6 +29,7 @@ DAY_VALUES = {
 SIMPLE_APP_BLOCK_PATH = "/proxy/network/v2/api/site/{site_ref}/firewall-app-blocks"
 
 
+# Parses CLI arguments for resolving, planning, applying, listing, and removing UniFi simple app blocks.
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -234,6 +235,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+# Runs the named-query helper and returns its decoded JSON output.
 def run_named_query(
     query: str,
     *,
@@ -262,6 +264,7 @@ def run_named_query(
         raise RuntimeError(f"non-JSON response for query {query}") from exc
 
 
+# Extracts row dictionaries from the standard UniFi response envelope.
 def rows(payload: Any) -> list[dict[str, Any]]:
     if isinstance(payload, list):
         return [item for item in payload if isinstance(item, dict)]
@@ -273,6 +276,7 @@ def rows(payload: Any) -> list[dict[str, Any]]:
     return []
 
 
+# Loads the client inventory used to resolve simple app-block targets.
 def load_clients_for_app_block(args: argparse.Namespace) -> list[dict[str, Any]]:
     candidates: list[list[dict[str, Any]]] = []
 
@@ -316,6 +320,7 @@ def load_clients_for_app_block(args: argparse.Namespace) -> list[dict[str, Any]]
     return max(candidates, key=len)
 
 
+# Runs the low-level UniFi request helper and returns its decoded JSON response.
 def run_unifi_request(
     method: str,
     path: str,
@@ -340,10 +345,12 @@ def run_unifi_request(
         raise RuntimeError(f"non-JSON response for request {method} {path}") from exc
 
 
+# Normalizes a value into lowercase text for case-insensitive comparisons.
 def normalized(value: Any) -> str:
     return str(value or "").strip().lower()
 
 
+# Normalizes a MAC address into lowercase colon-delimited form.
 def canonical_mac(value: Any) -> str:
     text = str(value or "").strip().lower()
     if not text:
@@ -356,6 +363,7 @@ def canonical_mac(value: Any) -> str:
     return ":".join(hex_only[i:i + 2] for i in range(0, 12, 2))
 
 
+# Normalizes a mixed input value into a deduplicated list of MAC addresses.
 def normalize_mac_list(values: Any) -> list[str]:
     if not isinstance(values, list):
         return []
@@ -367,10 +375,12 @@ def normalize_mac_list(values: Any) -> list[str]:
     return out
 
 
+# Collects the non-empty string fields that should participate in matching.
 def candidate_fields(item: dict[str, Any], keys: tuple[str, ...]) -> list[str]:
     return [normalized(item.get(key)) for key in keys if normalized(item.get(key))]
 
 
+# Builds the human-readable client label used in CLI output.
 def display_client(client: dict[str, Any]) -> str:
     for key in ("name", "displayName", "clientName", "hostname", "hostName", "dhcpHostname", "mac", "macAddress", "ip", "ipAddress", "id"):
         value = str(client.get(key) or "").strip()
@@ -379,6 +389,7 @@ def display_client(client: dict[str, Any]) -> str:
     return "unknown-client"
 
 
+# Builds the human-readable DPI application label used in CLI output.
 def display_app(app: dict[str, Any]) -> str:
     for key in ("name", "id"):
         value = str(app.get(key) or "").strip()
@@ -387,6 +398,7 @@ def display_app(app: dict[str, Any]) -> str:
     return "unknown-app"
 
 
+# Returns exactly one fuzzy match or raises an error when the selector is ambiguous.
 def resolve_single_match(
     selector: str,
     items: list[dict[str, Any]],
@@ -427,6 +439,7 @@ def resolve_single_match(
     raise SystemExit(f"{label} not found for selector {selector!r}. Sample values: {sample}")
 
 
+# Normalizes text before fuzzy matching by stripping case and punctuation noise.
 def normalize_match_text(value: str) -> str:
     text = str(value or "").strip().lower()
     if text.endswith(".local"):
@@ -436,6 +449,7 @@ def normalize_match_text(value: str) -> str:
 
 
 @lru_cache(maxsize=2048)
+# Computes Levenshtein edit distance for fuzzy selector matching.
 def edit_distance(lhs: str, rhs: str) -> int:
     if lhs == rhs:
         return 0
@@ -457,6 +471,7 @@ def edit_distance(lhs: str, rhs: str) -> int:
     return prev[-1]
 
 
+# Scores how well a candidate string matches the requested selector.
 def fuzzy_score(query: str, candidate: str) -> int:
     if candidate == query:
         return 120
@@ -476,6 +491,7 @@ def fuzzy_score(query: str, candidate: str) -> int:
     return 0
 
 
+# Returns the highest-scoring fuzzy match from a candidate list.
 def resolve_fuzzy_best(
     selector: str,
     items: list[dict[str, Any]],
@@ -505,6 +521,7 @@ def resolve_fuzzy_best(
     return best_item, best_score
 
 
+# Resolves one client selector against the fetched UniFi client inventory.
 def resolve_client(selector: str, clients: list[dict[str, Any]]) -> dict[str, Any]:
     return resolve_single_match(
         selector,
@@ -531,6 +548,7 @@ def resolve_client(selector: str, clients: list[dict[str, Any]]) -> dict[str, An
     )
 
 
+# Resolves one or more DPI application selectors against the application catalog.
 def resolve_apps(selectors: list[str], applications: list[dict[str, Any]]) -> list[dict[str, Any]]:
     resolved: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
@@ -549,6 +567,7 @@ def resolve_apps(selectors: list[str], applications: list[dict[str, Any]]) -> li
     return resolved
 
 
+# Resolves one or more DPI category selectors against the category catalog.
 def resolve_categories(selectors: list[str], categories: list[dict[str, Any]]) -> list[dict[str, Any]]:
     resolved: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
@@ -567,6 +586,7 @@ def resolve_categories(selectors: list[str], categories: list[dict[str, Any]]) -
     return resolved
 
 
+# Parses weekly schedule day names into the ordered list expected by UniFi.
 def parse_days(raw_days: str | None) -> list[str]:
     if raw_days is None:
         return []
@@ -579,6 +599,7 @@ def parse_days(raw_days: str | None) -> list[str]:
     return days
 
 
+# Parses a local ISO-8601 timestamp used in once-only schedules.
 def parse_local_timestamp(value: str) -> datetime:
     try:
         return datetime.fromisoformat(value)
@@ -588,10 +609,12 @@ def parse_local_timestamp(value: str) -> datetime:
         ) from exc
 
 
+# Formats a datetime as the HH:MM value used by UniFi schedules.
 def format_time(value: datetime) -> str:
     return value.strftime("%H:%M")
 
 
+# Builds the schedule object for the requested block window.
 def build_schedule(args: argparse.Namespace) -> dict[str, Any]:
     mode_map = {
         "always": "ALWAYS",
@@ -657,6 +680,7 @@ def build_schedule(args: argparse.Namespace) -> dict[str, Any]:
     return schedule
 
 
+# Builds one normalized simple app-block payload for the firewall-app-blocks API.
 def build_simple_app_block_payload(
     *,
     client: dict[str, Any],
@@ -692,6 +716,7 @@ def build_simple_app_block_payload(
     return payload
 
 
+# Builds one or more simple app-block payloads from the resolved plan inputs.
 def build_simple_app_block_payloads(
     *,
     client: dict[str, Any],
@@ -728,6 +753,7 @@ def build_simple_app_block_payloads(
     return payloads
 
 
+# Builds the older trafficrules payload shape kept for comparison and debugging.
 def build_legacy_private_api_payload(
     *,
     resolved_apps: list[dict[str, Any]],
@@ -779,6 +805,7 @@ def build_legacy_private_api_payload(
     }
 
 
+# Resolves the requested client, apps, and categories into a staged block plan.
 def build_plan(args: argparse.Namespace) -> dict[str, Any]:
     if not args.apps and not args.categories:
         raise SystemExit("at least one --app or --category is required")
@@ -899,6 +926,7 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+# Returns the site reference used for simple app-block collection requests.
 def resolve_site_ref(args: argparse.Namespace) -> str:
     if args.site_ref:
         return args.site_ref
@@ -922,6 +950,7 @@ def resolve_site_ref(args: argparse.Namespace) -> str:
     raise SystemExit("simple app block requires --site-ref or a resolvable --site-id")
 
 
+# Prints a filtered view of the DPI application catalog.
 def command_list_apps(args: argparse.Namespace) -> int:
     payload = run_named_query("dpi-applications", insecure=args.insecure)
     applications = rows(payload)
@@ -940,6 +969,7 @@ def command_list_apps(args: argparse.Namespace) -> int:
     return 0
 
 
+# Prints a resolved simple app-block plan without writing anything to UniFi.
 def command_plan_block(args: argparse.Namespace) -> int:
     plan = build_plan(args)
     json.dump(plan, sys.stdout, indent=2, sort_keys=True)
@@ -947,6 +977,7 @@ def command_plan_block(args: argparse.Namespace) -> int:
     return 0
 
 
+# Prints the single client row selected by the provided client query.
 def command_resolve_client(args: argparse.Namespace) -> int:
     clients = load_clients_for_app_block(args)
     client, score = resolve_fuzzy_best(
@@ -988,6 +1019,7 @@ def command_resolve_client(args: argparse.Namespace) -> int:
     return 0
 
 
+# Prints the single DPI application selected by the provided query.
 def command_resolve_app(args: argparse.Namespace) -> int:
     applications = rows(run_named_query("dpi-applications", insecure=args.insecure))
     app, score = resolve_fuzzy_best(
@@ -1010,6 +1042,7 @@ def command_resolve_app(args: argparse.Namespace) -> int:
     return 0
 
 
+# Prints the single DPI category selected by the provided query.
 def command_resolve_category(args: argparse.Namespace) -> int:
     categories = rows(run_named_query("dpi-categories", insecure=args.insecure))
     category, score = resolve_fuzzy_best(
@@ -1032,6 +1065,7 @@ def command_resolve_category(args: argparse.Namespace) -> int:
     return 0
 
 
+# Prints a filtered view of the DPI category catalog.
 def command_list_categories(args: argparse.Namespace) -> int:
     payload = run_named_query("dpi-categories", insecure=args.insecure)
     categories = rows(payload)
@@ -1050,6 +1084,7 @@ def command_list_categories(args: argparse.Namespace) -> int:
     return 0
 
 
+# Merges planned blocks into the current simple app-block collection and posts the full replacement set to UniFi.
 def command_apply_block(args: argparse.Namespace) -> int:
     plan = build_plan(args)
     payloads = list(plan["simple_app_block_payloads"])
@@ -1100,23 +1135,27 @@ def command_apply_block(args: argparse.Namespace) -> int:
     return 0
 
 
+# Normalizes an arbitrary value into a list of comparable strings.
 def normalize_list(values: Any) -> list[str]:
     if not isinstance(values, list):
         return []
     return [str(item).strip().lower() for item in values if str(item).strip()]
 
 
+# Builds a stable signature string for comparing UniFi schedule objects.
 def schedule_signature(value: Any) -> str:
     if not isinstance(value, dict):
         return "{}"
     return json.dumps(value, sort_keys=True)
 
 
+# Checks whether a stored rule belongs to the simple app-block collection.
 def is_simple_app_rule(rule: dict[str, Any]) -> bool:
     target_type = str(rule.get("target_type") or rule.get("targetType") or "").strip().lower()
     return str(rule.get("type") or "").strip().lower() == "device" and target_type in {"app_id", "app_category"}
 
 
+# Finds an existing simple app-block rule that targets the same client, target type, and schedule.
 def find_matching_rule(payload: dict[str, Any], rules: list[dict[str, Any]]) -> dict[str, Any] | None:
     # Simple app blocks are matched by target kind, client, and schedule so app IDs
     # can be merged into an existing rule instead of creating duplicates.
@@ -1137,6 +1176,7 @@ def find_matching_rule(payload: dict[str, Any], rules: list[dict[str, Any]]) -> 
     return None
 
 
+# Merges new app or category targets into an existing simple app-block rule.
 def merge_rule(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
     # Preserve the existing rule identity while expanding its app/category target set.
     merged = dict(existing)
@@ -1160,6 +1200,7 @@ def merge_rule(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, 
     return merged
 
 
+# Removes matching apps or categories from a client's simple app-block rules and writes the updated collection back to UniFi.
 def command_remove_block(args: argparse.Namespace) -> int:
     site_ref = resolve_site_ref(args)
     clients = load_clients_for_app_block(args)
@@ -1248,6 +1289,7 @@ def command_remove_block(args: argparse.Namespace) -> int:
     return 0
 
 
+# Prints the current simple app-block rules that target a resolved client.
 def command_list_block(args: argparse.Namespace) -> int:
     site_ref = resolve_site_ref(args)
     clients = load_clients_for_app_block(args)
@@ -1326,6 +1368,7 @@ def command_list_block(args: argparse.Namespace) -> int:
     return 0
 
 
+# Dispatches the selected simple app-block subcommand.
 def main() -> int:
     args = parse_args()
     if args.command == "resolve-client":

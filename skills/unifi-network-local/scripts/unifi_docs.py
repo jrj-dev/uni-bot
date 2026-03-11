@@ -12,6 +12,7 @@ import urllib.parse
 import urllib.request
 
 
+# Parses CLI arguments for UniFi documentation search and article fetches.
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Search or fetch UniFi Help Center documentation."
@@ -33,6 +34,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+# Fetches and decodes JSON from a documentation endpoint.
 def get_json(url: str) -> dict:
     req = urllib.request.Request(url, headers={"Accept": "application/json"}, method="GET")
     try:
@@ -45,6 +47,7 @@ def get_json(url: str) -> dict:
         raise SystemExit(f"request failed: {exc.reason}") from exc
 
 
+# Compacts article text for CLI-friendly output.
 def compact(text: str, max_len: int) -> str:
     without_tags = re.sub(r"<[^>]+>", " ", text)
     decoded = (
@@ -61,6 +64,7 @@ def compact(text: str, max_len: int) -> str:
     return normalized[:max_len] + "..."
 
 
+# Runs a UniFi documentation search and prints matching articles.
 def command_search(query: str, max_results: int) -> int:
     trimmed = query.strip()
     if not trimmed:
@@ -86,6 +90,7 @@ def command_search(query: str, max_results: int) -> int:
     return 0
 
 
+# Resolves an article ID from either a direct ID or a help-center URL.
 def resolve_article_id(article_id: str | None, article_url: str | None) -> str:
     if article_id and article_id.strip():
         return article_id.strip()
@@ -97,6 +102,7 @@ def resolve_article_id(article_id: str | None, article_url: str | None) -> str:
     return match.group(1)
 
 
+# Fetches and prints one UniFi documentation article.
 def command_article(article_id: str | None, article_url: str | None) -> int:
     resolved = resolve_article_id(article_id, article_url)
     url = f"https://help.ui.com/api/v2/help_center/en-us/articles/{resolved}.json"
@@ -114,6 +120,7 @@ def command_article(article_id: str | None, article_url: str | None) -> int:
     return 0
 
 
+# Dispatches the selected documentation command.
 def main() -> int:
     args = parse_args()
     if args.command == "search":
