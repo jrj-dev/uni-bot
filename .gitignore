@@ -1,5 +1,7 @@
 .env.local
 .DS_Store
+docs/.DS_Store
+.claude/
 *.webarchive
 *.mhtml
 data/unifi/snapshots/
