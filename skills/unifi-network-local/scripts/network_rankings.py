@@ -280,6 +280,26 @@ def is_active_client(client: dict[str, Any]) -> bool:
     return True
 
 
+# Returns true when a device row appears online and available for current-state rankings.
+def is_online_device(device: dict[str, Any]) -> bool:
+    for key in ("active", "isActive", "is_online", "isOnline"):
+        value = bool_value(device.get(key))
+        if value is not None:
+            return value
+    state = (
+        string_value(device.get("state"))
+        or string_value(device.get("status"))
+        or string_value(device.get("connectionState"))
+        or string_value(device.get("uplink_status"))
+        or ""
+    ).lower()
+    if any(word in state for word in ("offline", "disconnected", "inactive", "down")):
+        return False
+    if any(word in state for word in ("online", "connected", "active", "up")):
+        return True
+    return True
+
+
 # Converts a flexible JSON value into a boolean when possible.
 def bool_value(value: Any) -> bool | None:
     if isinstance(value, bool):
@@ -710,6 +730,11 @@ def compute_rankings(args: argparse.Namespace) -> list[dict[str, Any]]:
     if args.entity_type == "access_point" and args.metric == "client_count":
         site_id = require_site_id(args)
         devices = rows(run_named_query("devices", site_id=site_id, insecure=args.insecure))
+        online_device_ids = {
+            string_value(device.get("id"))
+            for device in devices
+            if string_value(device.get("id")) and is_online_device(device)
+        }
         device_map = {
             string_value(device.get("id")): string_value(device.get("name")) or string_value(device.get("model")) or "unknown"
             for device in devices
@@ -725,6 +750,10 @@ def compute_rankings(args: argparse.Namespace) -> list[dict[str, Any]]:
                 or string_value(client.get("ap_id"))
             )
             if uplink:
+                if not is_active_client(client):
+                    continue
+                if uplink not in online_device_ids:
+                    continue
                 counts[uplink] = counts.get(uplink, 0) + 1
         ranked = [
             rank_result(
@@ -740,6 +769,11 @@ def compute_rankings(args: argparse.Namespace) -> list[dict[str, Any]]:
     if args.entity_type == "access_point" and args.metric == "weakest_average_signal":
         site_id = require_site_id(args)
         devices = rows(run_named_query("devices", site_id=site_id, insecure=args.insecure))
+        online_device_ids = {
+            string_value(device.get("id"))
+            for device in devices
+            if string_value(device.get("id")) and is_online_device(device)
+        }
         device_map = {
             string_value(device.get("id")): string_value(device.get("name")) or string_value(device.get("model")) or "unknown"
             for device in devices
@@ -750,7 +784,9 @@ def compute_rankings(args: argparse.Namespace) -> list[dict[str, Any]]:
         counts: dict[str, int] = {}
         for client in clients:
             uplink = string_value(client.get("uplinkDeviceId")) or string_value(client.get("apId"))
-            if not uplink:
+            if not is_active_client(client):
+                continue
+            if not uplink or uplink not in online_device_ids:
                 continue
             signals = numeric_values(client, ["signal", "signalStrength", "wifiSignal", "rssi"])
             if not signals:
@@ -814,7 +850,11 @@ def compute_rankings(args: argparse.Namespace) -> list[dict[str, Any]]:
     if args.entity_type == "wifi_broadcast" and args.metric == "client_count":
         site_id = require_site_id(args)
         broadcasts = rows(run_named_query("wifi-broadcasts", site_id=site_id, insecure=args.insecure))
-        clients = [client for client in load_clients(args, include_inactive=args.include_inactive) if not is_wired_client(client)]
+        clients = [
+            client
+            for client in load_clients(args, include_inactive=args.include_inactive)
+            if not is_wired_client(client) and is_active_client(client)
+        ]
         counts: dict[str, int] = {}
         for client in clients:
             name = wifi_broadcast_name(client, broadcasts)
@@ -826,7 +866,11 @@ def compute_rankings(args: argparse.Namespace) -> list[dict[str, Any]]:
     if args.entity_type == "wifi_broadcast" and args.metric in {"weakest_average_signal", "strongest_average_signal"}:
         site_id = require_site_id(args)
         broadcasts = rows(run_named_query("wifi-broadcasts", site_id=site_id, insecure=args.insecure))
-        clients = [client for client in load_clients(args, include_inactive=args.include_inactive) if not is_wired_client(client)]
+        clients = [
+            client
+            for client in load_clients(args, include_inactive=args.include_inactive)
+            if not is_wired_client(client) and is_active_client(client)
+        ]
         grouped: dict[str, list[float]] = {}
         for client in clients:
             name = wifi_broadcast_name(client, broadcasts)
@@ -853,7 +897,7 @@ def compute_rankings(args: argparse.Namespace) -> list[dict[str, Any]]:
             for network in networks
             if string_value(network.get("id"))
         }
-        clients = load_clients(args, include_inactive=args.include_inactive)
+        clients = [client for client in load_clients(args, include_inactive=args.include_inactive) if is_active_client(client)]
         counts: dict[str, int] = {}
         for client in clients:
             network_id = (

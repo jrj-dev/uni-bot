@@ -837,12 +837,24 @@ final class ToolExecutor {
     /// Ranks access points by the number of currently associated clients.
     private func rankAccessPointsByClientCount(includeInactive: Bool) async throws -> [RankedEntityResult] {
         let devices = try await queryService.queryItems("devices")
+        let onlineDeviceIDs = Set(devices.compactMap { device -> String? in
+            guard isDeviceOnlineForRanking(device) else { return nil }
+            return firstString(in: device, keys: ["id", "_id"])
+        })
         let deviceNameByID = Dictionary(uniqueKeysWithValues: devices.compactMap { device -> (String, String)? in
             guard let id = firstString(in: device, keys: ["id", "_id"]) else { return nil }
             return (id, firstString(in: device, keys: ["name", "hostname", "model"]) ?? id)
         })
         let clients = try await loadClientsForRanking(includeInactive: includeInactive)
-        let grouped = Dictionary(grouping: clients) { client in
+        let currentClients = clients.filter { client in
+            guard isClientActiveForRanking(client),
+                  let uplinkID = firstString(in: client, keys: ["uplinkDeviceId", "uplink_device_id", "apId", "ap_id", "uplinkApId"])
+            else {
+                return false
+            }
+            return onlineDeviceIDs.contains(uplinkID)
+        }
+        let grouped = Dictionary(grouping: currentClients) { client in
             firstString(in: client, keys: ["uplinkDeviceId", "uplink_device_id", "apId", "ap_id", "uplinkApId"]) ?? "unknown"
         }
         return grouped.compactMap { uplinkID, rows in
@@ -861,12 +873,24 @@ final class ToolExecutor {
     /// Ranks access points by the weakest average signal across their associated WiFi clients.
     private func rankAccessPointsByWeakestAverageSignal(includeInactive: Bool) async throws -> [RankedEntityResult] {
         let devices = try await queryService.queryItems("devices")
+        let onlineDeviceIDs = Set(devices.compactMap { device -> String? in
+            guard isDeviceOnlineForRanking(device) else { return nil }
+            return firstString(in: device, keys: ["id", "_id"])
+        })
         let deviceNameByID = Dictionary(uniqueKeysWithValues: devices.compactMap { device -> (String, String)? in
             guard let id = firstString(in: device, keys: ["id", "_id"]) else { return nil }
             return (id, firstString(in: device, keys: ["name", "hostname", "model"]) ?? id)
         })
         let clients = try await loadClientsForRanking(includeInactive: includeInactive)
-        let wifiClients = clients.filter { !isWiredClient($0) }
+        let wifiClients = clients.filter { client in
+            guard isClientActiveForRanking(client),
+                  !isWiredClient(client),
+                  let uplinkID = firstString(in: client, keys: ["uplinkDeviceId", "uplink_device_id", "apId", "ap_id", "uplinkApId"])
+            else {
+                return false
+            }
+            return onlineDeviceIDs.contains(uplinkID)
+        }
         let grouped = Dictionary(grouping: wifiClients) { client in
             firstString(in: client, keys: ["uplinkDeviceId", "uplink_device_id", "apId", "ap_id", "uplinkApId"]) ?? "unknown"
         }
@@ -921,7 +945,7 @@ final class ToolExecutor {
         let wifiBroadcasts = try await queryService.queryItems("wifi-broadcasts")
         let clients = try await loadClientsForRanking(includeInactive: includeInactive)
         var counts: [String: Int] = [:]
-        for client in clients where !isWiredClient(client) {
+        for client in clients where !isWiredClient(client) && isClientActiveForRanking(client) {
             guard let name = wifiBroadcastName(for: client, broadcasts: wifiBroadcasts) else { continue }
             counts[name, default: 0] += 1
         }
@@ -941,7 +965,7 @@ final class ToolExecutor {
         let wifiBroadcasts = try await queryService.queryItems("wifi-broadcasts")
         let clients = try await loadClientsForRanking(includeInactive: includeInactive)
         var grouped: [String: [Double]] = [:]
-        for client in clients where !isWiredClient(client) {
+        for client in clients where !isWiredClient(client) && isClientActiveForRanking(client) {
             guard let name = wifiBroadcastName(for: client, broadcasts: wifiBroadcasts) else { continue }
             guard let signal = metricValue(for: .weakestSignal, client: client) else { continue }
             grouped[name, default: []].append(signal)
@@ -970,7 +994,8 @@ final class ToolExecutor {
             return (id, firstString(in: network, keys: ["name"]) ?? id)
         })
         let clients = try await loadClientsForRanking(includeInactive: includeInactive)
-        let grouped = Dictionary(grouping: clients) { client in
+        let currentClients = clients.filter { isClientActiveForRanking($0) }
+        let grouped = Dictionary(grouping: currentClients) { client in
             firstString(in: client, keys: ["networkId", "network_id", "last_connection_network_id", "lastConnectionNetworkId"]) ?? "unknown"
         }
         return grouped.compactMap { networkID, rows in
@@ -1266,6 +1291,22 @@ final class ToolExecutor {
         }
         if let timestamp = latestDate(in: client, keys: ["disconnect_timestamp"]), timestamp <= Date() {
             return false
+        }
+        return true
+    }
+
+    /// Returns true when a device row appears to be online and currently serving traffic.
+    private func isDeviceOnlineForRanking(_ device: [String: Any]) -> Bool {
+        if let active = boolValue(device["active"]) ?? boolValue(device["isActive"]) ?? boolValue(device["is_online"]) ?? boolValue(device["isOnline"]) {
+            return active
+        }
+        if let state = firstString(in: device, keys: ["state", "status", "connectionState", "uplink_status"])?.lowercased() {
+            if state.contains("offline") || state.contains("disconnected") || state.contains("inactive") || state.contains("down") {
+                return false
+            }
+            if state.contains("online") || state.contains("connected") || state.contains("active") || state.contains("up") {
+                return true
+            }
         }
         return true
     }
@@ -1648,8 +1689,9 @@ private struct GrafanaLokiService {
         let minutes = max(1, min(rawMinutes ?? 60, 1440))
         let limit = max(1, min(rawLimit ?? 100, 500))
         let direction = normalizedDirection(rawDirection)
+        let requestID = lokiRequestID()
         debugLog(
-            "Loki query_range requested (minutes=\(minutes), limit=\(limit), direction=\(direction), query=\(q))",
+            "Loki query_range requested (request_id=\(requestID), minutes=\(minutes), limit=\(limit), direction=\(direction), query=\(previewLokiQuery(q)))",
             category: "Logs"
         )
         let endNanos = unixNanos(Date())
@@ -1668,7 +1710,7 @@ private struct GrafanaLokiService {
             return "Error: Unable to construct Loki query_range URL."
         }
 
-        let data = try await get(url: url)
+        let data = try await get(url: url, requestID: requestID, operation: "query_range", querySummary: previewLokiQuery(q))
         return formatLogResponse(data: data, description: "Loki query_range", query: q, limit: limit)
     }
 
@@ -1681,7 +1723,8 @@ private struct GrafanaLokiService {
 
         let q = normalizedQuery(query)
         let limit = max(1, min(rawLimit ?? 50, 500))
-        debugLog("Loki instant query requested (limit=\(limit), query=\(q))", category: "Logs")
+        let requestID = lokiRequestID()
+        debugLog("Loki instant query requested (request_id=\(requestID), limit=\(limit), query=\(previewLokiQuery(q)))", category: "Logs")
 
         var components = URLComponents(string: "\(baseURL)/loki/api/v1/query")!
         components.queryItems = [
@@ -1693,7 +1736,7 @@ private struct GrafanaLokiService {
             return "Error: Unable to construct Loki query URL."
         }
 
-        let data = try await get(url: url)
+        let data = try await get(url: url, requestID: requestID, operation: "query", querySummary: previewLokiQuery(q))
         return formatLogResponse(data: data, description: "Loki instant query", query: q, limit: limit)
     }
 
@@ -1703,11 +1746,12 @@ private struct GrafanaLokiService {
             debugLog("Loki labels query skipped: base URL missing", category: "Logs")
             return "Error: Loki base URL is not configured in Settings."
         }
+        let requestID = lokiRequestID()
         guard let url = URL(string: "\(baseURL)/loki/api/v1/labels") else {
             debugLog("Loki labels URL construction failed", category: "Logs")
             return "Error: Unable to construct Loki labels URL."
         }
-        let data = try await get(url: url)
+        let data = try await get(url: url, requestID: requestID, operation: "labels", querySummary: nil)
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let labels = json["data"] as? [String] else {
             debugLog("Loki labels parse failed: unexpected payload shape", category: "Logs")
@@ -1728,12 +1772,13 @@ private struct GrafanaLokiService {
             debugLog("Loki label values query skipped: empty label", category: "Logs")
             return "Error: list_unifi_log_label_values requires a non-empty 'label'."
         }
-        debugLog("Loki label values requested (label=\(label))", category: "Logs")
+        let requestID = lokiRequestID()
+        debugLog("Loki label values requested (request_id=\(requestID), label=\(label))", category: "Logs")
         guard let url = URL(string: "\(baseURL)/loki/api/v1/label/\(label)/values") else {
             debugLog("Loki label values URL construction failed", category: "Logs")
             return "Error: Unable to construct Loki label values URL."
         }
-        let data = try await get(url: url)
+        let data = try await get(url: url, requestID: requestID, operation: "label_values", querySummary: "label=\(label)")
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let values = json["data"] as? [String] else {
             debugLog("Loki label values parse failed: unexpected payload shape", category: "Logs")
@@ -1755,7 +1800,8 @@ private struct GrafanaLokiService {
         let limit = max(1, min(rawLimit ?? 50, 200))
         let endNanos = unixNanos(Date())
         let startNanos = unixNanos(Date().addingTimeInterval(-Double(minutes) * 60.0))
-        debugLog("Loki series query requested (minutes=\(minutes), limit=\(limit), query=\(query))", category: "Logs")
+        let requestID = lokiRequestID()
+        debugLog("Loki series query requested (request_id=\(requestID), minutes=\(minutes), limit=\(limit), query=\(previewLokiQuery(query)))", category: "Logs")
 
         var components = URLComponents(string: "\(baseURL)/loki/api/v1/series")!
         components.queryItems = [
@@ -1767,7 +1813,7 @@ private struct GrafanaLokiService {
             debugLog("Loki series URL construction failed", category: "Logs")
             return "Error: Unable to construct Loki series URL."
         }
-        let data = try await get(url: url)
+        let data = try await get(url: url, requestID: requestID, operation: "series", querySummary: previewLokiQuery(query))
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let series = json["data"] as? [[String: String]] else {
             debugLog("Loki series parse failed: unexpected payload shape", category: "Logs")
@@ -1801,7 +1847,8 @@ private struct GrafanaLokiService {
         let minutes = max(1, min(rawMinutes ?? 60, 1440))
         let endNanos = unixNanos(Date())
         let startNanos = unixNanos(Date().addingTimeInterval(-Double(minutes) * 60.0))
-        debugLog("Loki index stats requested (minutes=\(minutes), query=\(query))", category: "Logs")
+        let requestID = lokiRequestID()
+        debugLog("Loki index stats requested (request_id=\(requestID), minutes=\(minutes), query=\(previewLokiQuery(query)))", category: "Logs")
 
         var components = URLComponents(string: "\(baseURL)/loki/api/v1/index/stats")!
         components.queryItems = [
@@ -1814,7 +1861,7 @@ private struct GrafanaLokiService {
             return "Error: Unable to construct Loki index stats URL."
         }
 
-        let data = try await get(url: url)
+        let data = try await get(url: url, requestID: requestID, operation: "index_stats", querySummary: previewLokiQuery(query))
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let stats = json["data"] as? [String: Any] else {
             debugLog("Loki index stats parse failed: unexpected payload shape", category: "Logs")
@@ -1859,7 +1906,7 @@ private struct GrafanaLokiService {
     }
 
     /// Performs a GET request for the documentation and Loki helpers and returns the raw response body.
-    private func get(url: URL) async throws -> Data {
+    private func get(url: URL, requestID: String, operation: String, querySummary: String?) async throws -> Data {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -1870,9 +1917,13 @@ private struct GrafanaLokiService {
         if !token.isEmpty {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
-        debugLog("Loki auth mode: \(token.isEmpty ? "none" : "bearer")", category: "Logs")
+        debugLog("Loki auth mode: \(token.isEmpty ? "none" : "bearer") (request_id=\(requestID))", category: "Logs")
+        logLokiEndpointResolution(url: url, requestID: requestID, operation: operation)
 
-        debugLog("Loki request started: \(url.absoluteString)", category: "Logs")
+        debugLog(
+            "Loki request started (request_id=\(requestID), op=\(operation), timeout=\(Int(request.timeoutInterval))s, url=\(url.absoluteString)\(querySummary.map { ", query=\($0)" } ?? ""))",
+            category: "Logs"
+        )
         let startedAt = Date()
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
@@ -1880,7 +1931,7 @@ private struct GrafanaLokiService {
             if let http = response as? HTTPURLResponse {
                 let contentType = http.value(forHTTPHeaderField: "Content-Type") ?? "unknown"
                 debugLog(
-                    "Loki response HTTP \(http.statusCode) in \(elapsedMS)ms (bytes=\(data.count), contentType=\(contentType))",
+                    "Loki response received (request_id=\(requestID), op=\(operation), status=\(http.statusCode), elapsed_ms=\(elapsedMS), bytes=\(data.count), content_type=\(contentType))",
                     category: "Logs"
                 )
                 guard (200..<300).contains(http.statusCode) else {
@@ -1888,22 +1939,104 @@ private struct GrafanaLokiService {
                         .replacingOccurrences(of: "\n", with: " ")
                         .trimmingCharacters(in: .whitespacesAndNewlines)
                         ?? "<non-utf8 body>"
-                    debugLog("Loki HTTP \(http.statusCode) bodyPreview=\(bodyPreview)", category: "Logs")
+                    debugLog("Loki HTTP failure (request_id=\(requestID), op=\(operation), status=\(http.statusCode), body_preview=\(bodyPreview))", category: "Logs")
                     throw LLMError.httpError(http.statusCode, String(data: data, encoding: .utf8) ?? "")
                 }
             } else {
-                debugLog("Loki response received with non-HTTP metadata", category: "Logs")
+                debugLog("Loki response received with non-HTTP metadata (request_id=\(requestID), op=\(operation))", category: "Logs")
             }
             return data
         } catch {
             let elapsedMS = Int(Date().timeIntervalSince(startedAt) * 1000)
             let nsError = error as NSError
+            let timeoutText = nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorTimedOut ? " timeout=true" : ""
             debugLog(
-                "Loki request failed in \(elapsedMS)ms domain=\(nsError.domain) code=\(nsError.code) description=\(error.localizedDescription)",
+                "Loki request failed (request_id=\(requestID), op=\(operation), elapsed_ms=\(elapsedMS), domain=\(nsError.domain), code=\(nsError.code), description=\(error.localizedDescription)\(timeoutText)\(querySummary.map { ", query=\($0)" } ?? ""))",
                 category: "Logs"
             )
             throw error
         }
+    }
+
+    /// Returns a short identifier that correlates multi-line Loki request logs.
+    private func lokiRequestID() -> String {
+        String(UUID().uuidString.prefix(8))
+    }
+
+    /// Trims and shortens LogQL text so request logs stay readable.
+    private func previewLokiQuery(_ query: String) -> String {
+        let flattened = query
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if flattened.count <= 220 {
+            return flattened
+        }
+        return String(flattened.prefix(220)) + "..."
+    }
+
+    /// Logs the concrete address candidates the OS resolver returns for the Loki host.
+    private func logLokiEndpointResolution(url: URL, requestID: String, operation: String) {
+        guard let host = url.host, !host.isEmpty else {
+            debugLog("Loki endpoint resolution skipped (request_id=\(requestID), op=\(operation), reason=missing_host)", category: "Logs")
+            return
+        }
+        let port = url.port ?? (url.scheme?.lowercased() == "https" ? 443 : 80)
+        let addresses = resolveHostAddresses(host: host, port: port)
+        if addresses.isEmpty {
+            debugLog("Loki endpoint resolution returned no addresses (request_id=\(requestID), op=\(operation), host=\(host), port=\(port))", category: "Logs")
+            return
+        }
+        debugLog(
+            "Loki endpoint resolved (request_id=\(requestID), op=\(operation), host=\(host), port=\(port), addresses=\(addresses.joined(separator: ", ")))",
+            category: "Logs"
+        )
+    }
+
+    /// Resolves a host and port into numeric address strings for diagnostic logging.
+    private func resolveHostAddresses(host: String, port: Int) -> [String] {
+        var hints = addrinfo(
+            ai_flags: AI_ADDRCONFIG,
+            ai_family: AF_UNSPEC,
+            ai_socktype: SOCK_STREAM,
+            ai_protocol: IPPROTO_TCP,
+            ai_addrlen: 0,
+            ai_canonname: nil,
+            ai_addr: nil,
+            ai_next: nil
+        )
+        var resultPointer: UnsafeMutablePointer<addrinfo>?
+        let status = getaddrinfo(host, String(port), &hints, &resultPointer)
+        guard status == 0, let first = resultPointer else {
+            return []
+        }
+        defer { freeaddrinfo(first) }
+
+        var addresses: [String] = []
+        var seen: Set<String> = []
+        var cursor: UnsafeMutablePointer<addrinfo>? = first
+        while let info = cursor {
+            let family = info.pointee.ai_family
+            var hostBuffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            if getnameinfo(
+                info.pointee.ai_addr,
+                info.pointee.ai_addrlen,
+                &hostBuffer,
+                socklen_t(hostBuffer.count),
+                nil,
+                0,
+                NI_NUMERICHOST
+            ) == 0 {
+                let address = String(cString: hostBuffer)
+                if !address.isEmpty {
+                    let formatted = family == AF_INET6 ? "[\(address)]" : address
+                    if seen.insert(formatted).inserted {
+                        addresses.append(formatted)
+                    }
+                }
+            }
+            cursor = info.pointee.ai_next
+        }
+        return addresses
     }
 
     /// Formats log response.
