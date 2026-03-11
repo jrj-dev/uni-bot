@@ -33,6 +33,7 @@ final class ToolExecutor {
     }
 
     @MainActor
+    /// Routes an LLM tool call to the matching UniFi, diagnostics, docs, or app-block operation.
     func execute(toolCall: LLMToolCall) async -> String {
         let supportsOffNetwork = Set(["search_unifi_docs", "get_unifi_doc"])
         let requiresLocalNetwork = !supportsOffNetwork.contains(toolCall.name)
@@ -53,6 +54,12 @@ final class ToolExecutor {
                 output = try await queryService.query("networks")
             case "list_wifi_broadcasts":
                 output = try await queryService.query("wifi-broadcasts")
+            case "list_network_events":
+                output = try await queryService.query("events")
+            case "list_wlan_configs":
+                output = try await queryService.query("wlanconf")
+            case "list_network_configs":
+                output = try await queryService.query("networkconf")
             case "list_firewall_policies":
                 output = try await queryService.query("firewall-policies")
             case "list_firewall_zones":
@@ -101,6 +108,50 @@ final class ToolExecutor {
                 output = try await diagnosticsService.lookupClientIdentity(
                     queryService: queryService,
                     query: toolCall.arguments["query"]
+                )
+            case "find_slowest_client":
+                output = try await rankedClientSummary(
+                    kind: .slowestSpeed,
+                    limit: 1,
+                    includeInactiveRaw: toolCall.arguments["include_inactive"]
+                )
+            case "top_slowest_clients":
+                output = try await rankedClientSummary(
+                    kind: .slowestSpeed,
+                    limit: Int(toolCall.arguments["limit"] ?? ""),
+                    includeInactiveRaw: toolCall.arguments["include_inactive"]
+                )
+            case "find_weakest_wifi_client":
+                output = try await rankedClientSummary(
+                    kind: .weakestSignal,
+                    limit: 1,
+                    includeInactiveRaw: toolCall.arguments["include_inactive"]
+                )
+            case "top_weakest_wifi_clients":
+                output = try await rankedClientSummary(
+                    kind: .weakestSignal,
+                    limit: Int(toolCall.arguments["limit"] ?? ""),
+                    includeInactiveRaw: toolCall.arguments["include_inactive"]
+                )
+            case "find_highest_latency_client":
+                output = try await rankedClientSummary(
+                    kind: .highestLatency,
+                    limit: 1,
+                    includeInactiveRaw: toolCall.arguments["include_inactive"]
+                )
+            case "top_highest_latency_clients":
+                output = try await rankedClientSummary(
+                    kind: .highestLatency,
+                    limit: Int(toolCall.arguments["limit"] ?? ""),
+                    includeInactiveRaw: toolCall.arguments["include_inactive"]
+                )
+            case "rank_network_entities":
+                output = try await rankNetworkEntities(
+                    entityType: toolCall.arguments["entity_type"],
+                    metric: toolCall.arguments["metric"],
+                    limit: Int(toolCall.arguments["limit"] ?? ""),
+                    includeInactiveRaw: toolCall.arguments["include_inactive"],
+                    siteRef: toolCall.arguments["site_ref"]
                 )
             case "resolve_client_for_app_block":
                 output = try await appBlockService.resolveClientForAppBlock(
@@ -244,6 +295,7 @@ final class ToolExecutor {
         }
     }
 
+    /// Summarizes gateway health by combining live device inventory with recent UniFi log signals.
     private func wanGatewayHealth(logMinutes rawMinutes: Int?) async throws -> String {
         let devices = try await queryService.queryItems("devices")
         let gateways = devices.filter { isLikelyGateway($0) }
@@ -278,6 +330,7 @@ final class ToolExecutor {
         """
     }
 
+    /// Returns true when a device row looks like a UniFi gateway or router.
     private func isLikelyGateway(_ device: [String: Any]) -> Bool {
         let candidates = [
             firstString(in: device, keys: ["type"]),
@@ -292,6 +345,7 @@ final class ToolExecutor {
         return device.keys.contains("wan") || device.keys.contains("uplink")
     }
 
+    /// Returns the first non-empty string found in the provided dictionary keys.
     private func firstString(in dict: [String: Any], keys: [String]) -> String? {
         for key in keys {
             if let value = dict[key] as? String, !value.isEmpty {
@@ -301,6 +355,7 @@ final class ToolExecutor {
         return nil
     }
 
+    /// Lists UniFi clients, optionally including inactive rows when the tool request asks for them.
     private func listClients(includeInactiveRaw: String?) async throws -> String {
         let includeInactive = parseFlexibleBool(includeInactiveRaw)
         if !includeInactive {
@@ -311,6 +366,7 @@ final class ToolExecutor {
         return String(data: data, encoding: .utf8) ?? "[]"
     }
 
+    /// Loads active and inactive client inventories and merges them into one deduplicated list.
     private func resolveClientsIncludingInactive(siteRefHint: String? = nil) async throws -> [[String: Any]] {
         var bestRows: [[String: Any]] = []
 
@@ -345,6 +401,7 @@ final class ToolExecutor {
         return bestRows
     }
 
+    /// Extracts row dictionaries from either a raw array payload or a paginated UniFi response wrapper.
     private func rowsFromAnyPayload(_ payload: Any) -> [[String: Any]] {
         if let rows = payload as? [[String: Any]] {
             return rows
@@ -360,6 +417,7 @@ final class ToolExecutor {
         return []
     }
 
+    /// Interprets common truthy and falsy strings used in tool arguments.
     private func parseFlexibleBool(_ raw: String?) -> Bool {
         let value = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         switch value {
@@ -367,6 +425,1200 @@ final class ToolExecutor {
             return true
         default:
             return false
+        }
+    }
+
+    /// Ranks clients in code and returns only the requested top or bottom results.
+    private func rankedClientSummary(
+        kind: ClientRankingKind,
+        limit rawLimit: Int?,
+        includeInactiveRaw: String?
+    ) async throws -> String {
+        let includeInactive = parseFlexibleBool(includeInactiveRaw)
+        let limit = max(1, min(rawLimit ?? (kind.defaultLimit), 20))
+        let clients = try await loadClientsForRanking(includeInactive: includeInactive)
+        let ranked = clients.compactMap { client -> RankedClientMetric? in
+            guard let value = metricValue(for: kind, client: client) else { return nil }
+            if kind.requiresWireless, isWiredClient(client) { return nil }
+            return RankedClientMetric(client: client, value: value)
+        }
+        .sorted { lhs, rhs in
+            if lhs.value != rhs.value {
+                return kind.prefersLowerValues ? lhs.value < rhs.value : lhs.value > rhs.value
+            }
+            return clientDisplayLabel(lhs.client).localizedCaseInsensitiveCompare(clientDisplayLabel(rhs.client)) == .orderedAscending
+        }
+
+        guard !ranked.isEmpty else {
+            return "No clients exposed a usable \(kind.metricLabel) metric."
+        }
+
+        let selected = Array(ranked.prefix(limit))
+        debugLog(
+            "\(kind.toolLabel) ranked \(selected.count) of \(ranked.count) clients (include_inactive=\(includeInactive))",
+            category: "Tools"
+        )
+
+        let heading = limit == 1 ? kind.singularHeading : kind.pluralHeading
+        let lines = selected.enumerated().map { index, item in
+            formatRankedClientLine(index: index + 1, item: item, kind: kind)
+        }
+        return """
+        \(heading):
+        - metric: \(kind.metricLabel)
+        - considered_clients: \(ranked.count)
+        - returned_clients: \(selected.count)
+        \(lines.joined(separator: "\n"))
+        """
+    }
+
+    /// Loads the client rows used by the ranking tools without returning them to the LLM.
+    private func loadClientsForRanking(includeInactive: Bool) async throws -> [[String: Any]] {
+        let rows = includeInactive
+            ? try await resolveClientsIncludingInactive()
+            : try await queryService.queryItems("clients")
+        debugLog("Client ranking source loaded (\(rows.count) clients, include_inactive=\(includeInactive))", category: "Tools")
+        return rows
+    }
+
+    /// Extracts the numeric metric used by a client-ranking tool from a client row.
+    private func metricValue(for kind: ClientRankingKind, client: [String: Any]) -> Double? {
+        switch kind {
+        case .slowestSpeed:
+            let candidates = numericValues(
+                in: client,
+                keys: [
+                    "txRate", "rxRate", "tx_rate", "rx_rate", "tx_rate_kbps", "rx_rate_kbps",
+                    "linkSpeed", "link_speed", "wiredRate", "wired_rate", "speed", "uplinkSpeed"
+                ]
+            ).filter { $0 > 0 }
+            guard !candidates.isEmpty else { return nil }
+            return candidates.min()
+        case .weakestSignal:
+            let candidates = numericValues(
+                in: client,
+                keys: ["signal", "signalStrength", "wifiSignal", "rssi"]
+            )
+            guard !candidates.isEmpty else { return nil }
+            if let negative = candidates.filter({ $0 < 0 }).max() {
+                return negative
+            }
+            return candidates.min()
+        case .highestLatency:
+            let candidates = numericValues(
+                in: client,
+                keys: ["latency", "avgLatency", "latencyMs", "latency_ms", "ping", "pingMs", "ping_ms"]
+            ).filter { $0 >= 0 }
+            guard !candidates.isEmpty else { return nil }
+            return candidates.max()
+        }
+    }
+
+    /// Formats one ranked client result as a compact, LLM-friendly summary line.
+    private func formatRankedClientLine(index: Int, item: RankedClientMetric, kind: ClientRankingKind) -> String {
+        let name = clientDisplayLabel(item.client)
+        let mac = firstString(in: item.client, keys: ["mac", "macAddress", "clientMac", "staMac"]) ?? "unknown"
+        let ip = firstString(in: item.client, keys: ["ip", "ipAddress", "last_ip", "lastIp"]) ?? "unknown"
+        let ap = firstString(in: item.client, keys: ["uplinkDeviceName", "uplink_name", "ap_name", "apName", "radioName"])
+            ?? firstString(in: item.client, keys: ["uplinkDeviceId", "ap_mac"])
+            ?? "unknown"
+        let medium = isWiredClient(item.client) ? "wired" : "wifi"
+        return "\(index). name=\(name), \(kind.metricLabel)=\(kind.formatted(item.value)), medium=\(medium), ip=\(ip), mac=\(mac), uplink=\(ap)"
+    }
+
+    /// Returns the best display label for compact client-ranking results.
+    private func clientDisplayLabel(_ client: [String: Any]) -> String {
+        let name = firstString(
+            in: client,
+            keys: ["name", "displayName", "clientName", "hostname", "hostName", "dhcpHostname", "ip", "ipAddress"]
+        ) ?? "unknown-client"
+        let suffix = firstString(in: client, keys: ["ip", "ipAddress"])
+        if let suffix, !suffix.isEmpty, suffix != name {
+            return "\(name) (\(suffix))"
+        }
+        return name
+    }
+
+    /// Returns true when a client row appears to represent a wired client.
+    private func isWiredClient(_ client: [String: Any]) -> Bool {
+        if let value = boolValue(client["is_wired"]) ?? boolValue(client["isWired"]) {
+            return value
+        }
+        if let radio = firstString(in: client, keys: ["medium", "connectionType", "radio"])?.lowercased(),
+           radio.contains("wired") || radio.contains("ethernet") {
+            return true
+        }
+        return false
+    }
+
+    /// Extracts numeric values from a client row for the provided key list.
+    private func numericValues(in row: [String: Any], keys: [String]) -> [Double] {
+        var values: [Double] = []
+        for key in keys {
+            if let value = numericValue(row[key]) {
+                values.append(value)
+                continue
+            }
+            if let nested = row[key] as? [String: Any] {
+                values.append(contentsOf: nested.values.compactMap(numericValue))
+            }
+        }
+        return values
+    }
+
+    /// Converts a JSON field into a numeric value when possible.
+    private func numericValue(_ value: Any?) -> Double? {
+        switch value {
+        case let number as NSNumber:
+            return number.doubleValue
+        case let string as String:
+            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+            return Double(trimmed)
+        case let dict as [String: Any]:
+            for candidate in ["value", "current", "avg", "mean"] {
+                if let number = numericValue(dict[candidate]) {
+                    return number
+                }
+            }
+            return nil
+        default:
+            return nil
+        }
+    }
+
+    /// Converts a flexible JSON value into a boolean when possible.
+    private func boolValue(_ value: Any?) -> Bool? {
+        switch value {
+        case let bool as Bool:
+            return bool
+        case let number as NSNumber:
+            return number.boolValue
+        case let string as String:
+            let normalized = string.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            switch normalized {
+            case "1", "true", "yes", "y", "on":
+                return true
+            case "0", "false", "no", "n", "off":
+                return false
+            default:
+                return nil
+            }
+        default:
+            return nil
+        }
+    }
+
+    /// Computes compact rankings for clients, APs, networks, rules, and ports without returning raw inventories.
+    private func rankNetworkEntities(
+        entityType rawEntityType: String?,
+        metric rawMetric: String?,
+        limit rawLimit: Int?,
+        includeInactiveRaw: String?,
+        siteRef rawSiteRef: String?
+    ) async throws -> String {
+        let entityType = normalizeRankingToken(rawEntityType)
+        let metric = normalizeRankingToken(rawMetric)
+        guard !entityType.isEmpty, !metric.isEmpty else {
+            return "Error: rank_network_entities requires non-empty 'entity_type' and 'metric'."
+        }
+        let includeInactive = parseFlexibleBool(includeInactiveRaw)
+        let limit = max(1, min(rawLimit ?? 5, 20))
+
+        let results: [RankedEntityResult]
+        switch (entityType, metric) {
+        case ("client", "highest_bandwidth"):
+            results = try await rankClientsByHighestBandwidth(includeInactive: includeInactive)
+        case ("client", "reconnect_churn"):
+            results = try await rankClientsByReconnectChurn(includeInactive: true)
+        case ("client", "most_retransmits"):
+            results = try await rankClientsByMostRetransmits(includeInactive: includeInactive)
+        case ("client", "offline_recent"):
+            results = try await rankRecentlyOfflineClients()
+        case ("client", "recent_ip_changes"):
+            results = try await rankClientsByRecentIPChanges(includeInactive: true)
+        case ("client", "slowest_speed"):
+            results = try await rankClientsByMetric(kind: .slowestSpeed, includeInactive: includeInactive)
+        case ("client", "weakest_signal"):
+            results = try await rankClientsByMetric(kind: .weakestSignal, includeInactive: includeInactive)
+        case ("client", "highest_latency"):
+            results = try await rankClientsByMetric(kind: .highestLatency, includeInactive: includeInactive)
+        case ("access_point", "client_count"):
+            results = try await rankAccessPointsByClientCount(includeInactive: includeInactive)
+        case ("access_point", "weakest_average_signal"):
+            results = try await rankAccessPointsByWeakestAverageSignal(includeInactive: includeInactive)
+        case ("access_point", "roam_churn"):
+            results = try await rankAccessPointsByChurn(kind: .roam, includeInactive: true)
+        case ("access_point", "disconnect_churn"):
+            results = try await rankAccessPointsByChurn(kind: .disconnect, includeInactive: true)
+        case ("wifi_broadcast", "client_count"):
+            results = try await rankWiFiBroadcastsByClientCount(includeInactive: includeInactive)
+        case ("wifi_broadcast", "weakest_average_signal"):
+            results = try await rankWiFiBroadcastsByAverageSignal(includeInactive: includeInactive, strongest: false)
+        case ("wifi_broadcast", "strongest_average_signal"):
+            results = try await rankWiFiBroadcastsByAverageSignal(includeInactive: includeInactive, strongest: true)
+        case ("network", "client_count"):
+            results = try await rankNetworksByClientCount(includeInactive: includeInactive)
+        case ("network", "reference_count"):
+            results = try await rankNetworksByReferenceCount()
+        case ("switch_port", "errors"):
+            results = try await rankSwitchPortsByErrors()
+        case ("switch_port", "disconnected_client_count"):
+            results = try await rankSwitchPortsByDisconnectedClients()
+        case ("switch_port", "flapping"):
+            results = try await rankSwitchPortsByFlapping()
+        case ("firewall_rule", "hits"):
+            results = try await rankFirewallRulesByHits()
+        case ("firewall_rule", "shadow_risk"):
+            results = try await rankFirewallRulesByShadowRisk()
+        case ("acl_rule", "ordering_risk"):
+            results = try await rankACLRulesByOrderingRisk()
+        case ("vpn_tunnel", "down"):
+            results = try await rankVPNTunnels(metric: .down)
+        case ("vpn_tunnel", "up"):
+            results = try await rankVPNTunnels(metric: .up)
+        case ("vpn_tunnel", "stale"):
+            results = try await rankVPNTunnels(metric: .stale)
+        case ("wan_profile", "healthy"):
+            results = try await rankWANProfiles(metric: .healthy)
+        case ("wan_profile", "unhealthy"):
+            results = try await rankWANProfiles(metric: .unhealthy)
+        case ("dns_policy", "client_count"):
+            results = try await rankDNSPoliciesByClientCount()
+        case ("app_block", "target_count"):
+            results = try await rankAppBlocksByTargetCount(siteRef: normalizedSiteRef(rawSiteRef))
+        default:
+            return "Error: Unsupported entity_type/metric combination '\(entityType)' / '\(metric)'."
+        }
+
+        let selected = Array(results.prefix(limit))
+        guard !selected.isEmpty else {
+            return "No \(entityType.replacingOccurrences(of: "_", with: " ")) results exposed a usable '\(metric)' metric."
+        }
+
+        debugLog(
+            "rank_network_entities completed (entity_type=\(entityType), metric=\(metric), returned=\(selected.count), include_inactive=\(includeInactive))",
+            category: "Tools"
+        )
+        let lines = selected.enumerated().map { index, item in
+            "\(index + 1). \(item.label), \(metric)=\(item.valueText)\(item.detail.isEmpty ? "" : ", \(item.detail)")"
+        }
+        return """
+        Ranked \(entityType.replacingOccurrences(of: "_", with: " ")) results:
+        - metric: \(metric)
+        - result_count: \(selected.count)
+        \(lines.joined(separator: "\n"))
+        """
+    }
+
+    /// Ranks clients by one of the compact built-in client metrics.
+    private func rankClientsByMetric(kind: ClientRankingKind, includeInactive: Bool) async throws -> [RankedEntityResult] {
+        let clients = try await loadClientsForRanking(includeInactive: includeInactive)
+        return clients.compactMap { client -> RankedEntityResult? in
+            guard let value = metricValue(for: kind, client: client) else { return nil }
+            if kind.requiresWireless, isWiredClient(client) { return nil }
+            return RankedEntityResult(
+                label: "client=\(clientDisplayLabel(client))",
+                value: value,
+                valueText: kind.formatted(value),
+                detail: clientIdentityDetail(client)
+            )
+        }
+        .sorted {
+            if $0.value != $1.value {
+                return kind.prefersLowerValues ? $0.value < $1.value : $0.value > $1.value
+            }
+            return $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending
+        }
+    }
+
+    /// Ranks clients by estimated current bandwidth using the best available transmit and receive counters.
+    private func rankClientsByHighestBandwidth(includeInactive: Bool) async throws -> [RankedEntityResult] {
+        let clients = try await loadClientsForRanking(includeInactive: includeInactive)
+        return clients.compactMap { client -> RankedEntityResult? in
+            let total = sumNumericValues(
+                in: client,
+                keys: [
+                    "txRate", "rxRate", "tx_rate", "rx_rate", "tx_rate_kbps", "rx_rate_kbps",
+                    "downloadKbps", "uploadKbps", "downloadRate", "uploadRate", "throughput"
+                ]
+            )
+            guard total > 0 else { return nil }
+            return RankedEntityResult(
+                label: "client=\(clientDisplayLabel(client))",
+                value: total,
+                valueText: String(format: "%.0f Mbps", total),
+                detail: clientIdentityDetail(client)
+            )
+        }
+        .sorted { $0.value == $1.value ? $0.label < $1.label : $0.value > $1.value }
+    }
+
+    /// Ranks clients by reconnect, reassociation, and disconnect churn counters.
+    private func rankClientsByReconnectChurn(includeInactive: Bool) async throws -> [RankedEntityResult] {
+        let clients = try await loadClientsForRanking(includeInactive: includeInactive)
+        return clients.compactMap { client -> RankedEntityResult? in
+            let total = sumNumericValues(
+                in: client,
+                keys: [
+                    "disconnectCount", "disconnect_count", "disconnects", "reconnectCount", "reconnect_count",
+                    "reconnects", "reassocCount", "reassoc_count", "associationFailures", "authFailures"
+                ]
+            )
+            guard total > 0 else { return nil }
+            return RankedEntityResult(
+                label: "client=\(clientDisplayLabel(client))",
+                value: total,
+                valueText: String(format: "%.0f", total),
+                detail: clientIdentityDetail(client)
+            )
+        }
+        .sorted { $0.value == $1.value ? $0.label < $1.label : $0.value > $1.value }
+    }
+
+    /// Ranks clients by retransmit or retry counts.
+    private func rankClientsByMostRetransmits(includeInactive: Bool) async throws -> [RankedEntityResult] {
+        let clients = try await loadClientsForRanking(includeInactive: includeInactive)
+        return clients.compactMap { client -> RankedEntityResult? in
+            let total = sumNumericValues(
+                in: client,
+                keys: [
+                    "retries", "retryCount", "retry_count", "txRetries", "rxRetries",
+                    "tx_retries", "rx_retries", "txRetry", "rxRetry", "txRetryPct", "tx_retry_pct"
+                ]
+            )
+            guard total > 0 else { return nil }
+            return RankedEntityResult(
+                label: "client=\(clientDisplayLabel(client))",
+                value: total,
+                valueText: String(format: "%.0f", total),
+                detail: clientIdentityDetail(client)
+            )
+        }
+        .sorted { $0.value == $1.value ? $0.label < $1.label : $0.value > $1.value }
+    }
+
+    /// Ranks inactive clients by how recently they were last seen.
+    private func rankRecentlyOfflineClients() async throws -> [RankedEntityResult] {
+        let clients = try await loadClientsForRanking(includeInactive: true)
+        return clients.compactMap { client -> RankedEntityResult? in
+            guard !isClientActiveForRanking(client) else { return nil }
+            guard let date = latestDate(in: client, keys: ["lastSeen", "last_seen", "lastConnected", "disconnect_timestamp", "connectedAt"]) else {
+                return nil
+            }
+            return RankedEntityResult(
+                label: "client=\(clientDisplayLabel(client))",
+                value: date.timeIntervalSince1970,
+                valueText: isoDateString(date),
+                detail: clientIdentityDetail(client)
+            )
+        }
+        .sorted { $0.value == $1.value ? $0.label < $1.label : $0.value > $1.value }
+    }
+
+    /// Ranks clients that appear to have changed IP by the number of distinct observed IP fields.
+    private func rankClientsByRecentIPChanges(includeInactive: Bool) async throws -> [RankedEntityResult] {
+        let clients = try await loadClientsForRanking(includeInactive: includeInactive)
+        return clients.compactMap { client -> RankedEntityResult? in
+            let ips = uniqueRankingStrings(
+                stringCandidates(in: client, keys: ["ip", "ipAddress", "last_ip", "lastIp", "fixed_ip", "fixedIp", "previous_ip", "previousIp"])
+            )
+            guard ips.count > 1 else { return nil }
+            let changeCount = Double(ips.count - 1)
+            return RankedEntityResult(
+                label: "client=\(clientDisplayLabel(client))",
+                value: changeCount,
+                valueText: "\(Int(changeCount))",
+                detail: "ips=\(ips.joined(separator: " -> ")), \(clientIdentityDetail(client))"
+            )
+        }
+        .sorted { $0.value == $1.value ? $0.label < $1.label : $0.value > $1.value }
+    }
+
+    /// Ranks access points by the number of currently associated clients.
+    private func rankAccessPointsByClientCount(includeInactive: Bool) async throws -> [RankedEntityResult] {
+        let devices = try await queryService.queryItems("devices")
+        let deviceNameByID = Dictionary(uniqueKeysWithValues: devices.compactMap { device -> (String, String)? in
+            guard let id = firstString(in: device, keys: ["id", "_id"]) else { return nil }
+            return (id, firstString(in: device, keys: ["name", "hostname", "model"]) ?? id)
+        })
+        let clients = try await loadClientsForRanking(includeInactive: includeInactive)
+        let grouped = Dictionary(grouping: clients) { client in
+            firstString(in: client, keys: ["uplinkDeviceId", "uplink_device_id", "apId", "ap_id", "uplinkApId"]) ?? "unknown"
+        }
+        return grouped.compactMap { uplinkID, rows in
+            guard uplinkID != "unknown" else { return nil }
+            let label = deviceNameByID[uplinkID] ?? uplinkID
+            return RankedEntityResult(
+                label: "access_point=\(label)",
+                value: Double(rows.count),
+                valueText: "\(rows.count)",
+                detail: "device_id=\(uplinkID)"
+            )
+        }
+        .sorted { $0.value == $1.value ? $0.label < $1.label : $0.value > $1.value }
+    }
+
+    /// Ranks access points by the weakest average signal across their associated WiFi clients.
+    private func rankAccessPointsByWeakestAverageSignal(includeInactive: Bool) async throws -> [RankedEntityResult] {
+        let devices = try await queryService.queryItems("devices")
+        let deviceNameByID = Dictionary(uniqueKeysWithValues: devices.compactMap { device -> (String, String)? in
+            guard let id = firstString(in: device, keys: ["id", "_id"]) else { return nil }
+            return (id, firstString(in: device, keys: ["name", "hostname", "model"]) ?? id)
+        })
+        let clients = try await loadClientsForRanking(includeInactive: includeInactive)
+        let wifiClients = clients.filter { !isWiredClient($0) }
+        let grouped = Dictionary(grouping: wifiClients) { client in
+            firstString(in: client, keys: ["uplinkDeviceId", "uplink_device_id", "apId", "ap_id", "uplinkApId"]) ?? "unknown"
+        }
+        return grouped.compactMap { uplinkID, rows in
+            let signals = rows.compactMap { metricValue(for: .weakestSignal, client: $0) }
+            guard !signals.isEmpty else { return nil }
+            let average = signals.reduce(0, +) / Double(signals.count)
+            let label = deviceNameByID[uplinkID] ?? uplinkID
+            return RankedEntityResult(
+                label: "access_point=\(label)",
+                value: average,
+                valueText: String(format: "%.1f dBm", average),
+                detail: "clients=\(rows.count), device_id=\(uplinkID)"
+            )
+        }
+        .sorted { $0.value == $1.value ? $0.label < $1.label : $0.value < $1.value }
+    }
+
+    /// Ranks access points by cumulative roam or disconnect churn observed in their associated clients.
+    private func rankAccessPointsByChurn(kind: AccessPointChurnKind, includeInactive: Bool) async throws -> [RankedEntityResult] {
+        let devices = try await queryService.queryItems("devices")
+        let deviceNameByID = Dictionary(uniqueKeysWithValues: devices.compactMap { device -> (String, String)? in
+            guard let id = firstString(in: device, keys: ["id", "_id"]) else { return nil }
+            return (id, firstString(in: device, keys: ["name", "hostname", "model"]) ?? id)
+        })
+        let clients = try await loadClientsForRanking(includeInactive: includeInactive)
+        var totals: [String: Double] = [:]
+        var clientCounts: [String: Int] = [:]
+        for client in clients {
+            guard let uplinkID = firstString(in: client, keys: ["uplinkDeviceId", "uplink_device_id", "apId", "ap_id", "uplinkApId"]) else {
+                continue
+            }
+            let value = sumNumericValues(in: client, keys: kind.keys)
+            guard value > 0 else { continue }
+            totals[uplinkID, default: 0] += value
+            clientCounts[uplinkID, default: 0] += 1
+        }
+        return totals.compactMap { uplinkID, total in
+            let label = deviceNameByID[uplinkID] ?? uplinkID
+            return RankedEntityResult(
+                label: "access_point=\(label)",
+                value: total,
+                valueText: String(format: "%.0f", total),
+                detail: "clients=\(clientCounts[uplinkID] ?? 0), device_id=\(uplinkID)"
+            )
+        }
+        .sorted { $0.value == $1.value ? $0.label < $1.label : $0.value > $1.value }
+    }
+
+    /// Ranks WiFi broadcasts by the number of associated wireless clients.
+    private func rankWiFiBroadcastsByClientCount(includeInactive: Bool) async throws -> [RankedEntityResult] {
+        let wifiBroadcasts = try await queryService.queryItems("wifi-broadcasts")
+        let clients = try await loadClientsForRanking(includeInactive: includeInactive)
+        var counts: [String: Int] = [:]
+        for client in clients where !isWiredClient(client) {
+            guard let name = wifiBroadcastName(for: client, broadcasts: wifiBroadcasts) else { continue }
+            counts[name, default: 0] += 1
+        }
+        return counts.map { name, count in
+            RankedEntityResult(
+                label: "wifi_broadcast=\(name)",
+                value: Double(count),
+                valueText: "\(count)",
+                detail: ""
+            )
+        }
+        .sorted { $0.value == $1.value ? $0.label < $1.label : $0.value > $1.value }
+    }
+
+    /// Ranks WiFi broadcasts by their average client signal, strongest or weakest first.
+    private func rankWiFiBroadcastsByAverageSignal(includeInactive: Bool, strongest: Bool) async throws -> [RankedEntityResult] {
+        let wifiBroadcasts = try await queryService.queryItems("wifi-broadcasts")
+        let clients = try await loadClientsForRanking(includeInactive: includeInactive)
+        var grouped: [String: [Double]] = [:]
+        for client in clients where !isWiredClient(client) {
+            guard let name = wifiBroadcastName(for: client, broadcasts: wifiBroadcasts) else { continue }
+            guard let signal = metricValue(for: .weakestSignal, client: client) else { continue }
+            grouped[name, default: []].append(signal)
+        }
+        return grouped.compactMap { name, values in
+            guard !values.isEmpty else { return nil }
+            let average = values.reduce(0, +) / Double(values.count)
+            return RankedEntityResult(
+                label: "wifi_broadcast=\(name)",
+                value: average,
+                valueText: String(format: "%.1f dBm", average),
+                detail: "clients=\(values.count)"
+            )
+        }
+        .sorted {
+            if $0.value == $1.value { return $0.label < $1.label }
+            return strongest ? ($0.value > $1.value) : ($0.value < $1.value)
+        }
+    }
+
+    /// Ranks networks by how many client rows currently point at them.
+    private func rankNetworksByClientCount(includeInactive: Bool) async throws -> [RankedEntityResult] {
+        let networks = try await queryService.queryItems("networks")
+        let networkNameByID = Dictionary(uniqueKeysWithValues: networks.compactMap { network -> (String, String)? in
+            guard let id = firstString(in: network, keys: ["id", "_id"]) else { return nil }
+            return (id, firstString(in: network, keys: ["name"]) ?? id)
+        })
+        let clients = try await loadClientsForRanking(includeInactive: includeInactive)
+        let grouped = Dictionary(grouping: clients) { client in
+            firstString(in: client, keys: ["networkId", "network_id", "last_connection_network_id", "lastConnectionNetworkId"]) ?? "unknown"
+        }
+        return grouped.compactMap { networkID, rows in
+            guard networkID != "unknown" else { return nil }
+            let label = networkNameByID[networkID] ?? networkID
+            return RankedEntityResult(
+                label: "network=\(label)",
+                value: Double(rows.count),
+                valueText: "\(rows.count)",
+                detail: "network_id=\(networkID)"
+            )
+        }
+        .sorted { $0.value == $1.value ? $0.label < $1.label : $0.value > $1.value }
+    }
+
+    /// Ranks networks by how many policy-like objects reference them.
+    private func rankNetworksByReferenceCount() async throws -> [RankedEntityResult] {
+        let networks = try await queryService.queryItems("networks")
+        let wifiBroadcasts = try await queryService.queryItems("wifi-broadcasts")
+        let dnsPolicies = try await queryService.queryItems("dns-policies")
+        let firewallPolicies = try await queryService.queryItems("firewall-policies")
+        let aclRules = try await queryService.queryItems("acl-rules")
+
+        return networks.compactMap { network -> RankedEntityResult? in
+            guard let networkID = firstString(in: network, keys: ["id", "_id"]) else { return nil }
+            let label = firstString(in: network, keys: ["name"]) ?? networkID
+            let count =
+                referenceCount(for: networkID, in: wifiBroadcasts) +
+                referenceCount(for: networkID, in: dnsPolicies) +
+                referenceCount(for: networkID, in: firewallPolicies) +
+                referenceCount(for: networkID, in: aclRules)
+            guard count > 0 else { return nil }
+            return RankedEntityResult(
+                label: "network=\(label)",
+                value: Double(count),
+                valueText: "\(count)",
+                detail: "network_id=\(networkID)"
+            )
+        }
+        .sorted { $0.value == $1.value ? $0.label < $1.label : $0.value > $1.value }
+    }
+
+    /// Ranks switch ports by accumulated error counters exposed in the device payload.
+    private func rankSwitchPortsByErrors() async throws -> [RankedEntityResult] {
+        let devices = try await queryService.queryItems("devices")
+        var results: [RankedEntityResult] = []
+        for device in devices {
+            let deviceLabel = firstString(in: device, keys: ["name", "hostname", "model", "id"]) ?? "unknown-device"
+            for port in extractPortRows(from: device) {
+                let errors = sumNumericValues(
+                    in: port,
+                    keys: ["errors", "errorCount", "rxErrors", "txErrors", "crcErrors", "drops", "dropped", "discarded"]
+                )
+                guard errors > 0 else { continue }
+                let portLabel = firstString(in: port, keys: ["name", "portName", "port", "portIdx", "index", "id"]) ?? "unknown-port"
+                results.append(
+                    RankedEntityResult(
+                        label: "switch_port=\(deviceLabel) port \(portLabel)",
+                        value: errors,
+                        valueText: String(format: "%.0f", errors),
+                        detail: "device=\(deviceLabel)"
+                    )
+                )
+            }
+        }
+        return results.sorted { $0.value == $1.value ? $0.label < $1.label : $0.value > $1.value }
+    }
+
+    /// Ranks switch ports by how many inactive clients last reported behind them.
+    private func rankSwitchPortsByDisconnectedClients() async throws -> [RankedEntityResult] {
+        let devices = try await queryService.queryItems("devices")
+        let deviceNameByID = Dictionary(uniqueKeysWithValues: devices.compactMap { device -> (String, String)? in
+            guard let id = firstString(in: device, keys: ["id", "_id"]) else { return nil }
+            return (id, firstString(in: device, keys: ["name", "hostname", "model"]) ?? id)
+        })
+        let clients = try await loadClientsForRanking(includeInactive: true)
+        var counts: [String: Int] = [:]
+        for client in clients where !isClientActiveForRanking(client) {
+            guard let key = switchPortKey(for: client) else { continue }
+            counts[key, default: 0] += 1
+        }
+        return counts.map { key, count in
+            let parsed = splitSwitchPortKey(key)
+            let deviceLabel = deviceNameByID[parsed.deviceID] ?? parsed.deviceID
+            return RankedEntityResult(
+                label: "switch_port=\(deviceLabel) port \(parsed.portLabel)",
+                value: Double(count),
+                valueText: "\(count)",
+                detail: "device=\(deviceLabel)"
+            )
+        }
+        .sorted { $0.value == $1.value ? $0.label < $1.label : $0.value > $1.value }
+    }
+
+    /// Ranks switch ports by flap-like counters that indicate repeated link state changes.
+    private func rankSwitchPortsByFlapping() async throws -> [RankedEntityResult] {
+        let devices = try await queryService.queryItems("devices")
+        var results: [RankedEntityResult] = []
+        for device in devices {
+            let deviceLabel = firstString(in: device, keys: ["name", "hostname", "model", "id"]) ?? "unknown-device"
+            for port in extractPortRows(from: device) {
+                let flaps = sumNumericValues(
+                    in: port,
+                    keys: ["linkFlaps", "link_flaps", "flaps", "upDownCount", "up_down_count", "linkDownCount", "linkUpCount", "stpTransitions", "stateChanges"]
+                )
+                guard flaps > 0 else { continue }
+                let portLabel = firstString(in: port, keys: ["name", "portName", "port", "portIdx", "index", "id"]) ?? "unknown-port"
+                results.append(
+                    RankedEntityResult(
+                        label: "switch_port=\(deviceLabel) port \(portLabel)",
+                        value: flaps,
+                        valueText: String(format: "%.0f", flaps),
+                        detail: "device=\(deviceLabel)"
+                    )
+                )
+            }
+        }
+        return results.sorted { $0.value == $1.value ? $0.label < $1.label : $0.value > $1.value }
+    }
+
+    /// Ranks firewall rules by hit or match counters.
+    private func rankFirewallRulesByHits() async throws -> [RankedEntityResult] {
+        let policies = try await queryService.queryItems("firewall-policies")
+        return policies.compactMap { policy in
+            let hits = firstPositiveValue(in: policy, keys: ["hitCount", "hit_count", "hits", "packetCount", "matchCount", "matchedPackets"], nestedKeys: ["statistics", "stats"])
+            guard let hits, hits > 0 else { return nil }
+            let label = firstString(in: policy, keys: ["name", "id", "_id"]) ?? "unknown-rule"
+            return RankedEntityResult(
+                label: "firewall_rule=\(label)",
+                value: hits,
+                valueText: String(format: "%.0f", hits),
+                detail: "rule_id=\(firstString(in: policy, keys: ["id", "_id"]) ?? "unknown")"
+            )
+        }
+        .sorted { $0.value == $1.value ? $0.label < $1.label : $0.value > $1.value }
+    }
+
+    /// Ranks firewall rules that look shadowed by earlier rules with matching scope.
+    private func rankFirewallRulesByShadowRisk() async throws -> [RankedEntityResult] {
+        let policies = try await queryService.queryItems("firewall-policies")
+        return rankRulesByOrderingRisk(rows: policies, labelPrefix: "firewall_rule", detailPrefix: "rule_id")
+    }
+
+    /// Ranks ACL rules that look misordered relative to earlier rules with matching scope.
+    private func rankACLRulesByOrderingRisk() async throws -> [RankedEntityResult] {
+        let rules = try await queryService.queryItems("acl-rules")
+        return rankRulesByOrderingRisk(rows: rules, labelPrefix: "acl_rule", detailPrefix: "rule_id")
+    }
+
+    /// Ranks VPN tunnels by state or staleness without returning the full tunnel list.
+    private func rankVPNTunnels(metric: VPNTunnelMetric) async throws -> [RankedEntityResult] {
+        let tunnels = try await queryService.queryItems("site-to-site-vpn")
+        return tunnels.compactMap { tunnel in
+            let state = ruleStateText(from: tunnel)
+            let isUp = stateLooksHealthy(state)
+            let name = firstString(in: tunnel, keys: ["name", "displayName", "remoteSiteName", "peerName", "id", "_id"]) ?? "unknown-tunnel"
+            let lastSeen = latestDate(in: tunnel, keys: ["lastSeen", "last_seen", "lastConnected", "connectedAt", "updatedAt", "lastHandshake", "last_handshake"])
+            let age = lastSeen.map { max(0, Date().timeIntervalSince($0)) } ?? 0
+            switch metric {
+            case .down:
+                guard !isUp else { return nil }
+                return RankedEntityResult(
+                    label: "vpn_tunnel=\(name)",
+                    value: age > 0 ? age : 1,
+                    valueText: state.isEmpty ? "down" : state,
+                    detail: lastSeen.map { "last_seen=\(isoDateString($0))" } ?? "last_seen=unknown"
+                )
+            case .up:
+                guard isUp else { return nil }
+                return RankedEntityResult(
+                    label: "vpn_tunnel=\(name)",
+                    value: lastSeen?.timeIntervalSince1970 ?? 1,
+                    valueText: state.isEmpty ? "up" : state,
+                    detail: lastSeen.map { "last_seen=\(isoDateString($0))" } ?? "last_seen=unknown"
+                )
+            case .stale:
+                guard age > 0 else { return nil }
+                return RankedEntityResult(
+                    label: "vpn_tunnel=\(name)",
+                    value: age,
+                    valueText: String(format: "%.0f min", age / 60),
+                    detail: "state=\(state.isEmpty ? "unknown" : state)"
+                )
+            }
+        }
+        .sorted {
+            if $0.value == $1.value { return $0.label < $1.label }
+            return metric == .up ? ($0.value > $1.value) : ($0.value > $1.value)
+        }
+    }
+
+    /// Ranks WAN profiles by a heuristic health score derived from state and available telemetry.
+    private func rankWANProfiles(metric: WANHealthMetric) async throws -> [RankedEntityResult] {
+        let profiles = try await queryService.queryItems("wan-profiles")
+        return profiles.compactMap { profile in
+            let name = firstString(in: profile, keys: ["name", "displayName", "ispName", "id", "_id"]) ?? "unknown-wan"
+            let state = ruleStateText(from: profile)
+            let packetLoss = firstPositiveValue(in: profile, keys: ["packetLoss", "packet_loss", "lossPct", "loss_percent"], nestedKeys: ["health", "statistics", "stats"]) ?? 0
+            let latency = firstPositiveValue(in: profile, keys: ["latency", "avgLatency", "latencyMs", "latency_ms"], nestedKeys: ["health", "statistics", "stats"]) ?? 0
+            let jitter = firstPositiveValue(in: profile, keys: ["jitter", "jitterMs", "jitter_ms"], nestedKeys: ["health", "statistics", "stats"]) ?? 0
+            let penalty = (stateLooksHealthy(state) ? 0 : 100) + packetLoss * 5 + (latency / 10) + (jitter / 5)
+            let healthyScore = max(0, 100 - penalty)
+            switch metric {
+            case .healthy:
+                guard healthyScore > 0 else { return nil }
+                return RankedEntityResult(
+                    label: "wan_profile=\(name)",
+                    value: healthyScore,
+                    valueText: String(format: "%.0f", healthyScore),
+                    detail: "state=\(state.isEmpty ? "unknown" : state), loss=\(Int(packetLoss))%, latency=\(Int(latency))ms, jitter=\(Int(jitter))ms"
+                )
+            case .unhealthy:
+                guard penalty > 0 else { return nil }
+                return RankedEntityResult(
+                    label: "wan_profile=\(name)",
+                    value: penalty,
+                    valueText: String(format: "%.0f", penalty),
+                    detail: "state=\(state.isEmpty ? "unknown" : state), loss=\(Int(packetLoss))%, latency=\(Int(latency))ms, jitter=\(Int(jitter))ms"
+                )
+            }
+        }
+        .sorted {
+            if $0.value == $1.value { return $0.label < $1.label }
+            return metric == .healthy ? ($0.value > $1.value) : ($0.value > $1.value)
+        }
+    }
+
+    /// Ranks DNS policies by the number of explicit clients or devices they target.
+    private func rankDNSPoliciesByClientCount() async throws -> [RankedEntityResult] {
+        let policies = try await queryService.queryItems("dns-policies")
+        return policies.compactMap { policy in
+            let count = targetCount(for: policy)
+            guard count > 0 else { return nil }
+            let label = firstString(in: policy, keys: ["name", "id", "_id"]) ?? "unknown-policy"
+            return RankedEntityResult(
+                label: "dns_policy=\(label)",
+                value: Double(count),
+                valueText: "\(count)",
+                detail: "policy_id=\(firstString(in: policy, keys: ["id", "_id"]) ?? "unknown")"
+            )
+        }
+        .sorted { $0.value == $1.value ? $0.label < $1.label : $0.value > $1.value }
+    }
+
+    /// Ranks simple app-block rules by how many client targets they contain.
+    private func rankAppBlocksByTargetCount(siteRef: String) async throws -> [RankedEntityResult] {
+        let payload = try await apiClient.getJSON(path: "/proxy/network/v2/api/site/\(siteRef)/firewall-app-blocks")
+        let rules = rowsFromAnyPayload(payload)
+        return rules.compactMap { rule in
+            let count = max(targetCount(for: rule), stringCandidates(in: rule, keys: ["client_macs"]).count)
+            guard count > 0 else { return nil }
+            let label = firstString(in: rule, keys: ["name", "_id", "id"]) ?? "unknown-app-block"
+            return RankedEntityResult(
+                label: "app_block=\(label)",
+                value: Double(count),
+                valueText: "\(count)",
+                detail: "site_ref=\(siteRef)"
+            )
+        }
+        .sorted { $0.value == $1.value ? $0.label < $1.label : $0.value > $1.value }
+    }
+
+    /// Normalizes ranking tokens so tool arguments can use spaces, hyphens, or underscores interchangeably.
+    private func normalizeRankingToken(_ value: String?) -> String {
+        (value ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "-", with: "_")
+            .replacingOccurrences(of: " ", with: "_")
+    }
+
+    /// Builds a compact client identity suffix for ranked result lines.
+    private func clientIdentityDetail(_ client: [String: Any]) -> String {
+        let medium = isWiredClient(client) ? "wired" : "wifi"
+        let ip = firstString(in: client, keys: ["ip", "ipAddress", "last_ip", "lastIp"]) ?? "unknown"
+        let mac = firstString(in: client, keys: ["mac", "macAddress", "clientMac", "staMac"]) ?? "unknown"
+        let uplink = firstString(in: client, keys: ["uplinkDeviceName", "uplinkDeviceId", "ap_name", "apName"]) ?? "unknown"
+        return "medium=\(medium), ip=\(ip), mac=\(mac), uplink=\(uplink)"
+    }
+
+    /// Returns true when a client row appears to be active or currently connected.
+    private func isClientActiveForRanking(_ client: [String: Any]) -> Bool {
+        if let active = boolValue(client["active"]) ?? boolValue(client["isActive"]) ?? boolValue(client["is_online"]) ?? boolValue(client["isOnline"]) {
+            return active
+        }
+        if let state = firstString(in: client, keys: ["state", "status", "connectionState"])?.lowercased() {
+            if state.contains("offline") || state.contains("disconnected") || state.contains("inactive") {
+                return false
+            }
+            if state.contains("online") || state.contains("connected") || state.contains("active") {
+                return true
+            }
+        }
+        if let timestamp = latestDate(in: client, keys: ["disconnect_timestamp"]), timestamp <= Date() {
+            return false
+        }
+        return true
+    }
+
+    /// Sums numeric values across a set of likely field names.
+    private func sumNumericValues(in row: [String: Any], keys: [String]) -> Double {
+        keys.reduce(0) { partial, key in
+            partial + (numericValue(row[key]) ?? 0)
+        }
+    }
+
+    /// Returns the first positive numeric value from direct or nested dictionaries.
+    private func firstPositiveValue(in row: [String: Any], keys: [String], nestedKeys: [String]) -> Double? {
+        for key in keys {
+            if let value = numericValue(row[key]), value > 0 {
+                return value
+            }
+        }
+        for nestedKey in nestedKeys {
+            guard let nested = row[nestedKey] as? [String: Any] else { continue }
+            for key in keys {
+                if let value = numericValue(nested[key]), value > 0 {
+                    return value
+                }
+            }
+        }
+        return nil
+    }
+
+    /// Collects non-empty string candidates from direct fields or string arrays.
+    private func stringCandidates(in row: [String: Any], keys: [String]) -> [String] {
+        var values: [String] = []
+        for key in keys {
+            if let text = firstString(in: row, keys: [key]), !text.isEmpty {
+                values.append(text)
+            }
+            if let array = row[key] as? [Any] {
+                values.append(contentsOf: array.map { String(describing: $0) }.filter { !$0.isEmpty })
+            }
+        }
+        return uniqueRankingStrings(values)
+    }
+
+    /// Returns the input strings with empties removed and duplicates collapsed in order.
+    private func uniqueRankingStrings(_ values: [String]) -> [String] {
+        var seen: Set<String> = []
+        var output: [String] = []
+        for value in values {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            let key = trimmed.lowercased()
+            guard !seen.contains(key) else { continue }
+            seen.insert(key)
+            output.append(trimmed)
+        }
+        return output
+    }
+
+    /// Returns the normalized site reference, defaulting to `default` when omitted.
+    private func normalizedSiteRef(_ rawSiteRef: String?) -> String {
+        let candidate = (rawSiteRef ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return candidate.isEmpty ? "default" : candidate
+    }
+
+    /// Returns the most recent date parsed from a set of likely timestamp fields.
+    private func latestDate(in row: [String: Any], keys: [String]) -> Date? {
+        keys.compactMap { dateValue(row[$0]) }.max()
+    }
+
+    /// Converts a timestamp-like JSON value into a Date when possible.
+    private func dateValue(_ value: Any?) -> Date? {
+        switch value {
+        case let number as NSNumber:
+            let raw = number.doubleValue
+            if raw > 10_000_000_000 {
+                return Date(timeIntervalSince1970: raw / 1000)
+            }
+            return Date(timeIntervalSince1970: raw)
+        case let string as String:
+            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let seconds = Double(trimmed) {
+                return dateValue(NSNumber(value: seconds))
+            }
+            let formatter = ISO8601DateFormatter()
+            return formatter.date(from: trimmed)
+        default:
+            return nil
+        }
+    }
+
+    /// Formats a Date in ISO-8601 form for compact ranking outputs.
+    private func isoDateString(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.string(from: date)
+    }
+
+    /// Extracts candidate switch-port dictionaries from a device row.
+    private func extractPortRows(from device: [String: Any]) -> [[String: Any]] {
+        let keys = ["ports", "port_table", "portTable", "interfaces", "ethernet_table", "ethernetPorts"]
+        for key in keys {
+            if let rows = device[key] as? [[String: Any]], !rows.isEmpty {
+                return rows
+            }
+            if let values = device[key] as? [Any] {
+                let rows = values.compactMap { $0 as? [String: Any] }
+                if !rows.isEmpty {
+                    return rows
+                }
+            }
+        }
+        return []
+    }
+
+    /// Counts the explicit targets attached to a rule or policy payload.
+    private func targetCount(for row: [String: Any]) -> Int {
+        let directArrays = [
+            row["client_macs"], row["client_ids"], row["clientIds"], row["devices"], row["deviceIds"],
+            row["targetDevices"], row["target_devices"], row["source_devices"], row["network_ids"], row["networks"]
+        ]
+        let directCount = directArrays.reduce(0) { partial, value in
+            partial + ((value as? [Any])?.count ?? 0)
+        }
+        if directCount > 0 { return directCount }
+        if let target = row["target"] as? [String: Any] {
+            return targetCount(for: target)
+        }
+        return 0
+    }
+
+    /// Resolves the WiFi broadcast name a client most likely belongs to using direct SSID fields or broadcast IDs.
+    private func wifiBroadcastName(for client: [String: Any], broadcasts: [[String: Any]]) -> String? {
+        if let direct = firstString(in: client, keys: ["essid", "ssid", "wifiName", "network", "networkName", "wlan", "radioName"]) {
+            return direct
+        }
+        let broadcastID = firstString(in: client, keys: ["wifiBroadcastId", "wifi_broadcast_id", "wlanconfId", "wlanconf_id"])
+        let networkID = firstString(in: client, keys: ["networkId", "network_id", "last_connection_network_id", "lastConnectionNetworkId"])
+        for broadcast in broadcasts {
+            if let id = firstString(in: broadcast, keys: ["id", "_id"]), id == broadcastID {
+                return firstString(in: broadcast, keys: ["name", "ssid", "essid"]) ?? id
+            }
+            if let id = firstString(in: broadcast, keys: ["networkId", "network_id"]), id == networkID {
+                return firstString(in: broadcast, keys: ["name", "ssid", "essid"]) ?? id
+            }
+        }
+        return nil
+    }
+
+    /// Counts how often a given network identifier appears anywhere inside a collection of policy-like rows.
+    private func referenceCount(for networkID: String, in rows: [[String: Any]]) -> Int {
+        rows.reduce(0) { partial, row in
+            partial + (rowContainsToken(row, token: networkID) ? 1 : 0)
+        }
+    }
+
+    /// Returns true when a nested row contains a token in any string field or array element.
+    private func rowContainsToken(_ value: Any, token: String) -> Bool {
+        let normalizedToken = token.lowercased()
+        switch value {
+        case let string as String:
+            return string.lowercased().contains(normalizedToken)
+        case let array as [Any]:
+            return array.contains { rowContainsToken($0, token: token) }
+        case let dict as [String: Any]:
+            return dict.values.contains { rowContainsToken($0, token: token) }
+        default:
+            return false
+        }
+    }
+
+    /// Builds heuristic ordering-risk results by looking for later enabled rules that duplicate earlier scope.
+    private func rankRulesByOrderingRisk(rows: [[String: Any]], labelPrefix: String, detailPrefix: String) -> [RankedEntityResult] {
+        var priorBySignature: [String: Int] = [:]
+        var results: [RankedEntityResult] = []
+        for (index, row) in rows.enumerated() {
+            guard !(boolValue(row["enabled"]) == false) else { continue }
+            let signature = ruleSignature(for: row)
+            let duplicates = priorBySignature[signature] ?? 0
+            if duplicates > 0 {
+                let name = firstString(in: row, keys: ["name", "description", "id", "_id"]) ?? "unnamed-rule"
+                results.append(
+                    RankedEntityResult(
+                        label: "\(labelPrefix)=\(name)",
+                        value: Double(duplicates * 100 + index),
+                        valueText: "\(duplicates)",
+                        detail: "\(detailPrefix)=\(firstString(in: row, keys: ["id", "_id"]) ?? "unknown"), order=\(index + 1)"
+                    )
+                )
+            }
+            priorBySignature[signature, default: 0] += 1
+        }
+        return results.sorted { $0.value == $1.value ? $0.label < $1.label : $0.value > $1.value }
+    }
+
+    /// Collapses the most relevant matching fields from a policy row into a comparison signature.
+    private func ruleSignature(for row: [String: Any]) -> String {
+        let source = ruleScopeSignature(for: row["source"])
+        let destination = ruleScopeSignature(for: row["destination"])
+        let action = ruleStateText(from: row["action"] as? [String: Any] ?? row)
+        let traffic = uniqueRankingStrings(stringCandidates(in: row, keys: ["protocol", "protocols", "trafficMatchingListId", "traffic_matching_list_id", "ipVersion", "ip_version", "port", "ports"]))
+        return [source, destination, action, traffic.joined(separator: "|")].joined(separator: "||").lowercased()
+    }
+
+    /// Extracts a compact scope signature from a nested source/destination object.
+    private func ruleScopeSignature(for value: Any?) -> String {
+        guard let row = value as? [String: Any] else { return "any" }
+        let zone = firstString(in: row, keys: ["zoneId", "zone_id", "id", "_id"]) ?? "any"
+        let network = firstString(in: row, keys: ["networkId", "network_id"]) ?? "any"
+        let country = firstString(in: row, keys: ["countryCode", "country_code"]) ?? "any"
+        return "\(zone):\(network):\(country)"
+    }
+
+    /// Returns a compact state string from top-level or nested status fields.
+    private func ruleStateText(from row: [String: Any]) -> String {
+        firstString(in: row, keys: ["state", "status", "connectionState", "tunnelState", "health", "type", "name"]) ?? ""
+    }
+
+    /// Returns true when a state string appears healthy or connected.
+    private func stateLooksHealthy(_ state: String) -> Bool {
+        let normalized = state.lowercased()
+        if normalized.contains("down") || normalized.contains("fail") || normalized.contains("disconnected") || normalized.contains("offline") {
+            return false
+        }
+        return normalized.contains("up") || normalized.contains("connected") || normalized.contains("online") || normalized.contains("active") || normalized.contains("established")
+    }
+
+    /// Builds a stable switch-port key from a client row when uplink device and port details are available.
+    private func switchPortKey(for client: [String: Any]) -> String? {
+        guard let deviceID = firstString(in: client, keys: ["uplinkDeviceId", "uplink_device_id", "sw_mac", "switchId", "switch_id"]) else {
+            return nil
+        }
+        guard let port = firstString(in: client, keys: ["uplinkPort", "uplink_port", "uplinkPortIdx", "switchPort", "switch_port", "swPort", "port", "last_connection_port"]) else {
+            return nil
+        }
+        return "\(deviceID)|\(port)"
+    }
+
+    /// Splits the internal switch-port key back into device and port parts.
+    private func splitSwitchPortKey(_ key: String) -> (deviceID: String, portLabel: String) {
+        let parts = key.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
+        let deviceID = parts.first.map(String.init) ?? "unknown-device"
+        let portLabel = parts.count > 1 ? String(parts[1]) : "unknown-port"
+        return (deviceID, portLabel)
+    }
+}
+
+private struct RankedClientMetric {
+    let client: [String: Any]
+    let value: Double
+}
+
+private struct RankedEntityResult {
+    let label: String
+    let value: Double
+    let valueText: String
+    let detail: String
+}
+
+private enum AccessPointChurnKind {
+    case roam
+    case disconnect
+
+    var keys: [String] {
+        switch self {
+        case .roam:
+            return ["roamCount", "roam_count", "roams", "roamEvents", "roam_events"]
+        case .disconnect:
+            return ["disconnectCount", "disconnect_count", "disconnects", "reconnectCount", "reconnect_count", "reconnects"]
+        }
+    }
+}
+
+private enum VPNTunnelMetric {
+    case down
+    case up
+    case stale
+}
+
+private enum WANHealthMetric {
+    case healthy
+    case unhealthy
+}
+
+private enum ClientRankingKind {
+    case slowestSpeed
+    case weakestSignal
+    case highestLatency
+
+    var metricLabel: String {
+        switch self {
+        case .slowestSpeed: return "speed"
+        case .weakestSignal: return "signal"
+        case .highestLatency: return "latency"
+        }
+    }
+
+    var singularHeading: String {
+        switch self {
+        case .slowestSpeed: return "Slowest client"
+        case .weakestSignal: return "Weakest WiFi client"
+        case .highestLatency: return "Highest-latency client"
+        }
+    }
+
+    var pluralHeading: String {
+        switch self {
+        case .slowestSpeed: return "Slowest clients"
+        case .weakestSignal: return "Weakest WiFi clients"
+        case .highestLatency: return "Highest-latency clients"
+        }
+    }
+
+    var prefersLowerValues: Bool {
+        switch self {
+        case .slowestSpeed, .weakestSignal:
+            return true
+        case .highestLatency:
+            return false
+        }
+    }
+
+    var requiresWireless: Bool {
+        switch self {
+        case .weakestSignal:
+            return true
+        case .slowestSpeed, .highestLatency:
+            return false
+        }
+    }
+
+    var defaultLimit: Int {
+        switch self {
+        case .slowestSpeed, .weakestSignal, .highestLatency:
+            return 5
+        }
+    }
+
+    var toolLabel: String {
+        switch self {
+        case .slowestSpeed: return "find_slowest_client"
+        case .weakestSignal: return "find_weakest_wifi_client"
+        case .highestLatency: return "find_highest_latency_client"
+        }
+    }
+
+    func formatted(_ value: Double) -> String {
+        switch self {
+        case .slowestSpeed:
+            return String(format: "%.0f Mbps", value)
+        case .weakestSignal:
+            return String(format: "%.0f dBm", value)
+        case .highestLatency:
+            return String(format: "%.1f ms", value)
         }
     }
 }
@@ -385,6 +1637,7 @@ private struct GrafanaLokiService {
         }
     }
 
+    /// Queries range.
     func queryRange(query: String?, minutes rawMinutes: Int?, limit rawLimit: Int?, direction rawDirection: String?) async throws -> String {
         guard !baseURL.isEmpty else {
             debugLog("Loki query_range skipped: base URL missing", category: "Logs")
@@ -419,6 +1672,7 @@ private struct GrafanaLokiService {
         return formatLogResponse(data: data, description: "Loki query_range", query: q, limit: limit)
     }
 
+    /// Queries instant.
     func queryInstant(query: String?, limit rawLimit: Int?) async throws -> String {
         guard !baseURL.isEmpty else {
             debugLog("Loki instant query skipped: base URL missing", category: "Logs")
@@ -443,6 +1697,7 @@ private struct GrafanaLokiService {
         return formatLogResponse(data: data, description: "Loki instant query", query: q, limit: limit)
     }
 
+    /// Lists labels.
     func listLabels() async throws -> String {
         guard !baseURL.isEmpty else {
             debugLog("Loki labels query skipped: base URL missing", category: "Logs")
@@ -462,6 +1717,7 @@ private struct GrafanaLokiService {
         return "Loki labels (\(labels.count)): " + labels.sorted().joined(separator: ", ")
     }
 
+    /// Lists the observed values for a specific Loki label.
     func labelValues(label rawLabel: String?) async throws -> String {
         guard !baseURL.isEmpty else {
             debugLog("Loki label values query skipped: base URL missing", category: "Logs")
@@ -487,6 +1743,7 @@ private struct GrafanaLokiService {
         return "Loki label '\(label)' values (\(values.count)): " + values.sorted().joined(separator: ", ")
     }
 
+    /// Lists series.
     func listSeries(query rawQuery: String?, minutes rawMinutes: Int?, limit rawLimit: Int?) async throws -> String {
         guard !baseURL.isEmpty else {
             debugLog("Loki series query skipped: base URL missing", category: "Logs")
@@ -533,6 +1790,7 @@ private struct GrafanaLokiService {
         """
     }
 
+    /// Summarizes Loki index statistics for the requested query window.
     func indexStats(query rawQuery: String?, minutes rawMinutes: Int?) async throws -> String {
         guard !baseURL.isEmpty else {
             debugLog("Loki index stats query skipped: base URL missing", category: "Logs")
@@ -576,6 +1834,7 @@ private struct GrafanaLokiService {
         """
     }
 
+    /// Summarizes recent configuration-change signals from UniFi logs.
     func configDiffSummary(minutes rawMinutes: Int?, limit rawLimit: Int?, contains rawContains: String?) async throws -> String {
         guard !baseURL.isEmpty else {
             return "Error: Loki base URL is not configured in Settings."
@@ -599,6 +1858,7 @@ private struct GrafanaLokiService {
         """
     }
 
+    /// Performs a GET request for the documentation and Loki helpers and returns the raw response body.
     private func get(url: URL) async throws -> Data {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
@@ -646,6 +1906,7 @@ private struct GrafanaLokiService {
         }
     }
 
+    /// Formats log response.
     private func formatLogResponse(data: Data, description: String, query: String, limit: Int) -> String {
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let root = json["data"] as? [String: Any],
@@ -688,6 +1949,7 @@ private struct GrafanaLokiService {
         """
     }
 
+    /// Normalizes a user-supplied Loki query and applies the default UniFi stream selector.
     private func normalizedQuery(_ rawQuery: String?) -> String {
         let q = (rawQuery ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return unifiSelector }
@@ -705,15 +1967,18 @@ private struct GrafanaLokiService {
         return "\(unifiSelector) |= \"\(escaped)\""
     }
 
+    /// Normalizes the requested Loki query direction.
     private func normalizedDirection(_ rawDirection: String?) -> String {
         let direction = (rawDirection ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return direction == "forward" ? "forward" : "backward"
     }
 
+    /// Formats a Date as Unix nanoseconds for Loki query parameters.
     private func unixNanos(_ date: Date) -> String {
         String(Int64(date.timeIntervalSince1970 * 1_000_000_000))
     }
 
+    /// Formats a Unix-nanosecond string as a readable timestamp for summaries.
     private func formattedUnixNanos(_ raw: String) -> String? {
         guard let nanos = Double(raw) else { return nil }
         let date = Date(timeIntervalSince1970: nanos / 1_000_000_000)
@@ -753,6 +2018,7 @@ private struct UniFiDocumentationService {
         }
     }
 
+    /// Searches UniFi documentation and returns a compact list of matching articles.
     func search(query: String, maxResults rawMaxResults: Int?) async throws -> String {
         let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedQuery.isEmpty else {
@@ -790,6 +2056,7 @@ private struct UniFiDocumentationService {
         """
     }
 
+    /// Fetches and compacts a single UniFi documentation article.
     func article(articleID: String?, articleURL: String?) async throws -> String {
         let resolvedID = resolveArticleID(articleID: articleID, articleURL: articleURL)
         guard let resolvedID else {
@@ -819,6 +2086,7 @@ private struct UniFiDocumentationService {
         """
     }
 
+    /// Performs a GET request for the documentation and Loki helpers and returns the raw response body.
     private func get(url: URL) async throws -> Data {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
@@ -839,6 +2107,7 @@ private struct UniFiDocumentationService {
         return data
     }
 
+    /// Resolves article ID.
     private func resolveArticleID(articleID: String?, articleURL: String?) -> String? {
         let trimmedID = articleID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !trimmedID.isEmpty {
@@ -857,6 +2126,7 @@ private struct UniFiDocumentationService {
         return String(trimmedURL[idRange])
     }
 
+    /// Compacts long HTML or text content for chat-friendly output.
     private func compact(_ htmlOrText: String, maxLength: Int) -> String {
         let withoutTags = htmlOrText.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
         let decoded = withoutTags
@@ -876,6 +2146,7 @@ private struct UniFiDocumentationService {
         return String(normalized[..<end]) + "..."
     }
 
+    /// Formats date.
     private func formatDate(_ raw: String) -> String? {
         let formatter = ISO8601DateFormatter()
         guard let date = formatter.date(from: raw) else { return nil }
@@ -897,6 +2168,7 @@ private actor AppBlockApprovalStore {
 
     private var pending: [String: PendingPlan] = [:]
 
+    /// Issues a short-lived approval token for a staged operation.
     func issue(siteRef: String, clientName: String, payloads: [[String: Any]]) -> String {
         let token = String(UUID().uuidString.prefix(8)).lowercased()
         pending[token] = PendingPlan(
@@ -909,6 +2181,7 @@ private actor AppBlockApprovalStore {
         return token
     }
 
+    /// Consumes an approval token and returns the staged operation it authorizes.
     func consume(token: String) -> PendingPlan? {
         let key = token.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard let plan = pending[key] else { return nil }
@@ -936,6 +2209,7 @@ private struct UniFiAppBlockService {
             .filter { !$0.isEmpty }
     }
 
+    /// Lists dpiapplications.
     func listDPIApplications(
         queryService: UniFiQueryService,
         search rawSearch: String?,
@@ -950,6 +2224,7 @@ private struct UniFiAppBlockService {
         )
     }
 
+    /// Resolves client for app-block.
     func resolveClientForAppBlock(
         queryService: UniFiQueryService,
         query rawQuery: String?,
@@ -987,6 +2262,7 @@ private struct UniFiAppBlockService {
         """
     }
 
+    /// Resolves dpiapplication.
     func resolveDPIApplication(
         queryService: UniFiQueryService,
         query rawQuery: String?
@@ -1014,6 +2290,7 @@ private struct UniFiAppBlockService {
         """
     }
 
+    /// Resolves dpicategory.
     func resolveDPICategory(
         queryService: UniFiQueryService,
         query rawQuery: String?
@@ -1041,6 +2318,7 @@ private struct UniFiAppBlockService {
         """
     }
 
+    /// Lists dpicategories.
     func listDPICategories(
         queryService: UniFiQueryService,
         search rawSearch: String?,
@@ -1055,6 +2333,7 @@ private struct UniFiAppBlockService {
         )
     }
 
+    /// Resolves a client and app selectors into a staged simple app-block plan and approval token.
     func planClientAppBlock(
         queryService: UniFiQueryService,
         clientSelector rawClientSelector: String?,
@@ -1157,6 +2436,7 @@ private struct UniFiAppBlockService {
         """
     }
 
+    /// Consumes an approval token, merges the planned blocks into the current collection, and writes the full simple app-block set back to UniFi.
     func applyClientAppBlock(approveToken rawToken: String?) async throws -> String {
         let token = (rawToken ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !token.isEmpty else {
@@ -1215,6 +2495,7 @@ private struct UniFiAppBlockService {
         """
     }
 
+    /// Removes matching apps or categories from a client's simple app blocks and rewrites the remaining collection.
     func removeClientAppBlock(
         queryService: UniFiQueryService,
         clientSelector rawClientSelector: String?,
@@ -1303,6 +2584,7 @@ private struct UniFiAppBlockService {
         """
     }
 
+    /// Lists the simple app-block rules that currently target a resolved client.
     func listClientAppBlock(
         queryService: UniFiQueryService,
         clientSelector rawClientSelector: String?,
@@ -1351,6 +2633,7 @@ private struct UniFiAppBlockService {
         """
     }
 
+    /// Formats dpilist.
     private func formatDPIList(
         items: [[String: Any]],
         search rawSearch: String?,
@@ -1376,6 +2659,7 @@ private struct UniFiAppBlockService {
         """
     }
 
+    /// Loads and caches the UniFi DPI application catalog used for app-block resolution.
     private func loadDPIApplications(queryService: UniFiQueryService) async throws -> [[String: Any]] {
         if let cached = await dpiCache.applicationsIfFresh() {
             debugLog("loadDPIApplications cache hit (\(cached.count) items)", category: "Tools")
@@ -1387,6 +2671,7 @@ private struct UniFiAppBlockService {
         return items
     }
 
+    /// Loads and caches the UniFi DPI category catalog used for app-block resolution.
     private func loadDPICategories(queryService: UniFiQueryService) async throws -> [[String: Any]] {
         if let cached = await dpiCache.categoriesIfFresh() {
             debugLog("loadDPICategories cache hit (\(cached.count) items)", category: "Tools")
@@ -1398,6 +2683,7 @@ private struct UniFiAppBlockService {
         return items
     }
 
+    /// Fetches the client inventory used when resolving app-block targets.
     private func resolveClientsForAppBlock(queryService: UniFiQueryService, siteRef: String) async throws -> [[String: Any]] {
         var sources: [[[String: Any]]] = []
         if let rows = try? await queryService.queryItems("clients-all") {
@@ -1431,6 +2717,7 @@ private struct UniFiAppBlockService {
         return merged
     }
 
+    /// Extracts rule dictionaries from the firewall-app-blocks API response shape.
     private func rowsFromPayload(_ payload: Any) -> [[String: Any]] {
         if let rows = payload as? [[String: Any]] {
             return rows
@@ -1446,6 +2733,7 @@ private struct UniFiAppBlockService {
         return []
     }
 
+    /// Fetches the current simple app-block collection from UniFi.
     private func fetchSimpleAppBlocks(siteRef: String) async throws -> [[String: Any]] {
         let path = "/proxy/network/v2/api/site/\(siteRef)/firewall-app-blocks"
         let payload = try await apiClient.getJSON(path: path)
@@ -1458,6 +2746,7 @@ private struct UniFiAppBlockService {
         return []
     }
 
+    /// Normalizes a raw rule payload into the dictionary shape used by the app-block helpers.
     private func normalizeTrafficRule(_ payload: Any) -> [String: Any]? {
         if let dict = payload as? [String: Any] {
             if let data = dict["data"] as? [[String: Any]], let first = data.first {
@@ -1468,23 +2757,27 @@ private struct UniFiAppBlockService {
         return nil
     }
 
+    /// Returns the first usable identifier for an existing simple app-block rule.
     private func trafficRuleID(_ rule: [String: Any]) -> String? {
         let id = (rule["_id"] as? String) ?? (rule["id"] as? String)
         let trimmed = (id ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    /// Checks whether a rule belongs to the simple app-block collection shape.
     private func isSimpleAppRule(_ rule: [String: Any]) -> Bool {
         let type = normalize(rule["type"])
         let targetType = canonicalTargetType(rule)
         return type == "device" && (targetType == "app_id" || targetType == "app_category")
     }
 
+    /// Checks whether a rule targets the specified client MAC address.
     private func ruleTargetsClient(_ rule: [String: Any], mac: String) -> Bool {
         let macs = Set(extractClientDevices(rule).map(normalize))
         return macs.contains(normalize(mac))
     }
 
+    /// Finds an existing simple app-block rule that matches the same client, target type, and schedule.
     private func findMatchingRule(for payload: [String: Any], in rules: [[String: Any]]) -> [String: Any]? {
         let payloadType = canonicalTargetType(payload)
         let payloadMacs = Set(extractClientDevices(payload).map(normalize))
@@ -1500,6 +2793,7 @@ private struct UniFiAppBlockService {
         })
     }
 
+    /// Merges newly requested app or category targets into an existing simple app-block rule.
     private func mergeRule(existing: [String: Any], incoming: [String: Any]) -> [String: Any] {
         var merged = existing
         for key in ["name", "type", "target_type", "client_macs", "network_ids", "source_devices", "source_networks", "schedule"] {
@@ -1527,6 +2821,7 @@ private struct UniFiAppBlockService {
         return merged
     }
 
+    /// Builds the normalized payload sent to UniFi's firewall-app-blocks collection API.
     private func materializeSimpleAppBlockPayload(_ raw: [String: Any]) -> [String: Any] {
         // The app plan can carry richer local-only fields; this strips each rule down
         // to the browser-style shape accepted by /firewall-app-blocks.
@@ -1557,6 +2852,7 @@ private struct UniFiAppBlockService {
         return payload
     }
 
+    /// Returns the canonical target type for a simple app-block rule.
     private func canonicalTargetType(_ rule: [String: Any]) -> String {
         let explicit = normalize(rule["target_type"] ?? rule["targetType"])
         if explicit.contains("category") {
@@ -1572,6 +2868,7 @@ private struct UniFiAppBlockService {
         return "app_id"
     }
 
+    /// Extracts normalized client MAC addresses from the rule's target device fields.
     private func extractClientDevices(_ rule: [String: Any]) -> [String] {
         let direct = arrayStrings(rule["client_macs"])
         if !direct.isEmpty { return direct }
@@ -1604,6 +2901,7 @@ private struct UniFiAppBlockService {
         return devices
     }
 
+    /// Posts the full simple app-block collection back to UniFi in one replacement write.
     private func writeSimpleAppBlocks(path: String, blocks: [[String: Any]]) async throws -> Any {
         // This endpoint expects the complete simple-app-block collection in one POST.
         debugLog(
@@ -1613,6 +2911,7 @@ private struct UniFiAppBlockService {
         return try await apiClient.postJSON(path: path, body: blocks)
     }
 
+    /// Builds a compact log summary of a simple app-block payload before submission.
     private func summarizeTrafficRulePayload(_ payload: [String: Any]) -> String {
         let targetType = String(describing: payload["target_type"] ?? "nil")
         let clientMACs = arrayStrings(payload["client_macs"]).joined(separator: ",")
@@ -1636,6 +2935,7 @@ private struct UniFiAppBlockService {
         return "action=\(action), matchingTarget=\(matchingTarget), target_type=\(targetType), client_macs=\(clientMACs), targetDevices.count=\(targetDeviceCount), app_ids.count=\(appCount), app_category_ids.count=\(categoryCount), schedule=\(scheduleMode)"
     }
 
+    /// Builds a shortened JSON preview string for debug logging.
     private func previewJSON(_ value: Any, limit: Int = 500) -> String {
         guard JSONSerialization.isValidJSONObject(value),
               let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]),
@@ -1647,11 +2947,13 @@ private struct UniFiAppBlockService {
         return String(text.prefix(limit))
     }
 
+    /// Normalizes an arbitrary JSON field into an array of strings.
     private func arrayStrings(_ any: Any?) -> [String] {
         guard let array = any as? [Any] else { return [] }
         return array.map { String(describing: $0) }.filter { !$0.isEmpty }
     }
 
+    /// Builds a stable signature string for comparing rule schedules.
     private func scheduleSignature(_ value: Any?) -> String {
         guard let schedule = value as? [String: Any],
               let data = try? JSONSerialization.data(withJSONObject: schedule, options: [.sortedKeys]),
@@ -1662,6 +2964,7 @@ private struct UniFiAppBlockService {
         return text
     }
 
+    /// Extracts the rule's schedule mode in uppercase form.
     private func scheduleMode(_ rule: [String: Any]) -> String {
         guard let schedule = rule["schedule"] as? [String: Any] else { return "unknown" }
         if let mode = schedule["mode"] as? String, !mode.isEmpty {
@@ -1670,6 +2973,7 @@ private struct UniFiAppBlockService {
         return "custom"
     }
 
+    /// Builds an ID-to-name lookup from UniFi catalog rows.
     private func nameMapByID(_ rows: [[String: Any]]) -> [String: String] {
         var out: [String: String] = [:]
         for row in rows {
@@ -1681,6 +2985,7 @@ private struct UniFiAppBlockService {
         return out
     }
 
+    /// Returns the input strings with empties removed and duplicates collapsed in order.
     private func uniqueStrings(_ values: [String]) -> [String] {
         var seen: Set<String> = []
         var out: [String] = []
@@ -1693,6 +2998,7 @@ private struct UniFiAppBlockService {
         return out
     }
 
+    /// Formats resolved IDs with friendly names for tool responses.
     private func summarizeResolvedIDs(_ ids: [String], nameMap: [String: String]) -> String {
         if ids.isEmpty { return "none" }
         return ids.map { id in
@@ -1704,6 +3010,7 @@ private struct UniFiAppBlockService {
         }.joined(separator: ", ")
     }
 
+    /// Splits a comma-separated selector string into trimmed values.
     private func parseCSV(_ value: String?) -> [String] {
         (value ?? "")
             .split(separator: ",")
@@ -1711,17 +3018,20 @@ private struct UniFiAppBlockService {
             .filter { !$0.isEmpty }
     }
 
+    /// Returns the normalized site reference, defaulting to `default` when omitted.
     private func normalizedSiteRef(_ rawSiteRef: String?) -> String {
         let candidate = (rawSiteRef ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         return candidate.isEmpty ? "default" : candidate
     }
 
+    /// Resolves a single client selector against the current client inventory.
     private func resolveClient(_ selector: String, in clients: [[String: Any]]) throws -> [String: Any] {
         try resolveSingle(selector, in: clients, kind: "client") { item in
             clientCandidateValues(item)
         }
     }
 
+    /// Resolves user-entered app or category selectors against a named catalog.
     private func resolveNamedSelectors(_ selectors: [String], in rows: [[String: Any]], kind: String) throws -> [[String: Any]] {
         var output: [[String: Any]] = []
         var seen: Set<String> = []
@@ -1751,6 +3061,7 @@ private struct UniFiAppBlockService {
         return output
     }
 
+    /// Returns exactly one fuzzy-matched row or throws when the selector is ambiguous.
     private func resolveSingle(
         _ selector: String,
         in rows: [[String: Any]],
@@ -1771,14 +3082,17 @@ private struct UniFiAppBlockService {
         throw LLMError.invalidResponse("\(kind.capitalized) selector '\(selector)' did not match.")
     }
 
+    /// Finds the highest-scoring client row for the provided selector text.
     private func bestClientMatch(_ selector: String, in rows: [[String: Any]]) -> (client: [String: Any], score: Int)? {
         bestMatch(selector, in: rows) { clientCandidateValues($0) }.map { ($0.row, $0.score) }
     }
 
+    /// Finds the highest-scoring named catalog row for the provided selector text.
     private func bestNamedMatch(_ selector: String, in rows: [[String: Any]]) -> (row: [String: Any], score: Int)? {
         bestMatch(selector, in: rows, candidates: namedCandidateValues)
     }
 
+    /// Finds the best fuzzy match in a list of candidate strings.
     private func bestMatch(
         _ selector: String,
         in rows: [[String: Any]],
@@ -1804,6 +3118,7 @@ private struct UniFiAppBlockService {
         return (bestRow, bestScore)
     }
 
+    /// Scores a selector against a candidate string so exact and prefix matches win first.
     private func matchScore(query: String, candidate: String) -> Int {
         if candidate == query { return 120 }
         if candidate.hasPrefix(query) || query.hasPrefix(candidate) { return 95 }
@@ -1817,6 +3132,7 @@ private struct UniFiAppBlockService {
         return 0
     }
 
+    /// Normalizes text before fuzzy matching by lowercasing and stripping punctuation noise.
     private func normalizeMatchText(_ input: String) -> String {
         var text = input.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if text.hasSuffix(".local") {
@@ -1831,6 +3147,7 @@ private struct UniFiAppBlockService {
             .joined(separator: " ")
     }
 
+    /// Computes Levenshtein edit distance for fuzzy selector matching.
     private func editDistance(_ lhs: String, _ rhs: String) -> Int {
         if lhs == rhs { return 0 }
         if lhs.isEmpty { return rhs.count }
@@ -1854,6 +3171,7 @@ private struct UniFiAppBlockService {
         return previous[b.count]
     }
 
+    /// Returns true when client allowed.
     private func isClientAllowed(_ client: [String: Any]) -> Bool {
         let fields = clientCandidateValues(client).map(normalize)
 
@@ -1865,6 +3183,7 @@ private struct UniFiAppBlockService {
         return false
     }
 
+    /// Builds the human-readable client label shown in tool responses.
     private func clientDisplayName(_ client: [String: Any]) -> String {
         (client["name"] as? String)
             ?? (client["displayName"] as? String)
@@ -1877,6 +3196,7 @@ private struct UniFiAppBlockService {
             ?? "unknown-client"
     }
 
+    /// Normalizes a free-form string for comparisons and matching.
     private func normalize(_ value: Any?) -> String {
         let cleaned = String(describing: value ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1887,6 +3207,7 @@ private struct UniFiAppBlockService {
         return cleaned
     }
 
+    /// Collects the client fields that should participate in selector matching.
     private func clientCandidateValues(_ client: [String: Any]) -> [String] {
         let raw: [String?] = [
             client["id"] as? String,
@@ -1921,6 +3242,7 @@ private struct UniFiAppBlockService {
         return Array(Set(values))
     }
 
+    /// Collects the candidate text fields for app and category matching.
     private func namedCandidateValues(_ row: [String: Any]) -> [String] {
         let raw: [Any?] = [
             row["id"],
@@ -1934,6 +3256,7 @@ private struct UniFiAppBlockService {
         return raw.compactMap { stringValue($0) }
     }
 
+    /// Returns the stable identifier string for a named catalog row.
     private func namedIdentifier(_ row: [String: Any]) -> String? {
         stringValue(row["id"])
             ?? stringValue(row["appId"])
@@ -1943,18 +3266,21 @@ private struct UniFiAppBlockService {
             ?? stringValue(row["name"])
     }
 
+    /// Returns a trimmed string value when the JSON field can be represented as text.
     private func stringValue(_ any: Any?) -> String? {
         guard let any else { return nil }
         let text = String(describing: any).trimmingCharacters(in: .whitespacesAndNewlines)
         return text.isEmpty ? nil : text
     }
 
+    /// Returns true when the selector looks like a numeric DPI identifier.
     private func isNumericSelector(_ value: String) -> Bool {
         let text = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return false }
         return text.unicodeScalars.allSatisfy { CharacterSet.decimalDigits.contains($0) }
     }
 
+    /// Normalizes a MAC address into lowercase colon-delimited form.
     private func canonicalMAC(_ value: String) -> String? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
@@ -1976,6 +3302,7 @@ private struct UniFiAppBlockService {
         return chunks.joined(separator: ":")
     }
 
+    /// Builds the deduplication key used when merging client inventories.
     private func clientMergeKey(_ row: [String: Any]) -> String {
         let mac = normalize(
             row["mac"] as? String
@@ -2002,6 +3329,7 @@ private struct UniFiAppBlockService {
         return "row:\(UUID().uuidString.lowercased())"
     }
 
+    /// Combines two client rows while preferring the richer set of fields.
     private func mergeClientRow(existing: [String: Any], incoming: [String: Any]) -> [String: Any] {
         var merged = existing
         for (key, value) in incoming {
@@ -2015,6 +3343,7 @@ private struct UniFiAppBlockService {
         return merged
     }
 
+    /// Returns the best MAC address available for a resolved client row.
     private func resolvedClientMAC(_ client: [String: Any], allClients: [[String: Any]]) -> String {
         if let direct = canonicalMAC(trimmedString(
             client["mac"] as? String
@@ -2043,6 +3372,7 @@ private struct UniFiAppBlockService {
         return ""
     }
 
+    /// Returns a string with surrounding whitespace removed, or an empty string for nil.
     private func trimmedString(_ value: String?) -> String {
         (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -2055,6 +3385,7 @@ private actor DPICatalogCache {
     private var categories: [[String: Any]]?
     private var categoriesFetchedAt: Date?
 
+    /// Returns cached DPI applications when the cache is still fresh enough to reuse.
     func applicationsIfFresh() -> [[String: Any]]? {
         guard let applications, let fetchedAt = applicationsFetchedAt else { return nil }
         guard Date().timeIntervalSince(fetchedAt) <= ttlSeconds else { return nil }
@@ -2062,6 +3393,7 @@ private actor DPICatalogCache {
         return applications
     }
 
+    /// Returns cached DPI categories when the cache is still fresh enough to reuse.
     func categoriesIfFresh() -> [[String: Any]]? {
         guard let categories, let fetchedAt = categoriesFetchedAt else { return nil }
         guard Date().timeIntervalSince(fetchedAt) <= ttlSeconds else { return nil }
@@ -2069,12 +3401,14 @@ private actor DPICatalogCache {
         return categories
     }
 
+    /// Stores a refreshed DPI application catalog in the in-memory cache.
     func storeApplications(_ rows: [[String: Any]]) {
         applications = rows
         applicationsFetchedAt = Date()
         debugLog("DPI applications cache store (\(rows.count) items)", category: "Tools")
     }
 
+    /// Stores a refreshed DPI category catalog in the in-memory cache.
     func storeCategories(_ rows: [[String: Any]]) {
         categories = rows
         categoriesFetchedAt = Date()
@@ -2091,6 +3425,7 @@ private actor SSHApprovalStore {
 
     private var pending: [String: PendingApproval] = [:]
 
+    /// Issues a short-lived approval token for a staged operation.
     func issue(host: String, commandID: String) -> String {
         let token = String(UUID().uuidString.prefix(8)).lowercased()
         let signature = "\(host)|\(commandID)".lowercased()
@@ -2103,6 +3438,7 @@ private actor SSHApprovalStore {
         return token
     }
 
+    /// Consumes an approval token and returns the staged operation it authorizes.
     func consume(token: String, host: String, commandID: String) -> Bool {
         let key = token.lowercased()
         guard let approval = pending[key] else { return false }
@@ -2121,6 +3457,7 @@ private struct UniFiSSHLogService {
         "kernel_tail": "tail -n 200 /var/log/kern.log",
     ]
 
+    /// Runs the guarded UniFi SSH log collection flow.
     func run(
         host rawHost: String?,
         commandID rawCommandID: String?,
@@ -2177,6 +3514,7 @@ private struct UniFiSSHLogService {
         )
     }
 
+    /// Executes the approved SSH log collection command against the target UniFi host.
     private func executeSSH(
         username: String,
         host: String,
@@ -2258,6 +3596,7 @@ private struct UniFiSSHLogService {
 private struct ClientDiagnosticsService {
     private let probePorts: [UInt16] = [22, 53, 80, 443]
 
+    /// Probes reachability.
     func probeReachability(target rawTarget: String?, timeoutSeconds rawTimeout: Int?) async -> String {
         let target = (rawTarget ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !target.isEmpty else {
@@ -2272,6 +3611,7 @@ private struct ClientDiagnosticsService {
         return "Reachability probe failed: no TCP response from \(target) on ports \(probePorts.map(String.init).joined(separator: ", "))."
     }
 
+    /// Resolves DNS.
     func resolveDNS(target rawTarget: String?) -> String {
         let target = (rawTarget ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !target.isEmpty else {
@@ -2287,6 +3627,7 @@ private struct ClientDiagnosticsService {
         return "DNS \(target) -> \(addresses.joined(separator: ", "))"
     }
 
+    /// Runs an HTTP probe against a client target and summarizes the response.
     func httpProbe(
         target rawTarget: String?,
         scheme rawScheme: String?,
@@ -2324,6 +3665,7 @@ private struct ClientDiagnosticsService {
         }
     }
 
+    /// Runs TCP port checks against a client target and summarizes the results.
     func portCheck(target rawTarget: String?, portsCSV rawPorts: String?, timeoutSeconds rawTimeout: Int?) async -> String {
         let target = (rawTarget ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !target.isEmpty else {
@@ -2348,6 +3690,7 @@ private struct ClientDiagnosticsService {
         """
     }
 
+    /// Runs a traceroute to the target and summarizes each hop.
     func traceroute(target rawTarget: String?, maxHops rawMaxHops: Int?, timeoutSeconds rawTimeout: Int?) async -> String {
         let target = (rawTarget ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !target.isEmpty else {
@@ -2386,6 +3729,7 @@ private struct ClientDiagnosticsService {
         #endif
     }
 
+    /// Finds the best-matching UniFi client and summarizes its identity fields.
     func lookupClientIdentity(queryService: UniFiQueryService, query rawQuery: String?) async throws -> String {
         let raw = (rawQuery ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let query = normalizeClientLookupText(raw)
@@ -2450,6 +3794,7 @@ private struct ClientDiagnosticsService {
         """
     }
 
+    /// Builds the ordered identity fields used in client lookup matching.
     private func clientIdentityFields(_ client: [String: Any]) -> [String] {
         let keys = [
             "id",
@@ -2474,6 +3819,7 @@ private struct ClientDiagnosticsService {
         }
     }
 
+    /// Normalizes client lookup text.
     private func normalizeClientLookupText(_ input: String) -> String {
         var text = input.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if text.hasSuffix(".local") {
@@ -2489,6 +3835,7 @@ private struct ClientDiagnosticsService {
         return collapsed
     }
 
+    /// Computes Levenshtein edit distance for fuzzy selector matching.
     private func editDistance(_ lhs: String, _ rhs: String) -> Int {
         if lhs == rhs { return 0 }
         if lhs.isEmpty { return rhs.count }
@@ -2512,6 +3859,7 @@ private struct ClientDiagnosticsService {
         return previous[b.count]
     }
 
+    /// Attempts a single TCP connection to determine whether a port is reachable.
     private func tcpProbe(host: String, port: UInt16, timeoutSeconds: Int) async -> Bool {
         guard let nwPort = NWEndpoint.Port(rawValue: port) else { return false }
         return await withCheckedContinuation { continuation in
@@ -2520,6 +3868,7 @@ private struct ClientDiagnosticsService {
 
             actor OneShot {
                 private var done = false
+                /// Marks the probe as finished exactly once across success, timeout, and failure paths.
                 func mark() -> Bool {
                     if done { return false }
                     done = true
@@ -2528,6 +3877,7 @@ private struct ClientDiagnosticsService {
             }
             let oneShot = OneShot()
 
+            /// Resumes the waiting continuation once the TCP probe has completed.
             @Sendable func finish(_ result: Bool) {
                 // Avoid resuming the continuation more than once by coordinating via the actor.
                 Task {
@@ -2555,6 +3905,7 @@ private struct ClientDiagnosticsService {
         }
     }
 
+    /// Resolves host.
     private func resolveHost(_ host: String) -> [String] {
         var hints = addrinfo(
             ai_flags: AI_DEFAULT,
@@ -2591,6 +3942,7 @@ private struct ClientDiagnosticsService {
         return Array(Set(output)).sorted()
     }
 
+    /// Runs a reverse DNS lookup when the input already appears to be an IP address.
     private func reverseLookupIfIPAddress(_ input: String) -> String? {
         var sockaddrStorage = sockaddr_storage()
         var hostBuffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))

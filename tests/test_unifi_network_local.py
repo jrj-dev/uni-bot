@@ -210,6 +210,70 @@ class NamedQueryTests(unittest.TestCase):
 
         self.assertEqual(path, "/proxy/network/integration/v1/sites/site-1/networks")
 
+    def test_resolve_path_for_events_uses_site_ref(self) -> None:
+        module = load_module("named_query_test_events_site_ref", "named_query.py")
+        args = SimpleNamespace(
+            query="events",
+            site_id=None,
+            site_ref="default",
+            insecure=True,
+        )
+
+        path = module.resolve_path(args)
+
+        self.assertEqual(path, "/proxy/network/api/s/default/stat/event")
+
+    def test_resolve_path_for_wlanconf_uses_site_id_to_find_site_ref(self) -> None:
+        module = load_module("named_query_test_wlanconf_site_id", "named_query.py")
+        args = SimpleNamespace(
+            query="wlanconf",
+            site_id="site-1",
+            site_ref=None,
+            insecure=True,
+        )
+
+        with mock.patch.object(
+            module,
+            "load_sites",
+            return_value=[{"id": "site-1", "internalReference": "default"}],
+        ):
+            path = module.resolve_path(args)
+
+        self.assertEqual(path, "/proxy/network/api/s/default/rest/wlanconf")
+
+    def test_resolve_path_for_networkconf_requires_site_scope(self) -> None:
+        module = load_module("named_query_test_networkconf_scope", "named_query.py")
+        args = SimpleNamespace(query="networkconf", site_id=None, site_ref=None, insecure=True)
+
+        with self.assertRaises(SystemExit) as exc:
+            module.resolve_path(args)
+
+        self.assertEqual(str(exc.exception), "networkconf requires --site-id or --site-ref")
+
+    def test_sanitize_payload_redacts_sensitive_fields_recursively(self) -> None:
+        module = load_module("named_query_test_sanitize", "named_query.py")
+
+        sanitized = module.sanitize_payload(
+            {
+                "name": "Test",
+                "x_passphrase": "secret-pass",
+                "nested": {
+                    "token": "abc123",
+                    "private_preshared_keys": [
+                        {"passphrase": "psk-secret"},
+                        {"name": "guest"},
+                    ],
+                },
+                "items": [{"x_iapp_key": "opaque"}, {"ok": True}],
+            }
+        )
+
+        self.assertEqual(sanitized["x_passphrase"], "<redacted>")
+        self.assertEqual(sanitized["nested"]["token"], "<redacted>")
+        self.assertEqual(sanitized["nested"]["private_preshared_keys"], "<redacted>")
+        self.assertEqual(sanitized["items"][0]["x_iapp_key"], "<redacted>")
+        self.assertTrue(sanitized["items"][1]["ok"])
+
     def test_resolve_path_requires_site_id(self) -> None:
         module = load_module("named_query_test_site", "named_query.py")
         args = SimpleNamespace(query="networks", site_id=None, site_ref=None, insecure=True)
@@ -626,6 +690,251 @@ class QuerySummaryTests(unittest.TestCase):
             site_id = module.require_site_id(args)
 
         self.assertEqual(site_id, "site-1")
+
+
+class NetworkRankingsTests(unittest.TestCase):
+    def test_compute_rankings_returns_highest_bandwidth_client(self) -> None:
+        module = load_module("network_rankings_test_bandwidth", "network_rankings.py")
+        args = SimpleNamespace(
+            entity_type="client",
+            metric="highest_bandwidth",
+            limit=5,
+            site_id="site-1",
+            site_ref="default",
+            include_inactive=False,
+            insecure=True,
+        )
+
+        def fake_query(query: str, **_: object) -> object:
+            if query == "clients":
+                return {
+                    "data": [
+                        {"name": "Axiom", "ip": "192.168.1.10", "mac": "aa:bb", "txRate": 40, "rxRate": 60},
+                        {"name": "iPhone", "ip": "192.168.1.11", "mac": "cc:dd", "txRate": 10, "rxRate": 15},
+                    ]
+                }
+            raise AssertionError(f"unexpected query: {query}")
+
+        with mock.patch.object(module, "run_named_query", side_effect=fake_query):
+            ranked = module.compute_rankings(args)
+
+        self.assertEqual(ranked[0]["label"], "client=Axiom (192.168.1.10)")
+        self.assertEqual(ranked[0]["value_text"], "100 Mbps")
+
+    def test_compute_rankings_returns_busiest_access_point(self) -> None:
+        module = load_module("network_rankings_test_ap", "network_rankings.py")
+        args = SimpleNamespace(
+            entity_type="access_point",
+            metric="client_count",
+            limit=5,
+            site_id="site-1",
+            site_ref="default",
+            include_inactive=False,
+            insecure=True,
+        )
+
+        def fake_query(query: str, **_: object) -> object:
+            if query == "devices":
+                return {"data": [{"id": "ap-1", "name": "Hallway AP"}, {"id": "ap-2", "name": "Office AP"}]}
+            if query == "clients":
+                return {
+                    "data": [
+                        {"name": "Axiom", "uplinkDeviceId": "ap-1"},
+                        {"name": "iPhone", "uplinkDeviceId": "ap-1"},
+                        {"name": "TV", "uplinkDeviceId": "ap-2"},
+                    ]
+                }
+            raise AssertionError(f"unexpected query: {query}")
+
+        with mock.patch.object(module, "run_named_query", side_effect=fake_query):
+            ranked = module.compute_rankings(args)
+
+        self.assertEqual(ranked[0]["label"], "access_point=Hallway AP")
+        self.assertEqual(ranked[0]["value_text"], "2")
+
+    def test_compute_rankings_returns_busiest_ssid(self) -> None:
+        module = load_module("network_rankings_test_ssid", "network_rankings.py")
+        args = SimpleNamespace(
+            entity_type="wifi_broadcast",
+            metric="client_count",
+            limit=5,
+            site_id="site-1",
+            site_ref="default",
+            include_inactive=False,
+            insecure=True,
+        )
+
+        def fake_query(query: str, **_: object) -> object:
+            if query == "wifi-broadcasts":
+                return {"data": [{"id": "wifi-1", "name": "Main WiFi"}, {"id": "wifi-2", "name": "IoT"}]}
+            if query == "clients":
+                return {
+                    "data": [
+                        {"name": "Phone", "wifiBroadcastId": "wifi-1", "is_wired": False},
+                        {"name": "Laptop", "wifiBroadcastId": "wifi-1", "is_wired": False},
+                        {"name": "Sensor", "wifiBroadcastId": "wifi-2", "is_wired": False},
+                    ]
+                }
+            raise AssertionError(f"unexpected query: {query}")
+
+        with mock.patch.object(module, "run_named_query", side_effect=fake_query):
+            ranked = module.compute_rankings(args)
+
+        self.assertEqual(ranked[0]["label"], "wifi_broadcast=Main WiFi")
+        self.assertEqual(ranked[0]["value_text"], "2")
+
+    def test_compute_rankings_returns_shadowed_firewall_rule(self) -> None:
+        module = load_module("network_rankings_test_shadow", "network_rankings.py")
+        args = SimpleNamespace(
+            entity_type="firewall_rule",
+            metric="shadow_risk",
+            limit=5,
+            site_id="site-1",
+            site_ref="default",
+            include_inactive=False,
+            insecure=True,
+        )
+
+        def fake_query(query: str, **_: object) -> object:
+            if query == "firewall-policies":
+                return {
+                    "data": [
+                        {"id": "rule-1", "name": "Allow LAN to WAN", "enabled": True, "source": {"zoneId": "lan"}, "destination": {"zoneId": "wan"}, "action": {"type": "ALLOW"}},
+                        {"id": "rule-2", "name": "Later duplicate", "enabled": True, "source": {"zoneId": "lan"}, "destination": {"zoneId": "wan"}, "action": {"type": "ALLOW"}},
+                    ]
+                }
+            raise AssertionError(f"unexpected query: {query}")
+
+        with mock.patch.object(module, "run_named_query", side_effect=fake_query):
+            ranked = module.compute_rankings(args)
+
+        self.assertEqual(ranked[0]["label"], "firewall_rule=Later duplicate")
+        self.assertEqual(ranked[0]["value_text"], "1")
+
+    def test_compute_rankings_returns_most_referenced_network(self) -> None:
+        module = load_module("network_rankings_test_network_refs", "network_rankings.py")
+        args = SimpleNamespace(
+            entity_type="network",
+            metric="reference_count",
+            limit=5,
+            site_id="site-1",
+            site_ref="default",
+            include_inactive=False,
+            insecure=True,
+        )
+
+        def fake_query(query: str, **_: object) -> object:
+            if query == "networks":
+                return {"data": [{"id": "net-1", "name": "LAN"}, {"id": "net-2", "name": "IoT"}]}
+            if query == "wifi-broadcasts":
+                return {"data": [{"id": "wifi-1", "networkId": "net-1"}]}
+            if query == "dns-policies":
+                return {"data": [{"id": "dns-1", "network_ids": ["net-1"]}]}
+            if query == "firewall-policies":
+                return {"data": [{"id": "fw-1", "source": {"networkId": "net-1"}}]}
+            if query == "acl-rules":
+                return {"data": [{"id": "acl-1", "destination": {"networkId": "net-2"}}]}
+            raise AssertionError(f"unexpected query: {query}")
+
+        with mock.patch.object(module, "run_named_query", side_effect=fake_query):
+            ranked = module.compute_rankings(args)
+
+        self.assertEqual(ranked[0]["label"], "network=LAN")
+        self.assertEqual(ranked[0]["value_text"], "3")
+
+    def test_compute_rankings_returns_stale_vpn_tunnel(self) -> None:
+        module = load_module("network_rankings_test_vpn", "network_rankings.py")
+        args = SimpleNamespace(
+            entity_type="vpn_tunnel",
+            metric="stale",
+            limit=5,
+            site_id="site-1",
+            site_ref="default",
+            include_inactive=False,
+            insecure=True,
+        )
+
+        def fake_query(query: str, **_: object) -> object:
+            if query == "site-to-site-vpn":
+                return {
+                    "data": [
+                        {"name": "HQ Tunnel", "status": "up", "lastSeen": "2026-03-10T00:00:00Z"},
+                        {"name": "Branch Tunnel", "status": "down", "lastSeen": "2026-03-01T00:00:00Z"},
+                    ]
+                }
+            raise AssertionError(f"unexpected query: {query}")
+
+        with mock.patch.object(module, "run_named_query", side_effect=fake_query):
+            ranked = module.compute_rankings(args)
+
+        self.assertEqual(ranked[0]["label"], "vpn_tunnel=Branch Tunnel")
+
+    def test_compute_rankings_returns_flapping_switch_port(self) -> None:
+        module = load_module("network_rankings_test_port_flap", "network_rankings.py")
+        args = SimpleNamespace(
+            entity_type="switch_port",
+            metric="flapping",
+            limit=5,
+            site_id="site-1",
+            site_ref="default",
+            include_inactive=False,
+            insecure=True,
+        )
+
+        def fake_query(query: str, **_: object) -> object:
+            if query == "devices":
+                return {
+                    "data": [
+                        {
+                            "id": "sw-1",
+                            "name": "Core Switch",
+                            "ports": [
+                                {"portIdx": "1", "linkFlaps": 2},
+                                {"portIdx": "2", "linkFlaps": 9},
+                            ],
+                        }
+                    ]
+                }
+            raise AssertionError(f"unexpected query: {query}")
+
+        with mock.patch.object(module, "run_named_query", side_effect=fake_query):
+            ranked = module.compute_rankings(args)
+
+        self.assertEqual(ranked[0]["label"], "switch_port=Core Switch port 2")
+        self.assertEqual(ranked[0]["value_text"], "9")
+
+    def test_main_outputs_app_block_target_count(self) -> None:
+        module = load_module("network_rankings_test_app_blocks", "network_rankings.py")
+        args = SimpleNamespace(
+            entity_type="app_block",
+            metric="target_count",
+            limit=3,
+            site_id=None,
+            site_ref="default",
+            include_inactive=False,
+            insecure=True,
+        )
+
+        with mock.patch.object(module, "parse_args", return_value=args):
+            with mock.patch.object(
+                module,
+                "run_unifi_request",
+                return_value={
+                    "data": [
+                        {"name": "Block TikTok", "client_macs": ["aa", "bb", "cc"]},
+                        {"name": "Block YouTube", "client_macs": ["dd"]},
+                    ]
+                },
+            ):
+                stdout = io.StringIO()
+                with contextlib.redirect_stdout(stdout):
+                    exit_code = module.main()
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(payload["kind"], "unifi_network_rankings")
+        self.assertEqual(payload["results"][0]["label"], "app_block=Block TikTok")
+        self.assertEqual(payload["results"][0]["value_text"], "3")
 
 
 if __name__ == "__main__":

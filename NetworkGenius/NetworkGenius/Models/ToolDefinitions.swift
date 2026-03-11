@@ -22,7 +22,7 @@ enum ToolCatalog {
         ),
         ToolDefinition(
             name: "list_clients",
-            description: "List network clients. By default returns active clients; can include inactive/known clients.",
+            description: "List network clients. By default returns active clients; can include inactive/known clients. Prefer ranking tools for 'slowest', 'worst', 'most', or 'least' questions to avoid large responses.",
             parameters: [
                 ToolParameter(name: "include_inactive", type: "boolean", description: "Set true to include inactive/known clients when supported.", required: false),
             ]
@@ -35,6 +35,21 @@ enum ToolCatalog {
         ToolDefinition(
             name: "list_wifi_broadcasts",
             description: "List all WiFi SSIDs and their broadcast settings.",
+            parameters: []
+        ),
+        ToolDefinition(
+            name: "list_network_events",
+            description: "List recent legacy UniFi controller events from the site event feed.",
+            parameters: []
+        ),
+        ToolDefinition(
+            name: "list_wlan_configs",
+            description: "List legacy UniFi WLAN configuration objects, including lower-level SSID settings not exposed by the documented integration API.",
+            parameters: []
+        ),
+        ToolDefinition(
+            name: "list_network_configs",
+            description: "List legacy UniFi network configuration objects, including lower-level LAN/VLAN/WAN details not exposed by the documented integration API.",
             parameters: []
         ),
         ToolDefinition(
@@ -136,6 +151,62 @@ enum ToolCatalog {
             description: "Resolve a UniFi client by GUID/IP/MAC/name and return friendly identity fields.",
             parameters: [
                 ToolParameter(name: "query", type: "string", description: "Client id, IP, MAC, hostname, or display name fragment.", required: true),
+            ]
+        ),
+        ToolDefinition(
+            name: "find_slowest_client",
+            description: "Find the active client with the lowest observed link speed metric without returning the full client list. Prefer this over list_clients for 'slowest device' questions.",
+            parameters: [
+                ToolParameter(name: "include_inactive", type: "boolean", description: "Set true to include inactive/known clients when supported. Default: false.", required: false),
+            ]
+        ),
+        ToolDefinition(
+            name: "top_slowest_clients",
+            description: "Return the N slowest active clients by observed link speed metric without returning the full client list. Prefer this over list_clients for ranking questions.",
+            parameters: [
+                ToolParameter(name: "limit", type: "integer", description: "How many clients to return (1-20). Default: 5.", required: false),
+                ToolParameter(name: "include_inactive", type: "boolean", description: "Set true to include inactive/known clients when supported. Default: false.", required: false),
+            ]
+        ),
+        ToolDefinition(
+            name: "find_weakest_wifi_client",
+            description: "Find the WiFi client with the weakest signal without returning the full client list. Prefer this over list_clients for weak-signal questions.",
+            parameters: [
+                ToolParameter(name: "include_inactive", type: "boolean", description: "Set true to include inactive/known clients when supported. Default: false.", required: false),
+            ]
+        ),
+        ToolDefinition(
+            name: "top_weakest_wifi_clients",
+            description: "Return the N WiFi clients with the weakest signal without returning the full client list.",
+            parameters: [
+                ToolParameter(name: "limit", type: "integer", description: "How many clients to return (1-20). Default: 5.", required: false),
+                ToolParameter(name: "include_inactive", type: "boolean", description: "Set true to include inactive/known clients when supported. Default: false.", required: false),
+            ]
+        ),
+        ToolDefinition(
+            name: "find_highest_latency_client",
+            description: "Find the client with the highest observed latency without returning the full client list. Prefer this over list_clients for latency ranking questions.",
+            parameters: [
+                ToolParameter(name: "include_inactive", type: "boolean", description: "Set true to include inactive/known clients when supported. Default: false.", required: false),
+            ]
+        ),
+        ToolDefinition(
+            name: "top_highest_latency_clients",
+            description: "Return the N clients with the highest observed latency without returning the full client list.",
+            parameters: [
+                ToolParameter(name: "limit", type: "integer", description: "How many clients to return (1-20). Default: 5.", required: false),
+                ToolParameter(name: "include_inactive", type: "boolean", description: "Set true to include inactive/known clients when supported. Default: false.", required: false),
+            ]
+        ),
+        ToolDefinition(
+            name: "rank_network_entities",
+            description: "Compute compact bottom-up rankings without returning full raw lists. Supports questions like busiest SSID, weakest or strongest SSID signal, highest bandwidth client, reconnecting client, busiest AP, AP churn, busiest network, most-referenced network, shadowed firewall rules, misordered ACL rules, unhealthy WANs, stale VPN tunnels, switch ports with errors, flapping ports, disconnected clients behind a port, most-hit firewall rule, DNS policy affecting most clients, and app block targeting the most devices.",
+            parameters: [
+                ToolParameter(name: "entity_type", type: "string", description: "One of: client, access_point, wifi_broadcast, network, switch_port, firewall_rule, acl_rule, vpn_tunnel, wan_profile, dns_policy, app_block.", required: true),
+                ToolParameter(name: "metric", type: "string", description: "Metric to rank by. Supported examples: highest_bandwidth, reconnect_churn, most_retransmits, offline_recent, recent_ip_changes, client_count, weakest_average_signal, strongest_average_signal, roam_churn, disconnect_churn, reference_count, shadow_risk, ordering_risk, down, up, stale, healthy, unhealthy, errors, disconnected_client_count, flapping, hits, target_count, slowest_speed, weakest_signal, highest_latency.", required: true),
+                ToolParameter(name: "limit", type: "integer", description: "How many ranked results to return (1-20). Default: 5.", required: false),
+                ToolParameter(name: "include_inactive", type: "boolean", description: "Set true when client-based metrics should include inactive/known clients. Default: false.", required: false),
+                ToolParameter(name: "site_ref", type: "string", description: "Optional site reference for app-block ranking. Default: default.", required: false),
             ]
         ),
         ToolDefinition(
@@ -328,6 +399,7 @@ enum ToolCatalog {
         ),
     ]
 
+    /// Builds the Claude-formatted tool schema array used in chat requests.
     static func claudeToolSchemas() -> [[String: Any]] {
         all.map { tool in
             var schema: [String: Any] = [
@@ -352,6 +424,7 @@ enum ToolCatalog {
         }
     }
 
+    /// Builds the OpenAI-formatted tool schema array used in chat requests.
     static func openAIToolSchemas() -> [[String: Any]] {
         all.map { tool in
             var properties: [String: Any] = [:]
