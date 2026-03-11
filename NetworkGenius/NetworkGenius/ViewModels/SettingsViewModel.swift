@@ -39,10 +39,14 @@ final class SettingsViewModel: ObservableObject {
     @Published var claudeAPIKey: String = ""
     @Published var openaiAPIKey: String = ""
     @Published var allowSelfSignedCerts: Bool = true
+    @Published var selectedAssistantMode: AssistantMode = .basic
     @Published var selectedProvider: LLMProvider = .claude
     @Published var shareDeviceContextWithLLM: Bool = false
     @Published var hideReasoningOutput: Bool = true
     @Published var darkModeEnabled: Bool = true
+    @Published var clientModificationApprovals: [ClientModificationApproval] = []
+    @Published var isLoadingClientModificationApprovals = false
+    @Published var clientModificationApprovalResult: String?
 
     @Published var voiceEnabled: Bool = false
     @Published var selectedVoiceID: String = ""
@@ -72,6 +76,14 @@ final class SettingsViewModel: ObservableObject {
         return URLSession(configuration: config)
     }()
 
+    var isAdvancedMode: Bool {
+        selectedAssistantMode == .advanced
+    }
+
+    var availableProviders: [LLMProvider] {
+        isAdvancedMode ? LLMProvider.allCases : [.claude, .openai]
+    }
+
     /// Loads persisted settings from AppState into the editable view-model fields.
     func load(from appState: AppState) {
         consoleURL = appState.consoleURL
@@ -90,10 +102,13 @@ final class SettingsViewModel: ObservableObject {
         }
         siteID = appState.siteID
         allowSelfSignedCerts = appState.allowSelfSignedCerts
+        selectedAssistantMode = appState.assistantMode
         selectedProvider = appState.llmProvider
         shareDeviceContextWithLLM = appState.shareDeviceContextWithLLM
         hideReasoningOutput = appState.hideReasoningOutput
         darkModeEnabled = appState.darkModeEnabled
+        clientModificationApprovals = appState.clientModificationApprovals
+            .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
         unifiAPIKey = KeychainHelper.loadString(key: .unifiAPIKey) ?? ""
         unifiSSHUsername = KeychainHelper.loadString(key: .unifiSSHUsername) ?? ""
         unifiSSHPrivateKey = KeychainHelper.loadString(key: .unifiSSHPrivateKey) ?? ""
@@ -112,10 +127,12 @@ final class SettingsViewModel: ObservableObject {
             ttsProvider = .local
         }
         openAICloudVoice = UserDefaults.standard.string(forKey: "openAICloudVoice") ?? "alloy"
+        enforceSelectedProviderForCurrentMode()
     }
 
     /// Writes the current settings fields back into AppState and persisted storage.
     func save(to appState: AppState) {
+        enforceSelectedProviderForCurrentMode()
         appState.consoleURL = UniFiAPIClient.normalizeBaseURL(consoleURL)
         appState.grafanaLokiURL = UniFiAPIClient.normalizeBaseURL(grafanaLokiURL)
         let selectors = appBlockAllowedClientSelectors.isEmpty
@@ -130,10 +147,12 @@ final class SettingsViewModel: ObservableObject {
         appState.lmStudioMaxPromptChars = max(1028, min(Int(lmStudioMaxPromptChars.rounded()), 9026))
         appState.siteID = siteID.trimmingCharacters(in: .whitespacesAndNewlines)
         appState.allowSelfSignedCerts = allowSelfSignedCerts
+        appState.assistantMode = selectedAssistantMode
         appState.llmProvider = selectedProvider
         appState.shareDeviceContextWithLLM = shareDeviceContextWithLLM
         appState.hideReasoningOutput = hideReasoningOutput
         appState.darkModeEnabled = darkModeEnabled
+        appState.clientModificationApprovals = clientModificationApprovals
 
         let normalizedUniFiKey = normalizedKey(unifiAPIKey)
         let normalizedUniFiSSHUsername = normalizedKey(unifiSSHUsername)
@@ -187,6 +206,13 @@ final class SettingsViewModel: ObservableObject {
             && hasSelectedLLMConfig
     }
 
+    func handleAssistantModeChange() {
+        enforceSelectedProviderForCurrentMode()
+        if !isAdvancedMode {
+            shareDeviceContextWithLLM = false
+        }
+    }
+
     var hasSelectedLLMKey: Bool {
         switch selectedProvider {
         case .claude: return !normalizedKey(claudeAPIKey).isEmpty
@@ -204,6 +230,55 @@ final class SettingsViewModel: ObservableObject {
                 && !UniFiAPIClient.normalizeBaseURL(lmStudioBaseURL).isEmpty
                 && !normalizedKey(lmStudioModel).isEmpty
         }
+    }
+
+    func refreshClientModificationApprovals() async {
+        isLoadingClientModificationApprovals = true
+        clientModificationApprovalResult = nil
+        defer { isLoadingClientModificationApprovals = false }
+
+        let normalizedConsoleURL = UniFiAPIClient.normalizeBaseURL(consoleURL)
+        guard !normalizedConsoleURL.isEmpty else {
+            clientModificationApprovalResult = "Failed: Console URL is invalid."
+            return
+        }
+        guard !normalizedKey(unifiAPIKey).isEmpty || KeychainHelper.exists(key: .unifiAPIKey) else {
+            clientModificationApprovalResult = "Failed: UniFi API key is required."
+            return
+        }
+
+        let hadKey = KeychainHelper.exists(key: .unifiAPIKey)
+        if !normalizedKey(unifiAPIKey).isEmpty {
+            KeychainHelper.save(key: .unifiAPIKey, string: normalizedKey(unifiAPIKey))
+        }
+
+        do {
+            let client = UniFiAPIClient(baseURL: normalizedConsoleURL, allowSelfSigned: allowSelfSignedCerts)
+            let resolvedSite = try await resolveSiteForGuardrailClientLoad(
+                client: client,
+                configuredSiteID: siteID.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+            let siteIDPath = resolvedSite.id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? resolvedSite.id
+            let rows = try await client.getAllPages(path: "/proxy/network/integration/v1/sites/\(siteIDPath)/clients")
+            let decoded = try decodeUniFiClients(from: rows)
+            clientModificationApprovals = ClientModificationApproval.merge(
+                currentClients: decoded,
+                existing: clientModificationApprovals
+            )
+            clientModificationApprovalResult = clientModificationApprovals.isEmpty
+                ? "Loaded 0 clients."
+                : "Loaded \(clientModificationApprovals.count) clients."
+        } catch {
+            clientModificationApprovalResult = "Failed: \(error.localizedDescription)"
+        }
+
+        if !hadKey && normalizedKey(unifiAPIKey).isEmpty {
+            KeychainHelper.delete(key: .unifiAPIKey)
+        }
+    }
+
+    func removeClientModificationApproval(_ approval: ClientModificationApproval) {
+        clientModificationApprovals.removeAll { $0.id == approval.id }
     }
 
     /// Tests the configured UniFi connection and updates the settings UI with the result.
@@ -945,6 +1020,22 @@ final class SettingsViewModel: ObservableObject {
     /// Returns true when the host already looks like an IPv4 address.
     private func looksLikeIPv4(_ host: String) -> Bool {
         host.split(separator: ".").count == 4 && host.allSatisfy { $0.isNumber || $0 == "." }
+    }
+
+    private func enforceSelectedProviderForCurrentMode() {
+        guard availableProviders.contains(selectedProvider) else {
+            if let preferred = availableProviders.first(where: { $0 == .claude }) {
+                selectedProvider = preferred
+            } else if let fallback = availableProviders.first {
+                selectedProvider = fallback
+            }
+            return
+        }
+    }
+
+    private func decodeUniFiClients(from rows: [[String: Any]]) throws -> [UniFiClient] {
+        let data = try JSONSerialization.data(withJSONObject: rows)
+        return try JSONDecoder().decode([UniFiClient].self, from: data)
     }
 
     /// Normalizes an API key string by trimming surrounding whitespace.

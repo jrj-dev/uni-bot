@@ -20,6 +20,7 @@ final class ChatViewModel: ObservableObject {
     private var appState: AppState?
     private var persistenceStore: ChatPersistenceStore?
     private var activeLLMProvider: LLMProvider?
+    private var activeAssistantMode: AssistantMode?
     private var activeLMStudioBaseURL: String = ""
     private var activeLMStudioModel: String = ""
     private var activeLMStudioMaxPromptChars: Int = 4098
@@ -80,7 +81,8 @@ final class ChatViewModel: ObservableObject {
             summaryService: summaryService,
             networkMonitor: networkMonitor,
             lokiBaseURL: appState.grafanaLokiURL,
-            appBlockAllowedClients: appState.appBlockAllowedClients
+            appBlockAllowedClients: appState.appBlockAllowedClients,
+            assistantMode: appState.assistantMode
         )
 
         switch appState.llmProvider {
@@ -96,6 +98,7 @@ final class ChatViewModel: ObservableObject {
             )
         }
         activeLLMProvider = appState.llmProvider
+        activeAssistantMode = appState.assistantMode
         activeLMStudioBaseURL = UniFiAPIClient.normalizeBaseURL(appState.lmStudioBaseURL)
         activeLMStudioModel = appState.lmStudioModel.trimmingCharacters(in: .whitespacesAndNewlines)
         activeLMStudioMaxPromptChars = appState.lmStudioMaxPromptChars
@@ -265,8 +268,8 @@ final class ChatViewModel: ObservableObject {
         }
         guard let appState else { return [] }
         switch appState.llmProvider {
-        case .claude: return ToolCatalog.claudeToolSchemas()
-        case .openai, .lmStudio: return ToolCatalog.openAIToolSchemas()
+        case .claude: return ToolCatalog.claudeToolSchemas(for: appState.assistantMode)
+        case .openai, .lmStudio: return ToolCatalog.openAIToolSchemas(for: appState.assistantMode)
         }
     }
 
@@ -302,11 +305,49 @@ final class ChatViewModel: ObservableObject {
         }
 
         var systemPrompt = injectedPrefix + baseSystemPrompt
+        if let appState {
+            switch appState.assistantMode {
+            case .basic:
+                systemPrompt += """
+
+                Persona Mode: Basic
+                - Explain issues in plain language for a home user.
+                - Avoid advanced operator jargon unless the user asks for technical detail.
+                - Prefer the smallest, most relevant tool calls and guide the user step by step.
+                - For troubleshooting, prioritize simple checks before advanced diagnostics.
+                """
+            case .advanced:
+                systemPrompt += """
+
+                Persona Mode: Advanced
+                - Respond like a concise network technician assistant.
+                - Use precise technical terms when they improve clarity.
+                - Prefer evidence from targeted tool calls, logs, and scoped diagnostics.
+                - Optimize for fast triage and explain uncertainty explicitly.
+                """
+            }
+        }
         if appState?.llmProvider == .lmStudio, appState?.hideReasoningOutput == true {
             systemPrompt += """
 
             When solving tasks, reason internally. Do not output internal reasoning, chain-of-thought, scratchpad, or <think> sections. Return only concise final answers and necessary tool results.
             """
+        }
+        if let appState {
+            let approvedClients = appState.clientModificationApprovals.filter(\.isApproved)
+            if !approvedClients.isEmpty {
+                let approvedLabels = approvedClients
+                    .prefix(25)
+                    .map(\.displayName)
+                    .joined(separator: ", ")
+                systemPrompt += """
+
+                Approved Client Modification Whitelist:
+                - approved_count: \(approvedClients.count)
+                - approved_clients: \(approvedLabels)
+                - if write-capable tools are enabled, never propose or execute client-specific changes, restarts, or modifications for targets outside this whitelist
+                """
+            }
         }
         guard appState?.shareDeviceContextWithLLM == true else {
             return systemPrompt
@@ -438,6 +479,7 @@ final class ChatViewModel: ObservableObject {
     private func refreshLLMServiceIfNeeded() {
         guard let appState else { return }
         let providerChanged = activeLLMProvider != appState.llmProvider
+        let assistantModeChanged = activeAssistantMode != appState.assistantMode
         let normalizedLMStudioBaseURL = UniFiAPIClient.normalizeBaseURL(appState.lmStudioBaseURL)
         let normalizedLMStudioModel = appState.lmStudioModel.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedLMStudioMaxPromptChars = appState.lmStudioMaxPromptChars
@@ -445,8 +487,30 @@ final class ChatViewModel: ObservableObject {
             || normalizedLMStudioModel != activeLMStudioModel
             || normalizedLMStudioMaxPromptChars != activeLMStudioMaxPromptChars
 
-        guard providerChanged || (appState.llmProvider == .lmStudio && lmStudioConfigChanged) else {
+        guard providerChanged || assistantModeChanged || (appState.llmProvider == .lmStudio && lmStudioConfigChanged) else {
             return
+        }
+
+        if let networkMonitor {
+            let client = UniFiAPIClient(
+                baseURL: UniFiAPIClient.normalizeBaseURL(appState.consoleURL),
+                allowSelfSigned: appState.allowSelfSignedCerts
+            )
+            let configuredSiteID = appState.siteID.trimmingCharacters(in: .whitespacesAndNewlines)
+            let queryService = UniFiQueryService(
+                client: client,
+                siteID: configuredSiteID.isEmpty ? nil : configuredSiteID
+            )
+            let summaryService = UniFiSummaryService(queryService: queryService)
+            toolExecutor = ToolExecutor(
+                apiClient: client,
+                queryService: queryService,
+                summaryService: summaryService,
+                networkMonitor: networkMonitor,
+                lokiBaseURL: appState.grafanaLokiURL,
+                appBlockAllowedClients: appState.appBlockAllowedClients,
+                assistantMode: appState.assistantMode
+            )
         }
 
         switch appState.llmProvider {
@@ -463,11 +527,12 @@ final class ChatViewModel: ObservableObject {
         }
 
         activeLLMProvider = appState.llmProvider
+        activeAssistantMode = appState.assistantMode
         activeLMStudioBaseURL = normalizedLMStudioBaseURL
         activeLMStudioModel = normalizedLMStudioModel
         activeLMStudioMaxPromptChars = normalizedLMStudioMaxPromptChars
         debugLog(
-            "LLM configuration changed (provider=\(appState.llmProvider.rawValue)); rebuilt service. Next request will include current thread context (\(llmMessages.count) transcript messages).",
+            "Runtime configuration changed (provider=\(appState.llmProvider.rawValue), mode=\(appState.assistantMode.rawValue)); rebuilt services. Next request will include current thread context (\(llmMessages.count) transcript messages).",
             category: "Chat"
         )
     }

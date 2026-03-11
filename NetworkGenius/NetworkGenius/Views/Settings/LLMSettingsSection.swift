@@ -2,11 +2,12 @@ import SwiftUI
 
 struct LLMSettingsSection: View {
     @ObservedObject var viewModel: SettingsViewModel
+    let isAdvancedMode: Bool
 
     var body: some View {
         Section("AI Provider") {
             Picker("Provider", selection: $viewModel.selectedProvider) {
-                ForEach(LLMProvider.allCases) { provider in
+                ForEach(viewModel.availableProviders) { provider in
                     Text(provider.rawValue).tag(provider)
                 }
             }
@@ -100,15 +101,17 @@ struct LLMSettingsSection: View {
                 }
             }
 
-            Toggle("Share Device Context With AI", isOn: $viewModel.shareDeviceContextWithLLM)
-            Text("When enabled, the app sends masked device/network context with prompts to improve answers about this device.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            if isAdvancedMode {
+                Toggle("Share Device Context With AI", isOn: $viewModel.shareDeviceContextWithLLM)
+                Text("When enabled, the app sends masked device/network context with prompts to improve answers about this device.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
 
-            Toggle("Hide Reasoning Output", isOn: $viewModel.hideReasoningOutput)
-            Text("For reasoning models, internal thinking is suppressed from chat and voice output.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                Toggle("Hide Reasoning Output", isOn: $viewModel.hideReasoningOutput)
+                Text("For reasoning models, internal thinking is suppressed from chat and voice output.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
             VStack(alignment: .leading, spacing: 8) {
                 Button {

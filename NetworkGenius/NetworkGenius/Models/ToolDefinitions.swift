@@ -1,9 +1,27 @@
 import Foundation
 
+enum ToolAudience {
+    case basic
+    case advanced
+}
+
 struct ToolDefinition {
     let name: String
     let description: String
     let parameters: [ToolParameter]
+    let audience: ToolAudience
+
+    init(
+        name: String,
+        description: String,
+        parameters: [ToolParameter],
+        audience: ToolAudience = .basic
+    ) {
+        self.name = name
+        self.description = description
+        self.parameters = parameters
+        self.audience = audience
+    }
 }
 
 struct ToolParameter {
@@ -55,27 +73,32 @@ enum ToolCatalog {
         ToolDefinition(
             name: "list_firewall_policies",
             description: "List all firewall policies.",
-            parameters: []
+            parameters: [],
+            audience: .advanced
         ),
         ToolDefinition(
             name: "list_firewall_zones",
             description: "List all firewall zones.",
-            parameters: []
+            parameters: [],
+            audience: .advanced
         ),
         ToolDefinition(
             name: "list_acl_rules",
             description: "List all access control rules.",
-            parameters: []
+            parameters: [],
+            audience: .advanced
         ),
         ToolDefinition(
             name: "list_dns_policies",
             description: "List all DNS filter policies.",
-            parameters: []
+            parameters: [],
+            audience: .advanced
         ),
         ToolDefinition(
             name: "list_vpn_servers",
             description: "List all VPN server configurations.",
-            parameters: []
+            parameters: [],
+            audience: .advanced
         ),
         ToolDefinition(
             name: "list_pending_devices",
@@ -94,7 +117,8 @@ enum ToolCatalog {
             description: "Get latest statistics for a specific device.",
             parameters: [
                 ToolParameter(name: "device_id", type: "string", description: "The device ID.", required: true),
-            ]
+            ],
+            audience: .advanced
         ),
         ToolDefinition(
             name: "get_client_details",
@@ -135,7 +159,8 @@ enum ToolCatalog {
                 ToolParameter(name: "target", type: "string", description: "Client host or IP.", required: true),
                 ToolParameter(name: "ports", type: "string", description: "Comma-separated ports, e.g. 22,53,80,443.", required: true),
                 ToolParameter(name: "timeout_seconds", type: "integer", description: "Per-port timeout seconds (1-10). Default: 2.", required: false),
-            ]
+            ],
+            audience: .advanced
         ),
         ToolDefinition(
             name: "network_traceroute",
@@ -144,7 +169,8 @@ enum ToolCatalog {
                 ToolParameter(name: "target", type: "string", description: "Target host or IP.", required: true),
                 ToolParameter(name: "max_hops", type: "integer", description: "Maximum hops (5-64). Default: 20.", required: false),
                 ToolParameter(name: "timeout_seconds", type: "integer", description: "Per-hop timeout seconds (1-5). Default: 2.", required: false),
-            ]
+            ],
+            audience: .advanced
         ),
         ToolDefinition(
             name: "lookup_client_identity",
@@ -291,7 +317,8 @@ enum ToolCatalog {
                 ToolParameter(name: "command_id", type: "string", description: "Read-only command id: logread_tail, messages_tail, dmesg_tail, kernel_tail.", required: true),
                 ToolParameter(name: "approve_token", type: "string", description: "Approval token returned by prior dry-run call. Required to execute.", required: false),
                 ToolParameter(name: "timeout_seconds", type: "integer", description: "SSH timeout in seconds (5-60). Default: 15.", required: false),
-            ]
+            ],
+            audience: .advanced
         ),
         ToolDefinition(
             name: "network_overview",
@@ -311,19 +338,22 @@ enum ToolCatalog {
         ToolDefinition(
             name: "firewall_summary",
             description: "Firewall policy analysis with action counts and zone pair traffic.",
-            parameters: []
+            parameters: [],
+            audience: .advanced
         ),
         ToolDefinition(
             name: "security_summary",
             description: "Security posture summary: ACL rules, DNS policies, VPN, RADIUS profiles.",
-            parameters: []
+            parameters: [],
+            audience: .advanced
         ),
         ToolDefinition(
             name: "wan_gateway_health",
             description: "Summarize gateway/WAN health from UniFi device data plus recent WAN-related SIEM logs.",
             parameters: [
                 ToolParameter(name: "minutes", type: "integer", description: "How far back to inspect logs (1-1440). Default: 120.", required: false),
-            ]
+            ],
+            audience: .advanced
         ),
         ToolDefinition(
             name: "config_diff_from_logs",
@@ -332,7 +362,8 @@ enum ToolCatalog {
                 ToolParameter(name: "minutes", type: "integer", description: "How far back to inspect logs (1-10080). Default: 180.", required: false),
                 ToolParameter(name: "limit", type: "integer", description: "Max matching events to include (1-200). Default: 80.", required: false),
                 ToolParameter(name: "contains", type: "string", description: "Optional text filter, e.g. firewall, vpn, admin, backup.", required: false),
-            ]
+            ],
+            audience: .advanced
         ),
         ToolDefinition(
             name: "search_unifi_docs",
@@ -358,7 +389,8 @@ enum ToolCatalog {
                 ToolParameter(name: "minutes", type: "integer", description: "How far back to search in minutes (1-1440). Default: 60.", required: false),
                 ToolParameter(name: "limit", type: "integer", description: "Maximum log lines to return (1-500). Default: 100.", required: false),
                 ToolParameter(name: "direction", type: "string", description: "Result direction: backward or forward. Default: backward.", required: false),
-            ]
+            ],
+            audience: .advanced
         ),
         ToolDefinition(
             name: "query_unifi_logs_instant",
@@ -366,19 +398,22 @@ enum ToolCatalog {
             parameters: [
                 ToolParameter(name: "query", type: "string", description: "Loki query pipeline or selector+pipeline. Selector is replaced with UniFi-only scope automatically.", required: true),
                 ToolParameter(name: "limit", type: "integer", description: "Maximum log lines to return (1-500). Default: 50.", required: false),
-            ]
+            ],
+            audience: .advanced
         ),
         ToolDefinition(
             name: "list_unifi_log_labels",
             description: "List all available label names in Loki.",
-            parameters: []
+            parameters: [],
+            audience: .advanced
         ),
         ToolDefinition(
             name: "list_unifi_log_label_values",
             description: "List values for a specific Loki label key.",
             parameters: [
                 ToolParameter(name: "label", type: "string", description: "Label name, e.g. host, job, level.", required: true),
-            ]
+            ],
+            audience: .advanced
         ),
         ToolDefinition(
             name: "list_unifi_log_series",
@@ -387,7 +422,8 @@ enum ToolCatalog {
                 ToolParameter(name: "query", type: "string", description: "Log stream selector or pipeline. Selector is replaced with UniFi-only scope automatically.", required: false),
                 ToolParameter(name: "minutes", type: "integer", description: "How far back to inspect in minutes (1-1440). Default: 60.", required: false),
                 ToolParameter(name: "limit", type: "integer", description: "Maximum series to return (1-200). Default: 50.", required: false),
-            ]
+            ],
+            audience: .advanced
         ),
         ToolDefinition(
             name: "get_unifi_log_stats",
@@ -395,13 +431,27 @@ enum ToolCatalog {
             parameters: [
                 ToolParameter(name: "query", type: "string", description: "Log stream selector or pipeline. Selector is replaced with UniFi-only scope automatically.", required: false),
                 ToolParameter(name: "minutes", type: "integer", description: "How far back to inspect in minutes (1-1440). Default: 60.", required: false),
-            ]
+            ],
+            audience: .advanced
         ),
     ]
 
+    static func availableTools(for mode: AssistantMode) -> [ToolDefinition] {
+        switch mode {
+        case .advanced:
+            return all
+        case .basic:
+            return all.filter { $0.audience == .basic }
+        }
+    }
+
+    static func supports(_ toolName: String, in mode: AssistantMode) -> Bool {
+        availableTools(for: mode).contains { $0.name == toolName }
+    }
+
     /// Builds the Claude-formatted tool schema array used in chat requests.
-    static func claudeToolSchemas() -> [[String: Any]] {
-        all.map { tool in
+    static func claudeToolSchemas(for mode: AssistantMode) -> [[String: Any]] {
+        availableTools(for: mode).map { tool in
             var schema: [String: Any] = [
                 "name": tool.name,
                 "description": tool.description,
@@ -425,8 +475,8 @@ enum ToolCatalog {
     }
 
     /// Builds the OpenAI-formatted tool schema array used in chat requests.
-    static func openAIToolSchemas() -> [[String: Any]] {
-        all.map { tool in
+    static func openAIToolSchemas(for mode: AssistantMode) -> [[String: Any]] {
+        availableTools(for: mode).map { tool in
             var properties: [String: Any] = [:]
             var required: [String] = []
             for param in tool.parameters {

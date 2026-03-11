@@ -18,11 +18,29 @@ struct SetupView: View {
             }
             .navigationTitle("Setup")
             .navigationBarTitleDisplayMode(.inline)
+            .onAppear {
+                viewModel.load(from: appState)
+            }
         }
     }
 
     private var unifiStep: some View {
         Form {
+            Section("Mode") {
+                Picker("Assistant Mode", selection: $viewModel.selectedAssistantMode) {
+                    ForEach(AssistantMode.allCases) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                Text(viewModel.isAdvancedMode
+                     ? "Advanced mode unlocks technical diagnostics, logs, and local-model workflows."
+                     : "Basic mode focuses on plain-language troubleshooting for home users.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("UniFi Console") {
                 TextField("Console URL (e.g. https://192.168.1.1)", text: $viewModel.consoleURL)
                     .keyboardType(.URL)
@@ -53,7 +71,7 @@ struct SetupView: View {
         Form {
             Section("AI Provider") {
                 Picker("Provider", selection: $viewModel.selectedProvider) {
-                    ForEach(LLMProvider.allCases) { provider in
+                    ForEach(viewModel.availableProviders) { provider in
                         Text(provider.rawValue).tag(provider)
                     }
                 }
@@ -108,6 +126,9 @@ struct SetupView: View {
                     currentStep = 0
                 }
             }
+        }
+        .onChange(of: viewModel.selectedAssistantMode) { _, _ in
+            viewModel.handleAssistantModeChange()
         }
     }
 }

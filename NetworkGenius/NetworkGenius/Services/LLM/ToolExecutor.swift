@@ -12,6 +12,7 @@ final class ToolExecutor {
     private let diagnosticsService = ClientDiagnosticsService()
     private let sshLogService = UniFiSSHLogService()
     private let appBlockService: UniFiAppBlockService
+    private let assistantMode: AssistantMode
 
     init(
         apiClient: UniFiAPIClient,
@@ -19,13 +20,15 @@ final class ToolExecutor {
         summaryService: UniFiSummaryService,
         networkMonitor: NetworkMonitor,
         lokiBaseURL: String,
-        appBlockAllowedClients: String
+        appBlockAllowedClients: String,
+        assistantMode: AssistantMode
     ) {
         self.apiClient = apiClient
         self.queryService = queryService
         self.summaryService = summaryService
         self.networkMonitor = networkMonitor
         self.lokiService = GrafanaLokiService(baseURL: lokiBaseURL)
+        self.assistantMode = assistantMode
         self.appBlockService = UniFiAppBlockService(
             apiClient: apiClient,
             allowlistCSV: appBlockAllowedClients
@@ -37,6 +40,9 @@ final class ToolExecutor {
     func execute(toolCall: LLMToolCall) async -> String {
         let supportsOffNetwork = Set(["search_unifi_docs", "get_unifi_doc"])
         let requiresLocalNetwork = !supportsOffNetwork.contains(toolCall.name)
+        guard ToolCatalog.supports(toolCall.name, in: assistantMode) else {
+            return "Error: \(toolCall.name) is only available in Advanced mode."
+        }
         guard !requiresLocalNetwork || networkMonitor.isOnNetwork else {
             return "Error: Not connected to the local network. Unable to query the UniFi console."
         }

@@ -8,11 +8,19 @@ enum LLMProvider: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum AssistantMode: String, CaseIterable, Identifiable {
+    case basic = "Basic"
+    case advanced = "Advanced"
+
+    var id: String { rawValue }
+}
+
 @MainActor
 final class AppState: ObservableObject {
     @AppStorage("consoleURL") var consoleURL: String = ""
     @AppStorage("siteID") var siteID: String = ""
     @AppStorage("llmProvider") private var llmProviderRaw: String = LLMProvider.claude.rawValue
+    @AppStorage("assistantMode") private var assistantModeRaw: String = AssistantMode.basic.rawValue
     @AppStorage("allowSelfSignedCerts") var allowSelfSignedCerts: Bool = true
     @AppStorage("shareDeviceContextWithLLM") var shareDeviceContextWithLLM: Bool = false
     @AppStorage("hideReasoningOutput") var hideReasoningOutput: Bool = true
@@ -20,6 +28,7 @@ final class AppState: ObservableObject {
     @AppStorage("grafanaLokiURL") var grafanaLokiURL: String = ""
     @AppStorage("appBlockAllowedClients") var appBlockAllowedClients: String = ""
     @AppStorage("appBlockAllowedClientNameMap") var appBlockAllowedClientNameMap: String = ""
+    @AppStorage("clientModificationApprovals") private var clientModificationApprovalsRaw: String = "[]"
     @AppStorage("lmStudioBaseURL") var lmStudioBaseURL: String = ""
     @AppStorage("lmStudioModel") var lmStudioModel: String = ""
     @AppStorage("lmStudioMaxPromptChars") var lmStudioMaxPromptChars: Int = 4098
@@ -27,6 +36,35 @@ final class AppState: ObservableObject {
     var llmProvider: LLMProvider {
         get { LLMProvider(rawValue: llmProviderRaw) ?? .claude }
         set { llmProviderRaw = newValue.rawValue }
+    }
+
+    var assistantMode: AssistantMode {
+        get { AssistantMode(rawValue: assistantModeRaw) ?? .basic }
+        set { assistantModeRaw = newValue.rawValue }
+    }
+
+    var isAdvancedMode: Bool {
+        assistantMode == .advanced
+    }
+
+    var clientModificationApprovals: [ClientModificationApproval] {
+        get {
+            guard let data = clientModificationApprovalsRaw.data(using: .utf8),
+                  let decoded = try? JSONDecoder().decode([ClientModificationApproval].self, from: data)
+            else {
+                return []
+            }
+            return decoded
+        }
+        set {
+            guard let data = try? JSONEncoder().encode(newValue),
+                  let encoded = String(data: data, encoding: .utf8)
+            else {
+                clientModificationApprovalsRaw = "[]"
+                return
+            }
+            clientModificationApprovalsRaw = encoded
+        }
     }
 
     var isConfigured: Bool {

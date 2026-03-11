@@ -9,15 +9,32 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                UniFiSettingsSection(viewModel: viewModel)
-                LLMSettingsSection(viewModel: viewModel)
+                Section("Mode") {
+                    Picker("Assistant Mode", selection: $viewModel.selectedAssistantMode) {
+                        ForEach(AssistantMode.allCases) { mode in
+                            Text(mode.rawValue).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    Text(viewModel.isAdvancedMode
+                         ? "Advanced mode exposes technical diagnostics, local-model options, and log-driven workflows."
+                         : "Basic mode keeps the experience focused on plain-language troubleshooting and hides operator features.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                UniFiSettingsSection(viewModel: viewModel, isAdvancedMode: viewModel.isAdvancedMode)
+                LLMSettingsSection(viewModel: viewModel, isAdvancedMode: viewModel.isAdvancedMode)
                 VoiceSettingsSection(viewModel: viewModel)
                 Section("Appearance") {
                     Toggle("Dark Mode", isOn: $viewModel.darkModeEnabled)
                 }
-                Section("Diagnostics") {
+                if viewModel.isAdvancedMode {
+                    Section("Diagnostics") {
                     NavigationLink("App Console Logs") {
                         DebugLogListView(logStore: logStore)
+                    }
                     }
                 }
             }
@@ -33,6 +50,9 @@ struct SettingsView: View {
             }
             .onAppear {
                 viewModel.load(from: appState)
+            }
+            .onChange(of: viewModel.selectedAssistantMode) { _, _ in
+                viewModel.handleAssistantModeChange()
             }
         }
     }
