@@ -3074,57 +3074,13 @@ private struct UniFiAppBlockService {
         let limit = max(1, min(rawLimit ?? 20, 100))
         let allRules = try await fetchSimpleAppBlocks(siteRef: siteRef)
         let rules = allRules.filter(isSimpleAppRule)
-        if rules.isEmpty {
-            return """
-            Clients with app blocks:
-            - site_ref: \(siteRef)
-            - blocked_client_count: 0
-            - rules_considered: 0
-            - clients: none
-            """
-        }
-
         let clients = try await resolveClientsForAppBlock(queryService: queryService, siteRef: siteRef)
-        var byMAC: [String: (rules: Int, appIDs: Set<String>, categoryIDs: Set<String>)] = [:]
-
-        for rule in rules {
-            let appIDs = Set(uniqueStrings(arrayStrings(rule["app_ids"]) + arrayStrings(rule["appIds"])).map(normalize))
-            let categoryIDs = Set(uniqueStrings(arrayStrings(rule["app_category_ids"]) + arrayStrings(rule["appCategoryIds"])).map(normalize))
-            for mac in Set(extractClientDevices(rule).compactMap(canonicalMAC)) {
-                var summary = byMAC[mac] ?? (rules: 0, appIDs: Set<String>(), categoryIDs: Set<String>())
-                summary.rules += 1
-                summary.appIDs.formUnion(appIDs)
-                summary.categoryIDs.formUnion(categoryIDs)
-                byMAC[mac] = summary
-            }
-        }
-
-        let sorted = byMAC.keys.sorted { lhs, rhs in
-            let left = byMAC[lhs]!
-            let right = byMAC[rhs]!
-            if left.rules != right.rules {
-                return left.rules > right.rules
-            }
-            return lhs < rhs
-        }
-
-        let lines = sorted.prefix(limit).enumerated().map { index, mac in
-            let summary = byMAC[mac]!
-            let client = clientRow(forMAC: mac, in: clients)
-            let name = client.map(clientDisplayName) ?? "Unknown client"
-            let ip = client.flatMap { stringValue($0["ip"]) ?? stringValue($0["ipAddress"]) ?? stringValue($0["last_ip"]) } ?? "unknown"
-            let allowed = client.map { isClientAllowed($0) } ?? false
-            return "\(index + 1). name=\(name), ip=\(ip), mac=\(mac), rules=\(summary.rules), app_ids=\(summary.appIDs.count), category_ids=\(summary.categoryIDs.count), allowlisted_for_app_block=\(allowed ? "yes" : "no")"
-        }
-
-        return """
-        Clients with app blocks:
-        - site_ref: \(siteRef)
-        - blocked_client_count: \(byMAC.count)
-        - rules_considered: \(rules.count)
-        - showing: \(lines.count)
-        \(lines.isEmpty ? "- clients: none" : lines.joined(separator: "\n"))
-        """
+        return formatClientsWithAppBlocks(
+            rules: rules,
+            clients: clients,
+            siteRef: siteRef,
+            limit: limit
+        )
     }
 
     /// Formats dpilist.
@@ -3281,6 +3237,64 @@ private struct UniFiAppBlockService {
         return clients.first { row in
             canonicalMAC((row["mac"] as? String) ?? (row["macAddress"] as? String) ?? "") == canonical
         }
+    }
+
+    /// Builds the compact blocked-client summary from already-fetched rules and client rows.
+    fileprivate func formatClientsWithAppBlocks(
+        rules: [[String: Any]],
+        clients: [[String: Any]],
+        siteRef: String,
+        limit: Int
+    ) -> String {
+        guard !rules.isEmpty else {
+            return """
+            Clients with app blocks:
+            - site_ref: \(siteRef)
+            - blocked_client_count: 0
+            - rules_considered: 0
+            - clients: none
+            """
+        }
+
+        var byMAC: [String: (rules: Int, appIDs: Set<String>, categoryIDs: Set<String>)] = [:]
+        for rule in rules {
+            let appIDs = Set(uniqueStrings(arrayStrings(rule["app_ids"]) + arrayStrings(rule["appIds"])).map(normalize))
+            let categoryIDs = Set(uniqueStrings(arrayStrings(rule["app_category_ids"]) + arrayStrings(rule["appCategoryIds"])).map(normalize))
+            for mac in Set(extractClientDevices(rule).compactMap(canonicalMAC)) {
+                var summary = byMAC[mac] ?? (rules: 0, appIDs: Set<String>(), categoryIDs: Set<String>())
+                summary.rules += 1
+                summary.appIDs.formUnion(appIDs)
+                summary.categoryIDs.formUnion(categoryIDs)
+                byMAC[mac] = summary
+            }
+        }
+
+        let sorted = byMAC.keys.sorted { lhs, rhs in
+            let left = byMAC[lhs]!
+            let right = byMAC[rhs]!
+            if left.rules != right.rules {
+                return left.rules > right.rules
+            }
+            return lhs < rhs
+        }
+
+        let lines = sorted.prefix(limit).enumerated().map { index, mac in
+            let summary = byMAC[mac]!
+            let client = clientRow(forMAC: mac, in: clients)
+            let name = client.map(clientDisplayName) ?? "Unknown client"
+            let ip = client.flatMap { stringValue($0["ip"]) ?? stringValue($0["ipAddress"]) ?? stringValue($0["last_ip"]) } ?? "unknown"
+            let allowed = client.map { isClientAllowed($0) } ?? false
+            return "\(index + 1). name=\(name), ip=\(ip), mac=\(mac), rules=\(summary.rules), app_ids=\(summary.appIDs.count), category_ids=\(summary.categoryIDs.count), allowlisted_for_app_block=\(allowed ? "yes" : "no")"
+        }
+
+        return """
+        Clients with app blocks:
+        - site_ref: \(siteRef)
+        - blocked_client_count: \(byMAC.count)
+        - rules_considered: \(rules.count)
+        - showing: \(lines.count)
+        \(lines.isEmpty ? "- clients: none" : lines.joined(separator: "\n"))
+        """
     }
 
     /// Merges newly requested app or category targets into an existing simple app-block rule.
@@ -4026,6 +4040,27 @@ private struct UniFiAppBlockService {
         (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
+
+#if DEBUG
+func _testOnlyFormatClientsWithAppBlocks(
+    rules: [[String: Any]],
+    clients: [[String: Any]],
+    approvals: [ClientModificationApproval] = [],
+    siteRef: String = "default",
+    limit: Int = 20
+) -> String {
+    let service = UniFiAppBlockService(
+        apiClient: UniFiAPIClient(baseURL: "https://127.0.0.1", allowSelfSigned: true),
+        approvals: approvals
+    )
+    return service.formatClientsWithAppBlocks(
+        rules: rules,
+        clients: clients,
+        siteRef: siteRef,
+        limit: max(1, min(limit, 100))
+    )
+}
+#endif
 
 private actor DPICatalogCache {
     private let ttlSeconds: TimeInterval = 600

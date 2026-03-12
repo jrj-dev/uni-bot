@@ -38,6 +38,7 @@ final class ChatViewModel: ObservableObject {
     @Published var conversationSummaries: [ConversationSummary] = []
     @Published var currentConversationID: UUID?
 
+    private let maxToolResultCharacters = 8_000
     private var llmMessages: [LLMMessage] = []
     private let maxHistoryMessages = 20
 
@@ -613,7 +614,8 @@ final class ChatViewModel: ObservableObject {
             debugLog("Executing tool '\(toolCall.name)'", category: "Chat")
 
             let result = await toolExecutor?.execute(toolCall: toolCall) ?? "Tool executor not configured"
-            llmMessages.append(LLMMessage(role: .tool, content: result, toolCallID: toolCall.id))
+            let compactResult = cappedToolResult(result, toolName: toolCall.name)
+            llmMessages.append(LLMMessage(role: .tool, content: compactResult, toolCallID: toolCall.id))
         }
         currentToolName = nil
     }
@@ -648,7 +650,34 @@ final class ChatViewModel: ObservableObject {
         }
         return "Error: \(error.localizedDescription)"
     }
+
+    /// Caps oversized tool output before it is appended back into LLM history.
+    private func cappedToolResult(_ result: String, toolName: String) -> String {
+        guard result.count > maxToolResultCharacters else { return result }
+        let prefix = String(result.prefix(maxToolResultCharacters))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        debugLog(
+            "Tool '\(toolName)' result truncated for LLM history (before=\(result.count), after=\(prefix.count))",
+            category: "Chat"
+        )
+        return """
+        TOOL_RESULT_TRUNCATED: \(toolName) returned a large payload, so only the first \(prefix.count) characters are included below. If more detail is needed, ask a narrower follow-up.
+        \(prefix)
+        """
+    }
 }
+
+#if DEBUG
+extension ChatViewModel {
+    func _testOnlyUserFacingChatErrorMessage(for error: Error) -> String {
+        userFacingChatErrorMessage(for: error)
+    }
+
+    func _testOnlyCappedToolResult(_ result: String, toolName: String) -> String {
+        cappedToolResult(result, toolName: toolName)
+    }
+}
+#endif
 
 struct ConversationSummary: Identifiable {
     let id: UUID

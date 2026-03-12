@@ -2,8 +2,8 @@ import XCTest
 @testable import NetworkGenius
 
 final class ToolExecutorTests: XCTestCase {
-    func testToolCatalogHas47Tools() {
-        XCTAssertEqual(ToolCatalog.all.count, 47)
+    func testToolCatalogHas48Tools() {
+        XCTAssertEqual(ToolCatalog.all.count, 48)
     }
 
     func testBasicModeHidesAdvancedTools() {
@@ -49,6 +49,10 @@ final class ToolExecutorTests: XCTestCase {
         )
     }
 
+    func testToolCatalogIncludesClientsWithAppBlocksTool() {
+        XCTAssertTrue(ToolCatalog.all.map(\.name).contains("list_clients_with_app_blocks"))
+    }
+
     func testClientModificationApprovalUsesMACAsStableKey() {
         let client = UniFiClient(
             id: "client-1",
@@ -85,5 +89,70 @@ final class ToolExecutorTests: XCTestCase {
         XCTAssertTrue(merged[0].allowClientModifications)
         XCTAssertTrue(merged[0].allowAppBlocks)
         XCTAssertFalse(merged[0].isCurrentlyConnected)
+    }
+
+    func testFormatClientsWithAppBlocksDedupesByMACAndCountsTargets() {
+        let output = _testOnlyFormatClientsWithAppBlocks(
+            rules: [
+                [
+                    "type": "DEVICE",
+                    "target_type": "APP_ID",
+                    "client_macs": ["AA:BB:CC:DD:EE:FF"],
+                    "app_ids": ["youtube", "netflix"],
+                ],
+                [
+                    "type": "DEVICE",
+                    "target_type": "APP_CATEGORY",
+                    "client_macs": ["aa:bb:cc:dd:ee:ff"],
+                    "app_category_ids": ["streaming"],
+                ],
+            ],
+            clients: [
+                [
+                    "name": "Living Room TV",
+                    "ip": "192.168.1.50",
+                    "mac": "AA:BB:CC:DD:EE:FF",
+                ]
+            ],
+            siteRef: "default",
+            limit: 20
+        )
+
+        XCTAssertTrue(output.contains("- blocked_client_count: 1"))
+        XCTAssertTrue(output.contains("- rules_considered: 2"))
+        XCTAssertTrue(output.contains("1. name=Living Room TV, ip=192.168.1.50, mac=aa:bb:cc:dd:ee:ff, rules=2, app_ids=2, category_ids=1"))
+    }
+
+    func testFormatClientsWithAppBlocksHandlesUnknownClientAndLimit() {
+        let output = _testOnlyFormatClientsWithAppBlocks(
+            rules: [
+                [
+                    "type": "DEVICE",
+                    "target_type": "APP_ID",
+                    "client_macs": ["11:22:33:44:55:66"],
+                    "app_ids": ["youtube"],
+                ],
+                [
+                    "type": "DEVICE",
+                    "target_type": "APP_ID",
+                    "client_macs": ["AA:BB:CC:DD:EE:FF"],
+                    "app_ids": ["discord"],
+                ],
+            ],
+            clients: [
+                [
+                    "name": "Known Client",
+                    "ip": "192.168.1.22",
+                    "mac": "AA:BB:CC:DD:EE:FF",
+                ]
+            ],
+            siteRef: "default",
+            limit: 1
+        )
+
+        XCTAssertTrue(output.contains("- blocked_client_count: 2"))
+        XCTAssertTrue(output.contains("- showing: 1"))
+        XCTAssertEqual(output.components(separatedBy: "\n").filter { $0.hasPrefix("1. ") || $0.hasPrefix("2. ") }.count, 1)
+        XCTAssertTrue(output.contains("Unknown client") || output.contains("Known Client"))
     }
 }
