@@ -45,6 +45,7 @@ struct ClientModificationApproval: Codable, Identifiable, Equatable {
         case allowClientModifications
         case allowAppBlocks
         case isCurrentlyConnected
+        case isLegacyHistoryEntry
     }
 
     let approvalKey: String
@@ -56,6 +57,7 @@ struct ClientModificationApproval: Codable, Identifiable, Equatable {
     var allowClientModifications: Bool
     var allowAppBlocks: Bool
     var isCurrentlyConnected: Bool
+    var isLegacyHistoryEntry: Bool
 
     var id: String { approvalKey }
 
@@ -68,7 +70,8 @@ struct ClientModificationApproval: Codable, Identifiable, Equatable {
         ip: String,
         allowClientModifications: Bool,
         allowAppBlocks: Bool,
-        isCurrentlyConnected: Bool
+        isCurrentlyConnected: Bool,
+        isLegacyHistoryEntry: Bool = false
     ) {
         self.approvalKey = approvalKey
         self.clientID = clientID
@@ -79,6 +82,7 @@ struct ClientModificationApproval: Codable, Identifiable, Equatable {
         self.allowClientModifications = allowClientModifications
         self.allowAppBlocks = allowAppBlocks
         self.isCurrentlyConnected = isCurrentlyConnected
+        self.isLegacyHistoryEntry = isLegacyHistoryEntry
     }
 
     init(from decoder: Decoder) throws {
@@ -96,6 +100,7 @@ struct ClientModificationApproval: Codable, Identifiable, Equatable {
         allowClientModifications = unifiedApproval
         allowAppBlocks = unifiedApproval
         isCurrentlyConnected = try container.decode(Bool.self, forKey: .isCurrentlyConnected)
+        isLegacyHistoryEntry = try container.decodeIfPresent(Bool.self, forKey: .isLegacyHistoryEntry) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -108,6 +113,7 @@ struct ClientModificationApproval: Codable, Identifiable, Equatable {
         try container.encode(ip, forKey: .ip)
         try container.encode(allowClientModifications, forKey: .allowClientModifications)
         try container.encode(isCurrentlyConnected, forKey: .isCurrentlyConnected)
+        try container.encode(isLegacyHistoryEntry, forKey: .isLegacyHistoryEntry)
     }
 
     var displayName: String {
@@ -163,7 +169,8 @@ struct ClientModificationApproval: Codable, Identifiable, Equatable {
                 ip: preferred(current: client.ip, fallback: previous?.ip),
                 allowClientModifications: previous?.allowClientModifications ?? false,
                 allowAppBlocks: previous?.allowClientModifications ?? false,
-                isCurrentlyConnected: true
+                isCurrentlyConnected: true,
+                isLegacyHistoryEntry: false
             )
         }
 
@@ -207,7 +214,8 @@ struct ClientModificationApproval: Codable, Identifiable, Equatable {
                 ip: existingEntry?.ip ?? "",
                 allowClientModifications: true,
                 allowAppBlocks: true,
-                isCurrentlyConnected: existingEntry?.isCurrentlyConnected ?? false
+                isCurrentlyConnected: existingEntry?.isCurrentlyConnected ?? false,
+                isLegacyHistoryEntry: existingEntry?.isLegacyHistoryEntry ?? false
             )
         }
         return mergedByKey.values.sorted { lhs, rhs in

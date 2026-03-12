@@ -57,10 +57,21 @@ struct UniFiSettingsSection: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
-                    ForEach($viewModel.clientModificationApprovals) { $approval in
+                    ForEach(viewModel.clientModificationApprovals) { approval in
                         VStack(alignment: .leading, spacing: 8) {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(approval.displayName)
+                                HStack(spacing: 8) {
+                                    Text(approval.displayName)
+                                    if approval.isLegacyHistoryEntry && !approval.isCurrentlyConnected {
+                                        Text("Legacy history")
+                                            .font(.caption2)
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 2)
+                                            .background(Color.orange.opacity(0.15))
+                                            .foregroundStyle(.orange)
+                                            .clipShape(Capsule())
+                                    }
+                                }
                                 if !approval.detailLine.isEmpty {
                                     Text(approval.detailLine)
                                         .font(.caption)
@@ -68,7 +79,13 @@ struct UniFiSettingsSection: View {
                                 }
                             }
 
-                            Toggle("Allow client modifications", isOn: $approval.allowClientModifications)
+                            Toggle(
+                                "Allow client modifications",
+                                isOn: Binding(
+                                    get: { approval.allowClientModifications },
+                                    set: { viewModel.setClientModificationApproval($0, for: approval.id) }
+                                )
+                            )
                                 .font(.caption)
                         }
                         .padding(.vertical, 4)

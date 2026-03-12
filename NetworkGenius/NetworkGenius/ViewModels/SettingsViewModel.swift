@@ -107,8 +107,7 @@ final class SettingsViewModel: ObservableObject {
         hideReasoningOutput = appState.hideReasoningOutput
         darkModeEnabled = appState.darkModeEnabled
         hapticFeedbackEnabled = appState.hapticFeedbackEnabled
-        clientModificationApprovals = appState.clientModificationApprovals
-            .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+        clientModificationApprovals = sortClientModificationApprovals(appState.clientModificationApprovals)
         unifiAPIKey = KeychainHelper.loadString(key: .unifiAPIKey) ?? ""
         unifiSSHUsername = KeychainHelper.loadString(key: .unifiSSHUsername) ?? ""
         unifiSSHPrivateKey = KeychainHelper.loadString(key: .unifiSSHPrivateKey) ?? ""
@@ -291,20 +290,29 @@ final class SettingsViewModel: ObservableObject {
                 ip: inferredIP(from: option),
                 allowClientModifications: false,
                 allowAppBlocks: false,
-                isCurrentlyConnected: option.isActive
+                isCurrentlyConnected: option.isActive,
+                isLegacyHistoryEntry: true
             )
         )
-        clientModificationApprovals.sort { lhs, rhs in
-            if lhs.allowClientModifications != rhs.allowClientModifications {
-                return lhs.allowClientModifications && !rhs.allowClientModifications
-            }
-            if lhs.isCurrentlyConnected != rhs.isCurrentlyConnected {
-                return lhs.isCurrentlyConnected && !rhs.isCurrentlyConnected
-            }
-            return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
-        }
+        sortClientModificationApprovals()
         availableLegacyGuardrailClients.removeAll { normalizedApprovalKey(from: $0.selector) == key }
         legacyGuardrailClientsLoadResult = "Added \(option.title) to Client Guardrails."
+    }
+
+    /// Updates the write-approval flag and removes disabled legacy-only entries from the guardrail list.
+    func setClientModificationApproval(_ isAllowed: Bool, for approvalID: String) {
+        guard let index = clientModificationApprovals.firstIndex(where: { $0.id == approvalID }) else { return }
+        clientModificationApprovals[index].allowClientModifications = isAllowed
+        clientModificationApprovals[index].allowAppBlocks = isAllowed
+
+        let approval = clientModificationApprovals[index]
+        if !isAllowed && shouldReturnApprovalToLegacyHistory(approval) {
+            restoreLegacyGuardrailOption(from: approval)
+            clientModificationApprovals.remove(at: index)
+            return
+        }
+
+        sortClientModificationApprovals()
     }
 
     /// Tests the configured UniFi connection and updates the settings UI with the result.
@@ -802,8 +810,9 @@ final class SettingsViewModel: ObservableObject {
         let rows = try await fetchGuardrailClientRows(path: path, client: client)
         debugLog("Legacy guardrail clients loaded (path=\(path), rows=\(rows.count))", category: "Settings")
 
+        let dedupedRows = Self.deduplicateLegacyRows(rows)
         var uniqueByKey: [String: GuardrailClientOption] = [:]
-        for row in rows {
+        for row in dedupedRows {
             guard Self.wasSeenWithinLastWeek(row) else { continue }
             guard let option = Self.guardrailOption(from: row) else { continue }
             let key = normalizedApprovalKey(from: option.selector)
@@ -818,6 +827,27 @@ final class SettingsViewModel: ObservableObject {
         return uniqueByKey.values.sorted { lhs, rhs in
             lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
         }
+    }
+
+    /// Collapses duplicate legacy rows by MAC first so the picker keeps the newest and most descriptive record.
+    private static func deduplicateLegacyRows(_ rows: [[String: Any]]) -> [[String: Any]] {
+        var bestByMAC: [String: [String: Any]] = [:]
+        var passthroughRows: [[String: Any]] = []
+
+        for row in rows {
+            let mac = normalizedMAC(from: row)
+            guard !mac.isEmpty else {
+                passthroughRows.append(row)
+                continue
+            }
+            if let existing = bestByMAC[mac] {
+                bestByMAC[mac] = preferredLegacyRow(primary: existing, fallback: row)
+            } else {
+                bestByMAC[mac] = row
+            }
+        }
+
+        return Array(bestByMAC.values) + passthroughRows
     }
 
     /// Returns true when a legacy `alluser` row was seen within the past seven days.
@@ -835,6 +865,58 @@ final class SettingsViewModel: ObservableObject {
             }
         }
         return false
+    }
+
+    /// Returns the newest meaningful timestamp from a legacy row, preferring last-seen style fields.
+    private static func legacyRowRecency(_ row: [String: Any]) -> TimeInterval {
+        let lastSeenCandidates: [Any?] = [
+            row["last_seen"],
+            row["lastSeen"],
+            row["disconnect_timestamp"],
+            row["disconnectTimestamp"],
+            row["first_seen"],
+            row["firstSeen"]
+        ]
+
+        for value in lastSeenCandidates {
+            if let timestamp = unixTimestamp(from: value) {
+                return timestamp
+            }
+        }
+        return 0
+    }
+
+    /// Chooses the stronger legacy row using recency first, then identity richness as a tiebreaker.
+    private static func preferredLegacyRow(primary: [String: Any], fallback: [String: Any]) -> [String: Any] {
+        let primaryRecency = legacyRowRecency(primary)
+        let fallbackRecency = legacyRowRecency(fallback)
+        if primaryRecency != fallbackRecency {
+            return primaryRecency >= fallbackRecency ? primary : fallback
+        }
+
+        let primaryScore = legacyRowQualityScore(primary)
+        let fallbackScore = legacyRowQualityScore(fallback)
+        if primaryScore != fallbackScore {
+            return primaryScore >= fallbackScore ? primary : fallback
+        }
+        return primary
+    }
+
+    /// Scores a legacy row by how useful it is as a human-readable guardrail entry.
+    private static func legacyRowQualityScore(_ row: [String: Any]) -> Int {
+        let name = normalizedClientName(from: row)
+        let hostname = normalizedHostname(from: row)
+        let mac = normalizedMAC(from: row)
+        let ip = normalizedIPAddress(from: row)
+        let noted = (row["noted"] as? Bool) == true
+
+        var score = 0
+        if !name.isEmpty { score += 4 }
+        if !hostname.isEmpty { score += 3 }
+        if !mac.isEmpty { score += 2 }
+        if !ip.isEmpty { score += 1 }
+        if noted { score += 2 }
+        return score
     }
 
     /// Normalizes UniFi timestamp fields into Unix seconds.
@@ -886,11 +968,24 @@ final class SettingsViewModel: ObservableObject {
                 ip: previous?.ip.isEmpty == false ? previous!.ip : (inferredIP ?? ""),
                 allowClientModifications: previous?.allowClientModifications ?? false,
                 allowAppBlocks: previous?.allowClientModifications ?? false,
-                isCurrentlyConnected: activeKeys.contains(key)
+                isCurrentlyConnected: activeKeys.contains(key),
+                isLegacyHistoryEntry: false
             )
         }
 
-        return mergedByKey.values.sorted { lhs, rhs in
+        for previous in existing where mergedByKey[previous.approvalKey] == nil {
+            guard previous.isLegacyHistoryEntry, previous.allowClientModifications else { continue }
+            var preserved = previous
+            preserved.isCurrentlyConnected = false
+            mergedByKey[previous.approvalKey] = preserved
+        }
+
+        return sortClientModificationApprovals(Array(mergedByKey.values))
+    }
+
+    /// Returns approvals sorted so enabled and currently connected entries stay near the top.
+    private func sortClientModificationApprovals(_ approvals: [ClientModificationApproval]) -> [ClientModificationApproval] {
+        approvals.sorted { lhs, rhs in
             if lhs.allowClientModifications != rhs.allowClientModifications {
                 return lhs.allowClientModifications && !rhs.allowClientModifications
             }
@@ -899,6 +994,48 @@ final class SettingsViewModel: ObservableObject {
             }
             return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
         }
+    }
+
+    /// Reapplies the standard ordering to the current guardrail approval list.
+    private func sortClientModificationApprovals() {
+        clientModificationApprovals = sortClientModificationApprovals(clientModificationApprovals)
+    }
+
+    /// Re-adds a removed legacy-only approval back into the legacy picker so it can be reselected later.
+    private func restoreLegacyGuardrailOption(from approval: ClientModificationApproval) {
+        let selector = !approval.mac.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? approval.mac
+            : approval.approvalKey
+        let option = GuardrailClientOption(
+            id: approval.clientID,
+            selector: selector,
+            title: approval.displayName,
+            subtitle: approval.detailLine,
+            isActive: false
+        )
+        let key = normalizedApprovalKey(from: selector)
+        if let existingIndex = availableLegacyGuardrailClients.firstIndex(where: {
+            normalizedApprovalKey(from: $0.selector) == key
+        }) {
+            availableLegacyGuardrailClients[existingIndex] = Self.mergeLegacyGuardrailOptions(
+                primary: availableLegacyGuardrailClients[existingIndex],
+                fallback: option
+            )
+        } else {
+            availableLegacyGuardrailClients.append(option)
+        }
+        availableLegacyGuardrailClients.sort {
+            $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+        }
+    }
+
+    /// Returns true when disabling this approval should move it back into the legacy history picker.
+    private func shouldReturnApprovalToLegacyHistory(_ approval: ClientModificationApproval) -> Bool {
+        guard !approval.isCurrentlyConnected else { return false }
+        if approval.isLegacyHistoryEntry { return true }
+        let key = approval.approvalKey
+        let liveKeys = Set(availableGuardrailClients.map { normalizedApprovalKey(from: $0.selector) })
+        return !liveKeys.contains(key)
     }
 
     /// Normalizes a selector into the approval key format used across persisted client guardrails.
@@ -1073,9 +1210,9 @@ final class SettingsViewModel: ObservableObject {
         primary: GuardrailClientOption,
         fallback: GuardrailClientOption
     ) -> GuardrailClientOption {
-        let primaryLooksNamed = primary.title != primary.selector
-        let fallbackLooksNamed = fallback.title != fallback.selector
-        let chosen = (primaryLooksNamed && !fallbackLooksNamed) ? primary : fallback
+        let primaryScore = legacyOptionQualityScore(primary)
+        let fallbackScore = legacyOptionQualityScore(fallback)
+        let chosen = primaryScore >= fallbackScore ? primary : fallback
         let secondary = (chosen.id == primary.id && chosen.selector == primary.selector) ? fallback : primary
         return GuardrailClientOption(
             id: chosen.id,
@@ -1092,9 +1229,76 @@ final class SettingsViewModel: ObservableObject {
             .split(separator: "•")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
         let mac = subtitleParts.first(where: { $0.contains(":") }) ?? (option.selector.contains(":") ? option.selector.lowercased() : "")
-        let hostname = subtitleParts.first(where: { !$0.contains(":") && !$0.contains(".") && $0 != "offline" }) ?? ""
+        let hostname = normalizeHostToken(
+            subtitleParts.first(where: { !$0.contains(":") && !$0.contains(".") && $0 != "offline" }) ?? ""
+        )
         let title = option.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return [mac, hostname, title].filter { !$0.isEmpty }
+    }
+
+    /// Scores a legacy option by whether it carries a descriptive title and detailed subtitle.
+    private static func legacyOptionQualityScore(_ option: GuardrailClientOption) -> Int {
+        var score = 0
+        if option.title.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(option.selector) != .orderedSame {
+            score += 4
+        }
+        if option.subtitle.contains(":") { score += 2 }
+        if option.subtitle.contains(".") { score += 1 }
+        if !normalizeHostToken(option.title).isEmpty { score += 1 }
+        score += min(option.subtitle.count / 12, 3)
+        return score
+    }
+
+    /// Normalizes hostname-like tokens so cosmetic `.local` and case differences do not create duplicate identities.
+    private static func normalizeHostToken(_ value: String) -> String {
+        let lowered = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if lowered.hasSuffix(".local") {
+            return String(lowered.dropLast(6))
+        }
+        return lowered
+    }
+
+    /// Returns a normalized MAC string when present in a legacy row.
+    private static func normalizedMAC(from row: [String: Any]) -> String {
+        ((row["mac"] as? String) ?? (row["macAddress"] as? String) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+    }
+
+    /// Returns a normalized hostname string when present in a legacy row.
+    private static func normalizedHostname(from row: [String: Any]) -> String {
+        let raw = (
+            (row["hostname"] as? String)
+                ?? (row["hostName"] as? String)
+                ?? (row["dhcpHostname"] as? String)
+        ) ?? ""
+        return normalizeHostToken(raw)
+    }
+
+    /// Returns a normalized client name string when present in a legacy row.
+    private static func normalizedClientName(from row: [String: Any]) -> String {
+        (
+            (row["name"] as? String)
+                ?? (row["displayName"] as? String)
+                ?? (row["clientName"] as? String)
+                ?? (row["user"] as? String)
+                ?? ""
+        )
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .lowercased()
+    }
+
+    /// Returns a normalized IPv4-like value when present in a legacy row.
+    private static func normalizedIPAddress(from row: [String: Any]) -> String {
+        (
+            (row["ip"] as? String)
+                ?? (row["ipAddress"] as? String)
+                ?? (row["last_ip"] as? String)
+                ?? (row["lastIp"] as? String)
+                ?? ""
+        )
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .lowercased()
     }
 
     /// Merges multiple client result sets into one deduplicated list.
