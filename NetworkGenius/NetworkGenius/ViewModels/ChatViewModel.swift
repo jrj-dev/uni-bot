@@ -64,6 +64,8 @@ final class ChatViewModel: ObservableObject {
         general networking advice based on your knowledge. \
         Prefer compact ranking and resolver tools over raw list tools whenever the user asks for \
         the top, bottom, most, least, slowest, fastest, weakest, busiest, or highest item. \
+        For app-block status questions like which clients are blocked, prefer the compact \
+        app-block summary tool instead of broad inventory or raw rule listings. \
         Only call broad list tools like list_clients or list_devices when a narrow ranking or \
         targeted lookup tool cannot answer the question.
         """
@@ -140,7 +142,7 @@ final class ChatViewModel: ObservableObject {
             debugLog("Chat request failed: \(error.localizedDescription)", category: "Chat")
             llmMessages = Array(llmMessages.prefix(sendState.llmCountBeforeSend))
             markUserMessageFailed(sendState.userMessageID)
-            messages.append(ChatMessage(role: .assistant, content: "Error: \(error.localizedDescription)"))
+            messages.append(ChatMessage(role: .assistant, content: userFacingChatErrorMessage(for: error)))
             persistConversationState()
         }
     }
@@ -637,6 +639,14 @@ final class ChatViewModel: ObservableObject {
             llmMessages.append(LLMMessage(role: .assistant, content: text))
         }
         persistConversationState()
+    }
+
+    /// Converts provider and transport errors into short user-facing chat responses.
+    private func userFacingChatErrorMessage(for error: Error) -> String {
+        if let llmError = error as? LLMError, llmError.isRequestTooLarge {
+            return "I can’t answer that in one pass right now because the request grew too large for the selected model. Please rephrase more narrowly, or ask for a smaller slice such as one client, the top 10 blocked clients, or whether a specific client has a block."
+        }
+        return "Error: \(error.localizedDescription)"
     }
 }
 

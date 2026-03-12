@@ -17,6 +17,29 @@ enum LLMError: LocalizedError {
         case .httpError(let code, let body): return "HTTP \(code): \(LogSanitizer.sanitize(body))"
         }
     }
+
+    var isRequestTooLarge: Bool {
+        switch self {
+        case .httpError(let code, let body):
+            let normalized = body.lowercased()
+            if code == 413 { return true }
+            guard code == 400 else { return false }
+            return normalized.contains("request too large")
+                || normalized.contains("context_length_exceeded")
+                || normalized.contains("maximum context length")
+                || normalized.contains("too many tokens")
+                || normalized.contains("prompt is too long")
+                || normalized.contains("input is too long")
+        case .invalidResponse(let message):
+            let normalized = message.lowercased()
+            return normalized.contains("request too large")
+                || normalized.contains("context length")
+                || normalized.contains("too many tokens")
+                || normalized.contains("prompt is too long")
+        default:
+            return false
+        }
+    }
 }
 
 struct DebugLogEntry: Identifiable {

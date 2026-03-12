@@ -244,6 +244,12 @@ final class ToolExecutor {
                 clientSelector: toolCall.arguments["client"],
                 siteRef: toolCall.arguments["site_ref"]
             )
+        case "list_clients_with_app_blocks":
+            return try await appBlockService.listClientsWithAppBlocks(
+                queryService: queryService,
+                limit: Int(toolCall.arguments["limit"] ?? ""),
+                siteRef: toolCall.arguments["site_ref"]
+            )
         default:
             return nil
         }
@@ -3058,6 +3064,69 @@ private struct UniFiAppBlockService {
         """
     }
 
+    /// Returns a compact bottom-up summary of clients that currently have simple app-block rules.
+    func listClientsWithAppBlocks(
+        queryService: UniFiQueryService,
+        limit rawLimit: Int?,
+        siteRef rawSiteRef: String?
+    ) async throws -> String {
+        let siteRef = normalizedSiteRef(rawSiteRef)
+        let limit = max(1, min(rawLimit ?? 20, 100))
+        let allRules = try await fetchSimpleAppBlocks(siteRef: siteRef)
+        let rules = allRules.filter(isSimpleAppRule)
+        if rules.isEmpty {
+            return """
+            Clients with app blocks:
+            - site_ref: \(siteRef)
+            - blocked_client_count: 0
+            - rules_considered: 0
+            - clients: none
+            """
+        }
+
+        let clients = try await resolveClientsForAppBlock(queryService: queryService, siteRef: siteRef)
+        var byMAC: [String: (rules: Int, appIDs: Set<String>, categoryIDs: Set<String>)] = [:]
+
+        for rule in rules {
+            let appIDs = Set(uniqueStrings(arrayStrings(rule["app_ids"]) + arrayStrings(rule["appIds"])).map(normalize))
+            let categoryIDs = Set(uniqueStrings(arrayStrings(rule["app_category_ids"]) + arrayStrings(rule["appCategoryIds"])).map(normalize))
+            for mac in Set(extractClientDevices(rule).compactMap(canonicalMAC)) {
+                var summary = byMAC[mac] ?? (rules: 0, appIDs: Set<String>(), categoryIDs: Set<String>())
+                summary.rules += 1
+                summary.appIDs.formUnion(appIDs)
+                summary.categoryIDs.formUnion(categoryIDs)
+                byMAC[mac] = summary
+            }
+        }
+
+        let sorted = byMAC.keys.sorted { lhs, rhs in
+            let left = byMAC[lhs]!
+            let right = byMAC[rhs]!
+            if left.rules != right.rules {
+                return left.rules > right.rules
+            }
+            return lhs < rhs
+        }
+
+        let lines = sorted.prefix(limit).enumerated().map { index, mac in
+            let summary = byMAC[mac]!
+            let client = clientRow(forMAC: mac, in: clients)
+            let name = client.map(clientDisplayName) ?? "Unknown client"
+            let ip = client.flatMap { stringValue($0["ip"]) ?? stringValue($0["ipAddress"]) ?? stringValue($0["last_ip"]) } ?? "unknown"
+            let allowed = client.map { isClientAllowed($0) } ?? false
+            return "\(index + 1). name=\(name), ip=\(ip), mac=\(mac), rules=\(summary.rules), app_ids=\(summary.appIDs.count), category_ids=\(summary.categoryIDs.count), allowlisted_for_app_block=\(allowed ? "yes" : "no")"
+        }
+
+        return """
+        Clients with app blocks:
+        - site_ref: \(siteRef)
+        - blocked_client_count: \(byMAC.count)
+        - rules_considered: \(rules.count)
+        - showing: \(lines.count)
+        \(lines.isEmpty ? "- clients: none" : lines.joined(separator: "\n"))
+        """
+    }
+
     /// Formats dpilist.
     private func formatDPIList(
         items: [[String: Any]],
@@ -3204,6 +3273,14 @@ private struct UniFiAppBlockService {
     private func clientAppBlockRules(siteRef: String, clientMac: String) async throws -> [[String: Any]] {
         try await fetchSimpleAppBlocks(siteRef: siteRef)
             .filter { isSimpleAppRule($0) && ruleTargetsClient($0, mac: clientMac) }
+    }
+
+    /// Returns the best available client row for one normalized MAC address.
+    private func clientRow(forMAC mac: String, in clients: [[String: Any]]) -> [String: Any]? {
+        let canonical = canonicalMAC(mac)
+        return clients.first { row in
+            canonicalMAC((row["mac"] as? String) ?? (row["macAddress"] as? String) ?? "") == canonical
+        }
     }
 
     /// Merges newly requested app or category targets into an existing simple app-block rule.

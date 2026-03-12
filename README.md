@@ -74,6 +74,7 @@ That is the preferred pattern for future work in `ChatViewModel`, `SettingsViewM
   - `plan_client_app_block` + `apply_client_app_block` with allowlist guardrails
   - smart upsert behavior (update existing rule when `client + target_type + schedule` match; create otherwise)
   - `remove_client_app_block` to delete full client blocks or remove selected app/category IDs.
+  - `list_clients_with_app_blocks` for compact bottom-up summaries of currently blocked clients without dumping the full client inventory
   - implementation boundary:
     - `ChatViewModel` orchestrates the conversation/tool loop
     - `ToolExecutor` routes the request

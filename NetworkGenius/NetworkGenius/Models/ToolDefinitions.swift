@@ -310,6 +310,14 @@ enum ToolCatalog {
             ]
         ),
         ToolDefinition(
+            name: "list_clients_with_app_blocks",
+            description: "Return a compact summary of clients that currently have simple app-block rules. Prefer this over broad client/rule listings for questions like 'what clients have blocks?'",
+            parameters: [
+                ToolParameter(name: "limit", type: "integer", description: "How many blocked clients to return (1-100). Default: 20.", required: false),
+                ToolParameter(name: "site_ref", type: "string", description: "Optional site reference for lookup path. Default: default.", required: false),
+            ]
+        ),
+        ToolDefinition(
             name: "ssh_collect_unifi_logs",
             description: "Run an approved, read-only SSH log command on a UniFi device. Requires explicit approval token before execution.",
             parameters: [
