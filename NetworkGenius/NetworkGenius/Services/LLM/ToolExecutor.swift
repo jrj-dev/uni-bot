@@ -969,12 +969,11 @@ final class ToolExecutor {
     private func rankAccessPointsByClientCount(includeInactive: Bool) async throws -> [RankedEntityResult] {
         let context = try await accessPointRankingContext()
         let clients = try await loadClientsForRanking(includeInactive: includeInactive)
+        let activeClients = clients.filter { isClientActiveForRanking($0) }
         let grouped = groupClientsByAccessPoint(
-            clients,
+            activeClients,
             onlineDeviceIDs: context.onlineDeviceIDs
-        ) { client in
-            isClientActiveForRanking(client)
-        }
+        )
         return rankedAccessPointCounts(grouped, nameByID: context.deviceNameByID)
     }
 
@@ -982,18 +981,17 @@ final class ToolExecutor {
     private func rankAccessPointsByWeakestAverageSignal(includeInactive: Bool) async throws -> [RankedEntityResult] {
         let context = try await accessPointRankingContext()
         let clients = try await loadClientsForRanking(includeInactive: includeInactive)
+        let activeWirelessClients = clients.filter { isClientActiveForRanking($0) && !isWiredClient($0) }
         let grouped = groupClientsByAccessPoint(
-            clients,
+            activeWirelessClients,
             onlineDeviceIDs: context.onlineDeviceIDs
-        ) { client in
-            isClientActiveForRanking(client) && !isWiredClient(client)
-        }
+        )
         return rankedAccessPointAverages(
             grouped,
             nameByID: context.deviceNameByID,
             metricExtractor: { metricValue(for: .weakestSignal, client: $0) },
             valueFormatter: { String(format: "%.1f dBm", $0) },
-            detailFormatter: { "clients=\($0.count), device_id=\($0.uplinkID)" },
+            detailFormatter: { "clients=\($0.rows.count), device_id=\($0.uplinkID)" },
             prefersLowerValues: true
         )
     }
@@ -1332,7 +1330,7 @@ final class ToolExecutor {
                 )
             }
         }
-        return sortDescendingRankedEntities(results)
+        return results.sorted { $0.value == $1.value ? $0.label < $1.label : $0.value > $1.value }
     }
 
     private func disconnectedClientCountsBySwitchPort(_ clients: [[String: Any]]) -> [String: Int] {

@@ -23,7 +23,7 @@ struct GuardrailClientOption: Identifiable, Hashable {
     var identityTokens: [String] {
         [
             mac.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
-            SettingsViewModel.normalizeHostToken(hostname),
+            hostname.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
             title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
         ].filter { !$0.isEmpty }
     }
@@ -1229,18 +1229,9 @@ final class SettingsViewModel: ObservableObject {
         }
         if option.hasMAC { score += 2 }
         if !option.ip.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { score += 1 }
-        if !normalizeHostToken(option.hostname).isEmpty { score += 1 }
+        if !option.hostname.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { score += 1 }
         score += min(option.subtitle.count / 12, 3)
         return score
-    }
-
-    /// Normalizes hostname-like tokens so cosmetic `.local` and case differences do not create duplicate identities.
-    private static func normalizeHostToken(_ value: String) -> String {
-        let lowered = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if lowered.hasSuffix(".local") {
-            return String(lowered.dropLast(6))
-        }
-        return lowered
     }
 
     /// Returns a normalized MAC string when present in a legacy row.
@@ -1257,7 +1248,7 @@ final class SettingsViewModel: ObservableObject {
                 ?? (row["hostName"] as? String)
                 ?? (row["dhcpHostname"] as? String)
         ) ?? ""
-        return normalizeHostToken(raw)
+        return raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
     /// Returns a normalized client name string when present in a legacy row.

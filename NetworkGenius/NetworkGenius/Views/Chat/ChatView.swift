@@ -1,6 +1,13 @@
 import SwiftUI
 import SwiftData
 
+private enum ChatSheet: String, Identifiable {
+    case settings
+    case conversations
+
+    var id: String { rawValue }
+}
+
 struct ChatView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var networkMonitor: NetworkMonitor
@@ -8,8 +15,7 @@ struct ChatView: View {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var viewModel = ChatViewModel()
     @StateObject private var speechService = SpeechService()
-    @State private var showSettings = false
-    @State private var showConversationList = false
+    @State private var activeSheet: ChatSheet?
 
     var body: some View {
         NavigationStack {
@@ -55,7 +61,7 @@ struct ChatView: View {
                         await viewModel.sendMessage(text)
                     }
                 }, onOpenSettings: {
-                    showSettings = true
+                    activeSheet = .settings
                 }, speechService: speechService)
             }
             .navigationTitle("NetworkGenius")
@@ -80,42 +86,58 @@ struct ChatView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
-                        showConversationList = true
+                        activeSheet = .conversations
                     } label: {
                         Label("Chats", systemImage: "text.bubble")
                     }
                 }
             }
-            .sheet(isPresented: $showSettings, onDismiss: {
-                speechService.voiceEnabled = UserDefaults.standard.bool(forKey: "voiceEnabled")
-                speechService.selectedVoiceIdentifier = UserDefaults.standard.string(forKey: "selectedVoiceID") ?? ""
-                if let rawProvider = UserDefaults.standard.string(forKey: "ttsProvider"),
-                   let provider = SpeechService.TTSProvider(rawValue: rawProvider)
-                {
-                    speechService.ttsProvider = provider
-                } else {
-                    speechService.ttsProvider = .local
+            .sheet(item: $activeSheet, onDismiss: handleSheetDismiss) { sheet in
+                switch sheet {
+                case .settings:
+                    SettingsView()
+                case .conversations:
+                    NavigationStack {
+                        List(viewModel.conversationSummaries) { convo in
+                            Button {
+                                Task {
+                                    await viewModel.loadConversation(id: convo.id)
+                                    activeSheet = nil
+                                }
+                            } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(convo.title)
+                                            .font(.body)
+                                            .lineLimit(1)
+                                        Text(convo.updatedAt, style: .relative)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    if convo.id == viewModel.currentConversationID {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundStyle(.green)
+                                    }
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .navigationTitle("Chats")
+                        .toolbar {
+                            ToolbarItem(placement: .topBarTrailing) {
+                                Button("Done") { activeSheet = nil }
+                            }
+                        }
+                    }
                 }
-                speechService.openAICloudVoice = UserDefaults.standard.string(forKey: "openAICloudVoice") ?? "alloy"
-                // Rebuild clients/tool executor with latest Settings values (Loki URL, console URL, model config, etc).
-                viewModel.configure(appState: appState, networkMonitor: networkMonitor, modelContext: modelContext)
-                Task {
-                    await networkMonitor.probeConsole(
-                        baseURL: appState.consoleURL,
-                        allowSelfSigned: appState.allowSelfSignedCerts
-                    )
-                }
-            }) {
-                SettingsView()
             }
             .onAppear {
                 debugLog("Chat view appeared", category: "UI")
-                showSettings = false
-                showConversationList = false
+                activeSheet = nil
                 DispatchQueue.main.async {
                     // Extra pass after view restoration/state replay.
-                    showSettings = false
-                    showConversationList = false
+                    activeSheet = nil
                 }
                 viewModel.speechService = speechService
                 viewModel.configure(appState: appState, networkMonitor: networkMonitor, modelContext: modelContext)
@@ -141,8 +163,7 @@ struct ChatView: View {
             .onChange(of: scenePhase) { _, phase in
                 switch phase {
                 case .active:
-                    showSettings = false
-                    showConversationList = false
+                    activeSheet = nil
                     Task {
                         debugLog("App became active; re-probing console reachability", category: "UI")
                         await networkMonitor.probeConsole(
@@ -152,8 +173,7 @@ struct ChatView: View {
                     }
                 case .inactive, .background:
                     // Prevent sheet restoration from dropping users back into settings/chats.
-                    showSettings = false
-                    showConversationList = false
+                    activeSheet = nil
                 @unknown default:
                     break
                 }
@@ -174,41 +194,26 @@ struct ChatView: View {
                     )
                 }
             }
-            .sheet(isPresented: $showConversationList) {
-                NavigationStack {
-                    List(viewModel.conversationSummaries) { convo in
-                        Button {
-                            Task {
-                                await viewModel.loadConversation(id: convo.id)
-                                showConversationList = false
-                            }
-                        } label: {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(convo.title)
-                                        .font(.body)
-                                        .lineLimit(1)
-                                    Text(convo.updatedAt, style: .relative)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                if convo.id == viewModel.currentConversationID {
-                                    Image(systemName: "checkmark.circle.fill")
-                                        .foregroundStyle(.green)
-                                }
-                            }
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .navigationTitle("Chats")
-                    .toolbar {
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Button("Done") { showConversationList = false }
-                        }
-                    }
-                }
-            }
+        }
+    }
+
+    private func handleSheetDismiss() {
+        speechService.voiceEnabled = UserDefaults.standard.bool(forKey: "voiceEnabled")
+        speechService.selectedVoiceIdentifier = UserDefaults.standard.string(forKey: "selectedVoiceID") ?? ""
+        if let rawProvider = UserDefaults.standard.string(forKey: "ttsProvider"),
+           let provider = SpeechService.TTSProvider(rawValue: rawProvider)
+        {
+            speechService.ttsProvider = provider
+        } else {
+            speechService.ttsProvider = .local
+        }
+        speechService.openAICloudVoice = UserDefaults.standard.string(forKey: "openAICloudVoice") ?? "alloy"
+        viewModel.configure(appState: appState, networkMonitor: networkMonitor, modelContext: modelContext)
+        Task {
+            await networkMonitor.probeConsole(
+                baseURL: appState.consoleURL,
+                allowSelfSigned: appState.allowSelfSignedCerts
+            )
         }
     }
 }
