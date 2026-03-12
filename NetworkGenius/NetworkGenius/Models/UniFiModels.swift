@@ -34,16 +34,81 @@ struct UniFiClientAccess: Codable {
 }
 
 struct ClientModificationApproval: Codable, Identifiable, Equatable {
+    private enum CodingKeys: String, CodingKey {
+        case approvalKey
+        case clientID
+        case name
+        case hostname
+        case mac
+        case ip
+        case isApproved
+        case allowClientModifications
+        case allowAppBlocks
+        case isCurrentlyConnected
+    }
+
     let approvalKey: String
     var clientID: String
     var name: String
     var hostname: String
     var mac: String
     var ip: String
-    var isApproved: Bool
+    var allowClientModifications: Bool
+    var allowAppBlocks: Bool
     var isCurrentlyConnected: Bool
 
     var id: String { approvalKey }
+
+    init(
+        approvalKey: String,
+        clientID: String,
+        name: String,
+        hostname: String,
+        mac: String,
+        ip: String,
+        allowClientModifications: Bool,
+        allowAppBlocks: Bool,
+        isCurrentlyConnected: Bool
+    ) {
+        self.approvalKey = approvalKey
+        self.clientID = clientID
+        self.name = name
+        self.hostname = hostname
+        self.mac = mac
+        self.ip = ip
+        self.allowClientModifications = allowClientModifications
+        self.allowAppBlocks = allowAppBlocks
+        self.isCurrentlyConnected = isCurrentlyConnected
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        approvalKey = try container.decode(String.self, forKey: .approvalKey)
+        clientID = try container.decode(String.self, forKey: .clientID)
+        name = try container.decode(String.self, forKey: .name)
+        hostname = try container.decode(String.self, forKey: .hostname)
+        mac = try container.decode(String.self, forKey: .mac)
+        ip = try container.decode(String.self, forKey: .ip)
+        let legacyApproved = try container.decodeIfPresent(Bool.self, forKey: .isApproved) ?? false
+        let storedModificationApproval = try container.decodeIfPresent(Bool.self, forKey: .allowClientModifications)
+        let storedAppBlockApproval = try container.decodeIfPresent(Bool.self, forKey: .allowAppBlocks)
+        let unifiedApproval = storedModificationApproval ?? storedAppBlockApproval ?? legacyApproved
+        allowClientModifications = unifiedApproval
+        allowAppBlocks = unifiedApproval
+        isCurrentlyConnected = try container.decode(Bool.self, forKey: .isCurrentlyConnected)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(approvalKey, forKey: .approvalKey)
+        try container.encode(clientID, forKey: .clientID)
+        try container.encode(name, forKey: .name)
+        try container.encode(hostname, forKey: .hostname)
+        try container.encode(mac, forKey: .mac)
+        try container.encode(ip, forKey: .ip)
+        try container.encode(allowClientModifications, forKey: .allowClientModifications)
+        try container.encode(isCurrentlyConnected, forKey: .isCurrentlyConnected)
+    }
 
     var displayName: String {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -96,7 +161,8 @@ struct ClientModificationApproval: Codable, Identifiable, Equatable {
                 hostname: preferred(current: client.hostname, fallback: previous?.hostname),
                 mac: preferred(current: client.mac, fallback: previous?.mac),
                 ip: preferred(current: client.ip, fallback: previous?.ip),
-                isApproved: previous?.isApproved ?? false,
+                allowClientModifications: previous?.allowClientModifications ?? false,
+                allowAppBlocks: previous?.allowClientModifications ?? false,
                 isCurrentlyConnected: true
             )
         }
@@ -108,13 +174,47 @@ struct ClientModificationApproval: Codable, Identifiable, Equatable {
         }
 
         return mergedByKey.values.sorted { lhs, rhs in
-            if lhs.isApproved != rhs.isApproved {
-                return lhs.isApproved && !rhs.isApproved
+            if lhs.allowClientModifications != rhs.allowClientModifications {
+                return lhs.allowClientModifications && !rhs.allowClientModifications
             }
             if lhs.isCurrentlyConnected != rhs.isCurrentlyConnected {
                 return lhs.isCurrentlyConnected && !rhs.isCurrentlyConnected
             }
             return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+        }
+    }
+
+    static func mergeLegacyAppBlockSelectors(
+        existing: [ClientModificationApproval],
+        selectors: [String],
+        nameMap: [String: String]
+    ) -> [ClientModificationApproval] {
+        guard !selectors.isEmpty else { return existing }
+
+        var mergedByKey = Dictionary(uniqueKeysWithValues: existing.map { ($0.approvalKey, $0) })
+        for selector in selectors {
+            let normalized = normalizeIdentifier(selector)
+            guard !normalized.isEmpty else { continue }
+            let existingEntry = mergedByKey[normalized]
+            let displayName = (nameMap[selector] ?? nameMap[normalized] ?? existingEntry?.name ?? selector)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            mergedByKey[normalized] = ClientModificationApproval(
+                approvalKey: normalized,
+                clientID: existingEntry?.clientID ?? normalized,
+                name: displayName,
+                hostname: existingEntry?.hostname ?? "",
+                mac: existingEntry?.mac ?? selector,
+                ip: existingEntry?.ip ?? "",
+                allowClientModifications: true,
+                allowAppBlocks: true,
+                isCurrentlyConnected: existingEntry?.isCurrentlyConnected ?? false
+            )
+        }
+        return mergedByKey.values.sorted { lhs, rhs in
+            if lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) != .orderedSame {
+                return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+            }
+            return lhs.approvalKey < rhs.approvalKey
         }
     }
 

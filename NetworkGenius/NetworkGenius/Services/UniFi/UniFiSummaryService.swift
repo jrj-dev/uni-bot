@@ -41,8 +41,11 @@ final class UniFiSummaryService {
         })
 
         var uplinkCounts: [String: Int] = [:]
-        for client in clients {
-            if let uplinkID = client["uplinkDeviceId"] as? String {
+        for client in clients where isActiveClient(client) {
+            if let uplinkID = client["uplinkDeviceId"] as? String,
+               let device = deviceMap[uplinkID],
+               isOnlineDevice(device)
+            {
                 uplinkCounts[uplinkID, default: 0] += 1
             }
         }
@@ -87,12 +90,15 @@ final class UniFiSummaryService {
         var byAccess: [String: Int] = [:]
         var byUplink: [String: Int] = [:]
 
-        for client in clients {
+        for client in clients where isActiveClient(client) {
             let type = client["type"] as? String ?? "UNKNOWN"
             byType[type, default: 0] += 1
             let access = (client["access"] as? [String: Any])?["type"] as? String ?? "UNKNOWN"
             byAccess[access, default: 0] += 1
-            if let uplinkID = client["uplinkDeviceId"] as? String {
+            if let uplinkID = client["uplinkDeviceId"] as? String,
+               let device = deviceMap[uplinkID],
+               isOnlineDevice(device)
+            {
                 byUplink[uplinkID, default: 0] += 1
             }
         }
@@ -216,5 +222,24 @@ final class UniFiSummaryService {
     /// Returns the best display name available for a UniFi row.
     private func safeName(_ item: [String: Any]?) -> String {
         item?["name"] as? String ?? item?["model"] as? String ?? "unknown"
+    }
+
+    /// Returns true when a client row looks currently active.
+    private func isActiveClient(_ client: [String: Any]) -> Bool {
+        if let active = client["active"] as? Bool ?? client["isActive"] as? Bool ?? client["is_online"] as? Bool ?? client["isOnline"] as? Bool {
+            return active
+        }
+        let state = (client["state"] as? String ?? client["status"] as? String ?? client["connectionState"] as? String ?? "").lowercased()
+        if state.contains("offline") || state.contains("disconnected") || state.contains("inactive") {
+            return false
+        }
+        return true
+    }
+
+    /// Returns true when a device row looks currently online.
+    private func isOnlineDevice(_ device: [String: Any]) -> Bool {
+        let state = (device["state"] as? String ?? device["status"] as? String ?? device["connectionState"] as? String ?? "").lowercased()
+        guard !state.isEmpty else { return true }
+        return !(state.contains("offline") || state.contains("disconnected") || state.contains("inactive"))
     }
 }

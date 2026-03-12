@@ -73,7 +73,8 @@ final class ToolExecutorTests: XCTestCase {
                 hostname: "mbp.local",
                 mac: "AA:BB:CC:DD:EE:FF",
                 ip: "192.168.1.25",
-                isApproved: true,
+                allowClientModifications: true,
+                allowAppBlocks: true,
                 isCurrentlyConnected: true
             )
         ]
@@ -81,7 +82,8 @@ final class ToolExecutorTests: XCTestCase {
         let merged = ClientModificationApproval.merge(currentClients: [], existing: existing)
 
         XCTAssertEqual(merged.count, 1)
-        XCTAssertTrue(merged[0].isApproved)
+        XCTAssertTrue(merged[0].allowClientModifications)
+        XCTAssertTrue(merged[0].allowAppBlocks)
         XCTAssertFalse(merged[0].isCurrentlyConnected)
     }
 }

@@ -25,9 +25,6 @@ final class SettingsViewModel: ObservableObject {
     @Published var unifiSSHPassword: String = ""
     @Published var grafanaLokiURL: String = ""
     @Published var grafanaLokiAPIKey: String = ""
-    @Published var appBlockAllowedClients: String = ""
-    @Published var appBlockAllowedClientSelectors: [String] = []
-    @Published var appBlockAllowedClientNameMap: [String: String] = [:]
     @Published var availableGuardrailClients: [GuardrailClientOption] = []
     @Published var guardrailClientSearchText: String = ""
     @Published var isLoadingGuardrailClients = false
@@ -89,9 +86,6 @@ final class SettingsViewModel: ObservableObject {
     func load(from appState: AppState) {
         consoleURL = appState.consoleURL
         grafanaLokiURL = appState.grafanaLokiURL
-        appBlockAllowedClients = appState.appBlockAllowedClients
-        appBlockAllowedClientSelectors = parseCSV(appState.appBlockAllowedClients)
-        appBlockAllowedClientNameMap = parseNameMapJSON(appState.appBlockAllowedClientNameMap)
         lmStudioBaseURL = appState.lmStudioBaseURL
         lmStudioModel = appState.lmStudioModel
         lmStudioMaxPromptChars = Double(appState.lmStudioMaxPromptChars)
@@ -137,13 +131,8 @@ final class SettingsViewModel: ObservableObject {
         enforceSelectedProviderForCurrentMode()
         appState.consoleURL = UniFiAPIClient.normalizeBaseURL(consoleURL)
         appState.grafanaLokiURL = UniFiAPIClient.normalizeBaseURL(grafanaLokiURL)
-        let selectors = appBlockAllowedClientSelectors.isEmpty
-            ? parseCSV(appBlockAllowedClients)
-            : appBlockAllowedClientSelectors
-        appBlockAllowedClientSelectors = selectors
-        appBlockAllowedClients = selectors.joined(separator: ", ")
-        appState.appBlockAllowedClients = appBlockAllowedClients
-        appState.appBlockAllowedClientNameMap = encodeNameMapJSON(appBlockAllowedClientNameMap)
+        appState.appBlockAllowedClients = ""
+        appState.appBlockAllowedClientNameMap = ""
         appState.lmStudioBaseURL = UniFiAPIClient.normalizeBaseURL(lmStudioBaseURL)
         appState.lmStudioModel = normalizedKey(lmStudioModel)
         appState.lmStudioMaxPromptChars = max(1028, min(Int(lmStudioMaxPromptChars.rounded()), 9026))
@@ -257,20 +246,15 @@ final class SettingsViewModel: ObservableObject {
 
         do {
             let client = UniFiAPIClient(baseURL: normalizedConsoleURL, allowSelfSigned: allowSelfSignedCerts)
-            let resolvedSite = try await resolveSiteForGuardrailClientLoad(
-                client: client,
-                configuredSiteID: siteID.trimmingCharacters(in: .whitespacesAndNewlines)
-            )
-            let siteIDPath = resolvedSite.id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? resolvedSite.id
-            let rows = try await client.getAllPages(path: "/proxy/network/integration/v1/sites/\(siteIDPath)/clients")
-            let decoded = try decodeUniFiClients(from: rows)
-            clientModificationApprovals = ClientModificationApproval.merge(
-                currentClients: decoded,
+            let options = try await fetchGuardrailClientOptions(client: client)
+            availableGuardrailClients = options
+            clientModificationApprovals = mergeGuardrailOptionsIntoApprovals(
+                options,
                 existing: clientModificationApprovals
             )
             clientModificationApprovalResult = clientModificationApprovals.isEmpty
                 ? "Loaded 0 clients."
-                : "Loaded \(clientModificationApprovals.count) clients."
+                : "Loaded \(clientModificationApprovals.count) clients (including inactive when available)."
         } catch {
             clientModificationApprovalResult = "Failed: \(error.localizedDescription)"
         }
@@ -361,72 +345,7 @@ final class SettingsViewModel: ObservableObject {
 
         do {
             let client = UniFiAPIClient(baseURL: normalizedConsoleURL, allowSelfSigned: allowSelfSignedCerts)
-            let configuredSiteID = siteID.trimmingCharacters(in: .whitespacesAndNewlines)
-            let resolvedSite = try await resolveSiteForGuardrailClientLoad(
-                client: client,
-                configuredSiteID: configuredSiteID
-            )
-            let siteIDPath = resolvedSite.id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? resolvedSite.id
-            let siteRefQuery = resolvedSite.reference.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? resolvedSite.reference
-            let candidates: [String] = [
-                "/proxy/network/integration/v1/sites/\(siteIDPath)/clients?includeInactive=true",
-                "/proxy/network/integration/v1/sites/\(siteIDPath)/clients?includeOffline=true",
-                "/proxy/network/integration/v1/clients?site_id=\(siteRefQuery)&includeInactive=true",
-                "/proxy/network/integration/v1/clients?site_id=\(siteRefQuery)",
-                "/proxy/network/integration/v1/sites/\(siteIDPath)/clients",
-                "/proxy/network/api/s/\(siteRefQuery)/stat/alluser",
-            ]
-
-            var selectedRows: [[String: Any]] = []
-            var selectedPath: String?
-            for path in candidates {
-                do {
-                    let rows = try await fetchGuardrailClientRows(path: path, client: client)
-                    debugLog("Guardrail clients candidate succeeded (path=\(path), rows=\(rows.count))", category: "Settings")
-                    if rows.count > selectedRows.count {
-                        selectedRows = rows
-                        selectedPath = path
-                    }
-                } catch {
-                    debugLog("Guardrail clients candidate failed (path=\(path), error=\(error.localizedDescription))", category: "Settings")
-                }
-            }
-            let rows = selectedRows
-            if let selectedPath {
-                debugLog("Guardrail clients selected endpoint: \(selectedPath) (rows=\(rows.count))", category: "Settings")
-            }
-
-            let activeRowsBySelector = await loadActiveClientRowsBySelector(
-                client: client,
-                siteIDPath: siteIDPath
-            )
-            let activeSelectors = Set(activeRowsBySelector.keys)
-
-            var uniqueBySelector: [String: GuardrailClientOption] = [:]
-            for row in rows {
-                var sourceRow = row
-                if let selector = Self.selectorForClientRow(row),
-                   let activeRow = activeRowsBySelector[selector.lowercased()]
-                {
-                    sourceRow = Self.mergeClientRows(primary: activeRow, fallback: row)
-                }
-                guard let option = Self.guardrailOption(from: sourceRow) else { continue }
-                if uniqueBySelector[option.selector] == nil {
-                    var resolved = option
-                    if activeSelectors.contains(option.selector.lowercased()) {
-                        resolved.isActive = true
-                    }
-                    appBlockAllowedClientNameMap[resolved.selector] = resolved.title
-                    uniqueBySelector[option.selector] = resolved
-                }
-            }
-            availableGuardrailClients = Array(uniqueBySelector.values)
-                .sorted { lhs, rhs in
-                    if lhs.isActive != rhs.isActive {
-                        return lhs.isActive && !rhs.isActive
-                    }
-                    return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
-                }
+            availableGuardrailClients = try await fetchGuardrailClientOptions(client: client)
             let count = availableGuardrailClients.count
             guardrailClientsLoadResult = count == 0
                 ? "Loaded 0 clients."
@@ -438,27 +357,6 @@ final class SettingsViewModel: ObservableObject {
         if !hadKey && normalizedKey(unifiAPIKey).isEmpty {
             KeychainHelper.delete(key: .unifiAPIKey)
         }
-    }
-
-    /// Adds a resolved client option to the guardrail allowlist.
-    func addGuardrailClient(_ option: GuardrailClientOption) {
-        guard !appBlockAllowedClientSelectors.contains(option.selector) else { return }
-        appBlockAllowedClientSelectors.append(option.selector)
-        appBlockAllowedClientSelectors.sort()
-        appBlockAllowedClients = appBlockAllowedClientSelectors.joined(separator: ", ")
-        appBlockAllowedClientNameMap[option.selector] = option.title
-    }
-
-    /// Removes a client selector from the guardrail allowlist.
-    func removeGuardrailClient(selector: String) {
-        appBlockAllowedClientSelectors.removeAll { $0 == selector }
-        appBlockAllowedClients = appBlockAllowedClientSelectors.joined(separator: ", ")
-        appBlockAllowedClientNameMap.removeValue(forKey: selector)
-    }
-
-    /// Returns the cached display name for a saved guardrail client selector.
-    func cachedGuardrailClientName(for selector: String) -> String? {
-        appBlockAllowedClientNameMap[selector]
     }
 
     /// Tests the configured Grafana Loki connection and updates the settings UI.
@@ -647,7 +545,7 @@ final class SettingsViewModel: ObservableObject {
         let id = ((row["id"] as? String) ?? UUID().uuidString)
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        let selector = !mac.isEmpty ? mac : (!ip.isEmpty ? ip : (!hostname.isEmpty ? hostname : id))
+        let selector = !mac.isEmpty ? mac : (!hostname.isEmpty ? hostname : (!name.isEmpty ? name : id))
         let title = !name.isEmpty ? name : (!hostname.isEmpty ? hostname : selector)
 
         var detailParts: [String] = []
@@ -688,41 +586,6 @@ final class SettingsViewModel: ObservableObject {
             }
         }
         return false
-    }
-
-    /// Splits a comma-separated settings value into trimmed entries.
-    private func parseCSV(_ csv: String) -> [String] {
-        csv.split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-    }
-
-    /// Parses the stored selector-to-name mapping JSON used by guardrail settings.
-    private func parseNameMapJSON(_ raw: String) -> [String: String] {
-        guard let data = raw.data(using: .utf8),
-              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else {
-            return [:]
-        }
-        var map: [String: String] = [:]
-        for (key, value) in payload {
-            let cleanedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
-            let cleanedValue = String(describing: value).trimmingCharacters(in: .whitespacesAndNewlines)
-            if !cleanedKey.isEmpty, !cleanedValue.isEmpty {
-                map[cleanedKey] = cleanedValue
-            }
-        }
-        return map
-    }
-
-    /// Encodes the selector-to-name mapping JSON used by guardrail settings.
-    private func encodeNameMapJSON(_ map: [String: String]) -> String {
-        guard let data = try? JSONSerialization.data(withJSONObject: map, options: [.sortedKeys]),
-              let string = String(data: data, encoding: .utf8)
-        else {
-            return ""
-        }
-        return string
     }
 
     /// Resolves the site path used when loading guardrail client choices.
@@ -770,6 +633,127 @@ final class SettingsViewModel: ObservableObject {
         return try await client.getAllPages(path: path)
     }
 
+    /// Resolves the widest client catalog available and normalizes it into guardrail options.
+    private func fetchGuardrailClientOptions(client: UniFiAPIClient) async throws -> [GuardrailClientOption] {
+        let configuredSiteID = siteID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedSite = try await resolveSiteForGuardrailClientLoad(
+            client: client,
+            configuredSiteID: configuredSiteID
+        )
+        let siteIDPath = resolvedSite.id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? resolvedSite.id
+        let siteRefQuery = resolvedSite.reference.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? resolvedSite.reference
+        let candidates: [String] = [
+            "/proxy/network/integration/v1/sites/\(siteIDPath)/clients?includeInactive=true",
+            "/proxy/network/integration/v1/sites/\(siteIDPath)/clients?includeOffline=true",
+            "/proxy/network/integration/v1/clients?site_id=\(siteRefQuery)&includeInactive=true",
+            "/proxy/network/integration/v1/clients?site_id=\(siteRefQuery)",
+            "/proxy/network/integration/v1/sites/\(siteIDPath)/clients",
+        ]
+
+        var selectedRows: [[String: Any]] = []
+        var selectedPath: String?
+        for path in candidates {
+            do {
+                let rows = try await fetchGuardrailClientRows(path: path, client: client)
+                debugLog("Guardrail clients candidate succeeded (path=\(path), rows=\(rows.count))", category: "Settings")
+                if rows.count > selectedRows.count {
+                    selectedRows = rows
+                    selectedPath = path
+                }
+            } catch {
+                debugLog("Guardrail clients candidate failed (path=\(path), error=\(error.localizedDescription))", category: "Settings")
+            }
+        }
+        let rows = selectedRows
+        if let selectedPath {
+            debugLog("Guardrail clients selected endpoint: \(selectedPath) (rows=\(rows.count))", category: "Settings")
+        }
+
+        let activeRowsBySelector = await loadActiveClientRowsBySelector(
+            client: client,
+            siteIDPath: siteIDPath
+        )
+        let activeSelectors = Set(activeRowsBySelector.keys)
+
+        var uniqueBySelector: [String: GuardrailClientOption] = [:]
+        for row in rows {
+            var sourceRow = row
+            if let activeRow = Self.bestMatchingActiveRow(for: row, activeRowsBySelector: activeRowsBySelector) {
+                sourceRow = Self.mergeClientRows(primary: activeRow, fallback: row)
+            }
+            guard let option = Self.guardrailOption(from: sourceRow) else { continue }
+            var resolved = option
+            if activeSelectors.contains(option.selector.lowercased()) {
+                resolved.isActive = true
+            }
+
+            if let existingKey = Self.bestMatchingOptionKey(for: resolved, optionsBySelector: uniqueBySelector) {
+                if let existing = uniqueBySelector[existingKey] {
+                    uniqueBySelector.removeValue(forKey: existingKey)
+                    uniqueBySelector[resolved.selector] = Self.mergeGuardrailOptions(primary: resolved, fallback: existing)
+                }
+            } else {
+                uniqueBySelector[resolved.selector] = resolved
+            }
+        }
+
+        return Array(uniqueBySelector.values).sorted { lhs, rhs in
+            if lhs.isActive != rhs.isActive {
+                return lhs.isActive && !rhs.isActive
+            }
+            return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+        }
+    }
+
+    /// Merges resolved client options into the persisted approval list without dropping offline entries.
+    private func mergeGuardrailOptionsIntoApprovals(
+        _ options: [GuardrailClientOption],
+        existing: [ClientModificationApproval]
+    ) -> [ClientModificationApproval] {
+        let existingByKey = Dictionary(uniqueKeysWithValues: existing.map { ($0.approvalKey, $0) })
+        var mergedByKey: [String: ClientModificationApproval] = [:]
+        let activeKeys = Set(options.filter(\.isActive).map { normalizedApprovalKey(from: $0.selector) })
+
+        for option in options {
+            let key = normalizedApprovalKey(from: option.selector)
+            guard !key.isEmpty else { continue }
+            let previous = existingByKey[key]
+            let detailParts = option.subtitle
+                .split(separator: "•")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            let inferredIP = detailParts.first(where: { $0.contains(".") })
+            let inferredMAC = detailParts.first(where: { $0.contains(":") })
+            let inferredHostname = detailParts.last(where: { !$0.contains(".") && !$0.contains(":") && $0.lowercased() != "offline" })
+
+            mergedByKey[key] = ClientModificationApproval(
+                approvalKey: key,
+                clientID: previous?.clientID ?? option.id,
+                name: option.title,
+                hostname: previous?.hostname.isEmpty == false ? previous!.hostname : (inferredHostname ?? ""),
+                mac: previous?.mac.isEmpty == false ? previous!.mac : (inferredMAC ?? (option.selector.contains(":") ? option.selector : "")),
+                ip: previous?.ip.isEmpty == false ? previous!.ip : (inferredIP ?? ""),
+                allowClientModifications: previous?.allowClientModifications ?? false,
+                allowAppBlocks: previous?.allowClientModifications ?? false,
+                isCurrentlyConnected: activeKeys.contains(key)
+            )
+        }
+
+        return mergedByKey.values.sorted { lhs, rhs in
+            if lhs.allowClientModifications != rhs.allowClientModifications {
+                return lhs.allowClientModifications && !rhs.allowClientModifications
+            }
+            if lhs.isCurrentlyConnected != rhs.isCurrentlyConnected {
+                return lhs.isCurrentlyConnected && !rhs.isCurrentlyConnected
+            }
+            return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+        }
+    }
+
+    /// Normalizes a selector into the approval key format used across persisted client guardrails.
+    private func normalizedApprovalKey(from selector: String) -> String {
+        selector.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
     /// Loads active client rows for the saved guardrail selectors.
     private func loadActiveClientRowsBySelector(
         client: UniFiAPIClient,
@@ -781,10 +765,14 @@ final class SettingsViewModel: ObservableObject {
             let rows = try await client.getAllPages(path: path)
             var bySelector: [String: [String: Any]] = [:]
             for row in rows {
-                guard let selector = Self.selectorForClientRow(row)?.lowercased() else { continue }
-                bySelector[selector] = row
+                for token in Self.clientRowIdentityTokens(row) {
+                    bySelector[token] = row
+                }
             }
-            debugLog("Resolved active client selector set (count=\(bySelector.count))", category: "Settings")
+            debugLog(
+                "Resolved active client selector set (rows=\(rows.count), identity_tokens=\(bySelector.count))",
+                category: "Settings"
+            )
             return bySelector
         } catch {
             debugLog("Failed loading active client selector set: \(error.localizedDescription)", category: "Settings")
@@ -810,6 +798,12 @@ final class SettingsViewModel: ObservableObject {
 
     /// Builds the stable selector string stored for a guardrail client row.
     private static func selectorForClientRow(_ row: [String: Any]) -> String? {
+        let name = (
+            (row["name"] as? String)
+                ?? (row["displayName"] as? String)
+                ?? (row["clientName"] as? String)
+                ?? (row["user"] as? String)
+        )?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let hostname = (
             (row["hostname"] as? String)
                 ?? (row["hostName"] as? String)
@@ -817,16 +811,91 @@ final class SettingsViewModel: ObservableObject {
         )?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let mac = ((row["mac"] as? String) ?? (row["macAddress"] as? String) ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let ip = ((row["ip"] as? String) ?? (row["ipAddress"] as? String) ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
         let id = ((row["id"] as? String) ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         if !mac.isEmpty { return mac }
-        if !ip.isEmpty { return ip }
         if !hostname.isEmpty { return hostname }
+        if !name.isEmpty { return name }
         if !id.isEmpty { return id }
         return nil
+    }
+
+    /// Returns normalized identity tokens used to match active and inactive rows for the same client.
+    private static func clientRowIdentityTokens(_ row: [String: Any]) -> [String] {
+        let name = (
+            (row["name"] as? String)
+                ?? (row["displayName"] as? String)
+                ?? (row["clientName"] as? String)
+                ?? (row["user"] as? String)
+        )?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        let hostname = (
+            (row["hostname"] as? String)
+                ?? (row["hostName"] as? String)
+                ?? (row["dhcpHostname"] as? String)
+        )?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        let mac = ((row["mac"] as? String) ?? (row["macAddress"] as? String) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+
+        return [mac, hostname, name].filter { !$0.isEmpty }
+    }
+
+    /// Finds the best active-row match for a potentially stale row using MAC first, then hostname/name.
+    private static func bestMatchingActiveRow(
+        for row: [String: Any],
+        activeRowsBySelector: [String: [String: Any]]
+    ) -> [String: Any]? {
+        for token in clientRowIdentityTokens(row) {
+            if let match = activeRowsBySelector[token] {
+                return match
+            }
+        }
+        return nil
+    }
+
+    /// Finds an existing option that represents the same client using MAC first, then hostname/name.
+    private static func bestMatchingOptionKey(
+        for option: GuardrailClientOption,
+        optionsBySelector: [String: GuardrailClientOption]
+    ) -> String? {
+        let tokens = optionIdentityTokens(option)
+        for (key, existing) in optionsBySelector {
+            let existingTokens = optionIdentityTokens(existing)
+            if !Set(tokens).isDisjoint(with: existingTokens) {
+                return key
+            }
+        }
+        return nil
+    }
+
+    /// Merges two guardrail options while preferring MAC-backed and active records.
+    private static func mergeGuardrailOptions(
+        primary: GuardrailClientOption,
+        fallback: GuardrailClientOption
+    ) -> GuardrailClientOption {
+        let primaryHasMAC = primary.selector.contains(":") || primary.subtitle.contains(":")
+        let fallbackHasMAC = fallback.selector.contains(":") || fallback.subtitle.contains(":")
+        let chosen = (primaryHasMAC && !fallbackHasMAC) ? primary : fallback
+        let secondary = (chosen.id == primary.id && chosen.selector == primary.selector) ? fallback : primary
+        return GuardrailClientOption(
+            id: chosen.id,
+            selector: chosen.selector,
+            title: chosen.title.isEmpty ? secondary.title : chosen.title,
+            subtitle: chosen.subtitle.isEmpty ? secondary.subtitle : chosen.subtitle,
+            isActive: primary.isActive || fallback.isActive
+        )
+    }
+
+    /// Returns the identity tokens used to collapse duplicate guardrail options.
+    private static func optionIdentityTokens(_ option: GuardrailClientOption) -> [String] {
+        let subtitleParts = option.subtitle
+            .split(separator: "•")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+        let mac = subtitleParts.first(where: { $0.contains(":") }) ?? (option.selector.contains(":") ? option.selector.lowercased() : "")
+        let hostname = subtitleParts.first(where: { !$0.contains(":") && !$0.contains(".") && $0 != "offline" }) ?? ""
+        let title = option.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return [mac, hostname, title].filter { !$0.isEmpty }
     }
 
     /// Merges multiple client result sets into one deduplicated list.

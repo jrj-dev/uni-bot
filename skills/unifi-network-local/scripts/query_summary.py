@@ -88,6 +88,26 @@ def safe_name(item: dict, fallback: str) -> str:
     return item.get("name") or item.get("model") or fallback
 
 
+# Returns true when a client row looks currently active.
+def is_active_client(item: dict) -> bool:
+    for key in ("active", "isActive", "is_online", "isOnline"):
+        value = item.get(key)
+        if isinstance(value, bool):
+            return value
+    state = str(item.get("state") or item.get("status") or item.get("connectionState") or "").lower()
+    if any(word in state for word in ("offline", "disconnected", "inactive")):
+        return False
+    return True
+
+
+# Returns true when a device row looks currently online.
+def is_online_device(item: dict) -> bool:
+    state = str(item.get("state") or item.get("status") or item.get("connectionState") or "").lower()
+    if not state:
+        return True
+    return not any(word in state for word in ("offline", "disconnected", "inactive"))
+
+
 # Prints a compact overall network summary.
 def summarize_overview(site_id: str, insecure: bool) -> int:
     sites = rows(load_named_query("sites", insecure=insecure))
@@ -98,7 +118,13 @@ def summarize_overview(site_id: str, insecure: bool) -> int:
     pending = rows(load_named_query("pending-devices", insecure=insecure))
 
     device_map = {item.get("id"): item for item in devices if item.get("id")}
-    uplinks = Counter(client.get("uplinkDeviceId") for client in clients if client.get("uplinkDeviceId"))
+    uplinks = Counter(
+        client.get("uplinkDeviceId")
+        for client in clients
+        if client.get("uplinkDeviceId")
+        and is_active_client(client)
+        and is_online_device(device_map.get(client.get("uplinkDeviceId"), {}))
+    )
 
     print("Overview")
     print(f"- sites: {len(sites)}")
@@ -120,12 +146,18 @@ def summarize_clients(site_id: str, insecure: bool) -> int:
     devices = rows(load_named_query("devices", site_id=site_id, insecure=insecure))
     clients = rows(load_named_query("clients", site_id=site_id, insecure=insecure))
     device_map = {item.get("id"): item for item in devices if item.get("id")}
-    by_type = Counter(item.get("type", "UNKNOWN") for item in clients)
-    by_access = Counter(item.get("access", {}).get("type", "UNKNOWN") for item in clients)
-    by_uplink = Counter(item.get("uplinkDeviceId") for item in clients if item.get("uplinkDeviceId"))
+    active_clients = [item for item in clients if is_active_client(item)]
+    by_type = Counter(item.get("type", "UNKNOWN") for item in active_clients)
+    by_access = Counter(item.get("access", {}).get("type", "UNKNOWN") for item in active_clients)
+    by_uplink = Counter(
+        item.get("uplinkDeviceId")
+        for item in active_clients
+        if item.get("uplinkDeviceId")
+        and is_online_device(device_map.get(item.get("uplinkDeviceId"), {}))
+    )
 
     print("Clients")
-    print(f"- total: {len(clients)}")
+    print(f"- total: {len(active_clients)}")
     print("- by type:")
     for label, count in by_type.most_common():
         print(f"  {label}: {count}")

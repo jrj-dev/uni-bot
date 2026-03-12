@@ -20,7 +20,7 @@ final class ToolExecutor {
         summaryService: UniFiSummaryService,
         networkMonitor: NetworkMonitor,
         lokiBaseURL: String,
-        appBlockAllowedClients: String,
+        clientModificationApprovals: [ClientModificationApproval],
         assistantMode: AssistantMode
     ) {
         self.apiClient = apiClient
@@ -31,7 +31,7 @@ final class ToolExecutor {
         self.assistantMode = assistantMode
         self.appBlockService = UniFiAppBlockService(
             apiClient: apiClient,
-            allowlistCSV: appBlockAllowedClients
+            approvals: clientModificationApprovals
         )
     }
 
@@ -2332,20 +2332,13 @@ private actor AppBlockApprovalStore {
 
 private struct UniFiAppBlockService {
     private let apiClient: UniFiAPIClient
-    private let allowedClientSelectors: [String]
+    private let approvedAppBlockClients: [ClientModificationApproval]
     private let approvals = AppBlockApprovalStore()
     private let dpiCache = DPICatalogCache()
 
-    init(apiClient: UniFiAPIClient, allowlistCSV: String) {
+    init(apiClient: UniFiAPIClient, approvals: [ClientModificationApproval]) {
         self.apiClient = apiClient
-        self.allowedClientSelectors = allowlistCSV
-            .split(separator: ",")
-            .map {
-                String($0)
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                    .lowercased()
-            }
-            .filter { !$0.isEmpty }
+        self.approvedAppBlockClients = approvals.filter(\.allowClientModifications)
     }
 
     /// Lists dpiapplications.
@@ -2485,8 +2478,8 @@ private struct UniFiAppBlockService {
         guard !clientSelector.isEmpty else {
             return "Error: plan_client_app_block requires 'client'."
         }
-        guard !allowedClientSelectors.isEmpty else {
-            return "Error: No app-block allowlist configured. Add allowed clients in Settings -> Change Guardrails."
+        guard !approvedAppBlockClients.isEmpty else {
+            return "Error: No app-block approvals configured. Enable app blocks for one or more clients in Settings."
         }
 
         let appSelectors = parseCSV(rawApps)
@@ -2502,7 +2495,7 @@ private struct UniFiAppBlockService {
         let client = try resolveClient(clientSelector, in: clients)
         guard isClientAllowed(client) else {
             let display = clientDisplayName(client)
-            return "Error: Client '\(display)' is not in the app-block allowlist. Update Settings -> Change Guardrails."
+            return "Error: Client '\(display)' is not approved for app blocks. Update Settings -> Client Modify Whitelist."
         }
 
         let resolvedApps = try resolveNamedSelectors(appSelectors, in: applications, kind: "application")
@@ -2652,7 +2645,7 @@ private struct UniFiAppBlockService {
         let client = try resolveClient(clientSelector, in: clients)
         guard isClientAllowed(client) else {
             let display = clientDisplayName(client)
-            return "Error: Client '\(display)' is not in the app-block allowlist. Update Settings -> Change Guardrails."
+            return "Error: Client '\(display)' is not approved for app blocks. Update Settings -> Client Modify Whitelist."
         }
         let clientMac = normalize(client["mac"] as? String ?? client["macAddress"] as? String ?? "")
         guard !clientMac.isEmpty else {
@@ -3313,9 +3306,20 @@ private struct UniFiAppBlockService {
     /// Returns true when client allowed.
     private func isClientAllowed(_ client: [String: Any]) -> Bool {
         let fields = clientCandidateValues(client).map(normalize)
-
-        for allow in allowedClientSelectors {
-            if fields.contains(where: { $0 == allow || $0.contains(allow) }) {
+        for approval in approvedAppBlockClients {
+            let allowedFields = [
+                approval.approvalKey,
+                approval.clientID,
+                approval.name,
+                approval.hostname,
+                approval.mac,
+                approval.ip,
+            ]
+            .map(normalize)
+            .filter { !$0.isEmpty }
+            if allowedFields.contains(where: { allowed in
+                fields.contains(where: { $0 == allowed || $0.contains(allowed) || allowed.contains($0) })
+            }) {
                 return true
             }
         }

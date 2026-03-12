@@ -101,7 +101,7 @@ final class ChatViewModel: ObservableObject {
             summaryService: summaryService,
             networkMonitor: networkMonitor,
             lokiBaseURL: appState.grafanaLokiURL,
-            appBlockAllowedClients: appState.appBlockAllowedClients,
+            clientModificationApprovals: appState.clientModificationApprovals,
             assistantMode: appState.assistantMode
         )
 
@@ -360,16 +360,16 @@ final class ChatViewModel: ObservableObject {
             """
         }
         if let appState {
-            let approvedClients = appState.clientModificationApprovals.filter(\.isApproved)
-            if !approvedClients.isEmpty {
-                let approvedLabels = approvedClients
+            let approvedModificationClients = appState.clientModificationApprovals.filter(\.allowClientModifications)
+            if !approvedModificationClients.isEmpty {
+                let approvedLabels = approvedModificationClients
                     .prefix(25)
                     .map(\.displayName)
                     .joined(separator: ", ")
                 systemPrompt += """
 
                 Approved Client Modification Whitelist:
-                - approved_count: \(approvedClients.count)
+                - approved_count: \(approvedModificationClients.count)
                 - approved_clients: \(approvedLabels)
                 - if write-capable tools are enabled, never propose or execute client-specific changes, restarts, or modifications for targets outside this whitelist
                 """
@@ -534,7 +534,7 @@ final class ChatViewModel: ObservableObject {
                 summaryService: summaryService,
                 networkMonitor: networkMonitor,
                 lokiBaseURL: appState.grafanaLokiURL,
-                appBlockAllowedClients: appState.appBlockAllowedClients,
+                clientModificationApprovals: appState.clientModificationApprovals,
                 assistantMode: appState.assistantMode
             )
         }

@@ -51,11 +51,21 @@ final class AppState: ObservableObject {
     var clientModificationApprovals: [ClientModificationApproval] {
         get {
             guard let data = clientModificationApprovalsRaw.data(using: .utf8),
-                  let decoded = try? JSONDecoder().decode([ClientModificationApproval].self, from: data)
+                  let decodedApprovals = try? JSONDecoder().decode([ClientModificationApproval].self, from: data)
             else {
-                return []
+                let legacySelectors = parseCSV(appBlockAllowedClients)
+                let legacyNameMap = parseNameMapJSON(appBlockAllowedClientNameMap)
+                return ClientModificationApproval.mergeLegacyAppBlockSelectors(
+                    existing: [],
+                    selectors: legacySelectors,
+                    nameMap: legacyNameMap
+                )
             }
-            return decoded
+            return ClientModificationApproval.mergeLegacyAppBlockSelectors(
+                existing: decodedApprovals,
+                selectors: parseCSV(appBlockAllowedClients),
+                nameMap: parseNameMapJSON(appBlockAllowedClientNameMap)
+            )
         }
         set {
             guard let data = try? JSONEncoder().encode(newValue),
@@ -82,5 +92,30 @@ final class AppState: ObservableObject {
             return KeychainHelper.exists(key: .lmStudioAPIKey)
                 && !UniFiAPIClient.normalizeBaseURL(lmStudioBaseURL).isEmpty
         }
+    }
+
+    /// Splits a stored CSV into trimmed selectors used by legacy guardrail migration.
+    private func parseCSV(_ csv: String) -> [String] {
+        csv.split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// Parses the legacy selector-to-name mapping JSON used to migrate app-block approvals.
+    private func parseNameMapJSON(_ raw: String) -> [String: String] {
+        guard let data = raw.data(using: .utf8),
+              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return [:]
+        }
+        var map: [String: String] = [:]
+        for (key, value) in payload {
+            let cleanedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
+            let cleanedValue = String(describing: value).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !cleanedKey.isEmpty, !cleanedValue.isEmpty {
+                map[cleanedKey] = cleanedValue
+            }
+        }
+        return map
     }
 }
