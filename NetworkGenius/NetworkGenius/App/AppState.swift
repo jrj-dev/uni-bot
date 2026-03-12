@@ -17,6 +17,67 @@ enum AssistantMode: String, CaseIterable, Identifiable {
 
 @MainActor
 final class AppState: ObservableObject {
+    private struct ClientModificationApprovalStorage {
+        let rawApprovals: String
+        let legacySelectorsCSV: String
+        let legacyNameMapJSON: String
+
+        /// Decodes current approval storage and folds in any legacy app-block allowlist data.
+        func decodeApprovals() -> [ClientModificationApproval] {
+            let decodedApprovals = decodedCurrentApprovals()
+            return ClientModificationApproval.mergeLegacyAppBlockSelectors(
+                existing: decodedApprovals,
+                selectors: legacySelectors(),
+                nameMap: legacyNameMap()
+            )
+        }
+
+        /// Encodes approvals for persisted AppStorage, falling back to an empty JSON array on failure.
+        func encodeApprovals(_ approvals: [ClientModificationApproval]) -> String {
+            guard let data = try? JSONEncoder().encode(approvals),
+                  let encoded = String(data: data, encoding: .utf8)
+            else {
+                return "[]"
+            }
+            return encoded
+        }
+
+        private func decodedCurrentApprovals() -> [ClientModificationApproval] {
+            guard let data = rawApprovals.data(using: .utf8),
+                  let decodedApprovals = try? JSONDecoder().decode([ClientModificationApproval].self, from: data)
+            else {
+                return []
+            }
+            return decodedApprovals
+        }
+
+        /// Splits the legacy CSV storage into normalized selectors for migration.
+        private func legacySelectors() -> [String] {
+            legacySelectorsCSV.split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        }
+
+        /// Parses the legacy selector-to-name mapping JSON used by app-block migration.
+        private func legacyNameMap() -> [String: String] {
+            guard let data = legacyNameMapJSON.data(using: .utf8),
+                  let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else {
+                return [:]
+            }
+
+            var map: [String: String] = [:]
+            for (key, value) in payload {
+                let cleanedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
+                let cleanedValue = String(describing: value).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !cleanedKey.isEmpty, !cleanedValue.isEmpty {
+                    map[cleanedKey] = cleanedValue
+                }
+            }
+            return map
+        }
+    }
+
     @AppStorage("consoleURL") var consoleURL: String = ""
     @AppStorage("siteID") var siteID: String = ""
     @AppStorage("llmProvider") private var llmProviderRaw: String = LLMProvider.claude.rawValue
@@ -50,31 +111,10 @@ final class AppState: ObservableObject {
 
     var clientModificationApprovals: [ClientModificationApproval] {
         get {
-            guard let data = clientModificationApprovalsRaw.data(using: .utf8),
-                  let decodedApprovals = try? JSONDecoder().decode([ClientModificationApproval].self, from: data)
-            else {
-                let legacySelectors = parseCSV(appBlockAllowedClients)
-                let legacyNameMap = parseNameMapJSON(appBlockAllowedClientNameMap)
-                return ClientModificationApproval.mergeLegacyAppBlockSelectors(
-                    existing: [],
-                    selectors: legacySelectors,
-                    nameMap: legacyNameMap
-                )
-            }
-            return ClientModificationApproval.mergeLegacyAppBlockSelectors(
-                existing: decodedApprovals,
-                selectors: parseCSV(appBlockAllowedClients),
-                nameMap: parseNameMapJSON(appBlockAllowedClientNameMap)
-            )
+            approvalStorage.decodeApprovals()
         }
         set {
-            guard let data = try? JSONEncoder().encode(newValue),
-                  let encoded = String(data: data, encoding: .utf8)
-            else {
-                clientModificationApprovalsRaw = "[]"
-                return
-            }
-            clientModificationApprovalsRaw = encoded
+            clientModificationApprovalsRaw = approvalStorage.encodeApprovals(newValue)
         }
     }
 
@@ -94,28 +134,13 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// Splits a stored CSV into trimmed selectors used by legacy guardrail migration.
-    private func parseCSV(_ csv: String) -> [String] {
-        csv.split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-    }
-
-    /// Parses the legacy selector-to-name mapping JSON used to migrate app-block approvals.
-    private func parseNameMapJSON(_ raw: String) -> [String: String] {
-        guard let data = raw.data(using: .utf8),
-              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else {
-            return [:]
-        }
-        var map: [String: String] = [:]
-        for (key, value) in payload {
-            let cleanedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
-            let cleanedValue = String(describing: value).trimmingCharacters(in: .whitespacesAndNewlines)
-            if !cleanedKey.isEmpty, !cleanedValue.isEmpty {
-                map[cleanedKey] = cleanedValue
-            }
-        }
-        return map
+    /// Centralizes current and legacy approval persistence details so the public property
+    /// stays focused on app behavior instead of storage mechanics.
+    private var approvalStorage: ClientModificationApprovalStorage {
+        ClientModificationApprovalStorage(
+            rawApprovals: clientModificationApprovalsRaw,
+            legacySelectorsCSV: appBlockAllowedClients,
+            legacyNameMapJSON: appBlockAllowedClientNameMap
+        )
     }
 }

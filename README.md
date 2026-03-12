@@ -6,6 +6,34 @@ This repo contains two parts:
 - `NetworkGenius/`: iOS app (SwiftUI) for chat + voice network troubleshooting.
 - `skills/unifi-network-local/`: CLI skill and scripts for direct UniFi/Loki/LM Studio workflows.
 
+## Current Architecture
+
+### iOS App Boundaries
+
+- `NetworkGenius/NetworkGenius/App/AppState.swift`
+  - persisted user settings and runtime toggles
+  - current/legacy client-modification approval storage
+- `NetworkGenius/NetworkGenius/ViewModels/SettingsViewModel.swift`
+  - settings editing, keychain writes, provider validation, guardrail client loading
+  - should stay focused on settings workflows rather than tool execution
+- `NetworkGenius/NetworkGenius/ViewModels/ChatViewModel.swift`
+  - conversation state, startup validation, prompt assembly, and LLM/tool request orchestration
+  - route methods are intentionally kept thin and delegate to helper methods for runtime rebuilds, request loops, and response delivery
+- `NetworkGenius/NetworkGenius/Services/LLM/ToolExecutor.swift`
+  - top-level tool router for inventory, diagnostics, ranking, summaries, docs/logs, and guarded app-block flows
+  - domain helpers should own parsing, scoring, payload shaping, and formatting instead of growing monolithic switch methods
+- `NetworkGenius/NetworkGenius/Services/UniFi/`
+  - UniFi API client, query service, and summary service
+
+### Complexity Direction
+
+Recent cleanup work has been moving large methods toward a consistent shape:
+- route method
+- domain-specific helper
+- small data/parsing/formatting helpers
+
+That is the preferred pattern for future work in `ChatViewModel`, `SettingsViewModel`, and `ToolExecutor`. Avoid adding new monolithic methods that mix routing, network calls, payload mutation, formatting, and persistence in one place.
+
 ## Repository Capabilities
 
 ### iOS App (`NetworkGenius`)
@@ -46,6 +74,10 @@ This repo contains two parts:
   - `plan_client_app_block` + `apply_client_app_block` with allowlist guardrails
   - smart upsert behavior (update existing rule when `client + target_type + schedule` match; create otherwise)
   - `remove_client_app_block` to delete full client blocks or remove selected app/category IDs.
+  - implementation boundary:
+    - `ChatViewModel` orchestrates the conversation/tool loop
+    - `ToolExecutor` routes the request
+    - `UniFiAppBlockService` owns client resolution, payload shaping, collection merge/remove behavior, and replacement writes
 - LM Studio model loading in Settings via `/v1/models` with model picker.
 - Reasoning-output controls:
   - Prompt instruction to keep reasoning internal for LM Studio.

@@ -24,6 +24,14 @@ final class SystemHapticFeedbackPerformer: HapticFeedbackPerforming {
 
 @MainActor
 final class ChatViewModel: ObservableObject {
+    private struct RuntimeConfiguration: Equatable {
+        let provider: LLMProvider
+        let assistantMode: AssistantMode
+        let lmStudioBaseURL: String
+        let lmStudioModel: String
+        let lmStudioMaxPromptChars: Int
+    }
+
     @Published var messages: [ChatMessage] = []
     @Published var isLoading = false
     @Published var currentToolName: String?
@@ -38,11 +46,7 @@ final class ChatViewModel: ObservableObject {
     private var networkMonitor: NetworkMonitor?
     private var appState: AppState?
     private var persistenceStore: ChatPersistenceStore?
-    private var activeLLMProvider: LLMProvider?
-    private var activeAssistantMode: AssistantMode?
-    private var activeLMStudioBaseURL: String = ""
-    private var activeLMStudioModel: String = ""
-    private var activeLMStudioMaxPromptChars: Int = 4098
+    private var activeRuntimeConfiguration: RuntimeConfiguration?
     var hapticFeedback: HapticFeedbackPerforming = SystemHapticFeedbackPerformer()
     var speechService: SpeechService?
     private var startupValidationAttempted = false
@@ -85,43 +89,7 @@ final class ChatViewModel: ObservableObject {
             refreshConversationSummaries()
         }
 
-        let client = UniFiAPIClient(
-            baseURL: UniFiAPIClient.normalizeBaseURL(appState.consoleURL),
-            allowSelfSigned: appState.allowSelfSignedCerts
-        )
-        let configuredSiteID = appState.siteID.trimmingCharacters(in: .whitespacesAndNewlines)
-        let queryService = UniFiQueryService(
-            client: client,
-            siteID: configuredSiteID.isEmpty ? nil : configuredSiteID
-        )
-        let summaryService = UniFiSummaryService(queryService: queryService)
-        self.toolExecutor = ToolExecutor(
-            apiClient: client,
-            queryService: queryService,
-            summaryService: summaryService,
-            networkMonitor: networkMonitor,
-            lokiBaseURL: appState.grafanaLokiURL,
-            clientModificationApprovals: appState.clientModificationApprovals,
-            assistantMode: appState.assistantMode
-        )
-
-        switch appState.llmProvider {
-        case .claude:
-            self.llmService = ClaudeLLMService()
-        case .openai:
-            self.llmService = OpenAILLMService()
-        case .lmStudio:
-            self.llmService = LMStudioLLMService(
-                baseURL: appState.lmStudioBaseURL,
-                model: appState.lmStudioModel,
-                maxPromptChars: appState.lmStudioMaxPromptChars
-            )
-        }
-        activeLLMProvider = appState.llmProvider
-        activeAssistantMode = appState.assistantMode
-        activeLMStudioBaseURL = UniFiAPIClient.normalizeBaseURL(appState.lmStudioBaseURL)
-        activeLMStudioModel = appState.lmStudioModel.trimmingCharacters(in: .whitespacesAndNewlines)
-        activeLMStudioMaxPromptChars = appState.lmStudioMaxPromptChars
+        rebuildRuntimeServices(appState: appState, networkMonitor: networkMonitor)
     }
 
     /// Creates a new conversation thread and resets the current chat state.
@@ -153,83 +121,25 @@ final class ChatViewModel: ObservableObject {
     /// Appends a user message, runs the active LLM flow, and records the assistant response.
     func sendMessage(_ text: String, retryingMessageID: UUID? = nil) async {
         refreshLLMServiceIfNeeded()
-        guard canUseSelectedLLMOnCurrentNetwork() else {
-            let msg = "LM Studio is configured as a local provider and is only available on local Wi-Fi or VPN."
-            debugLog("LM Studio request blocked: not on local Wi-Fi or VPN", category: "Chat")
-            messages.append(ChatMessage(role: .assistant, content: msg))
-            return
-        }
+        guard ensureSelectedLLMReachableForCurrentNetwork() else { return }
 
-        let userMessageID: UUID
-        if let retryID = retryingMessageID, let index = messages.firstIndex(where: { $0.id == retryID && $0.role == .user }) {
-            messages[index].sendFailed = false
-            userMessageID = retryID
-        } else {
-            let userMessage = ChatMessage(role: .user, content: text)
-            messages.append(userMessage)
-            userMessageID = userMessage.id
-        }
-        let llmCountBeforeSend = llmMessages.count
-        llmMessages.append(LLMMessage(role: .user, content: text))
-        trimHistory()
-        persistConversationState()
-        debugLog("User message queued (\(text.count) chars)", category: "Chat")
-        if appState?.hapticFeedbackEnabled == true {
-            hapticFeedback.prepareForResponseNotification()
-        }
+        let sendState = queueUserMessage(text, retryingMessageID: retryingMessageID)
+        prepareForSendUI(messageLength: text.count)
 
         isLoading = true
         defer { isLoading = false; currentToolName = nil }
 
         guard let llmService else { return }
-        let tools = toolsForCurrentState()
-        let systemPrompt = buildSystemPrompt()
+        let requestContext = makeRequestContext()
 
         do {
-            debugLog("Sending initial LLM request", category: "Chat")
-            var response = try await llmService.sendMessages(llmMessages, tools: tools, systemPrompt: systemPrompt)
-            debugLog("Initial LLM response received (toolCalls=\(response.toolCalls.count))", category: "Chat")
-
-            while !response.toolCalls.isEmpty {
-                let assistantToolText = sanitizeAssistantText(response.text ?? "")
-                let assistantMsg = LLMMessage(
-                    role: .assistant,
-                    content: assistantToolText,
-                    toolCalls: response.toolCalls
-                )
-                llmMessages.append(assistantMsg)
-
-                for toolCall in response.toolCalls {
-                    currentToolName = toolCall.name
-                    messages.append(ChatMessage(role: .toolCall, content: "Querying: \(toolCall.name)...", toolName: toolCall.name))
-                    debugLog("Executing tool '\(toolCall.name)'", category: "Chat")
-
-                    let result = await toolExecutor?.execute(toolCall: toolCall) ?? "Tool executor not configured"
-
-                    llmMessages.append(LLMMessage(role: .tool, content: result, toolCallID: toolCall.id))
-                }
-                currentToolName = nil
-
-                debugLog("Sending follow-up LLM request after tool results", category: "Chat")
-                response = try await llmService.sendMessages(llmMessages, tools: tools, systemPrompt: systemPrompt)
-                debugLog("Follow-up LLM response received (toolCalls=\(response.toolCalls.count))", category: "Chat")
-            }
-
-            let finalText = sanitizeAssistantText(response.text ?? "")
-            messages.append(ChatMessage(role: .assistant, content: finalText))
-            llmMessages.append(LLMMessage(role: .assistant, content: finalText))
-            trimHistory()
-            persistConversationState()
-            speechService?.speak(finalText)
-            if appState?.hapticFeedbackEnabled == true {
-                hapticFeedback.notifyResponseReturned()
-            }
-            debugLog("Assistant response delivered (\(finalText.count) chars)", category: "Chat")
+            let response = try await runConversationLoop(llmService: llmService, context: requestContext)
+            deliverAssistantResponse(response)
 
         } catch {
             debugLog("Chat request failed: \(error.localizedDescription)", category: "Chat")
-            llmMessages = Array(llmMessages.prefix(llmCountBeforeSend))
-            markUserMessageFailed(userMessageID)
+            llmMessages = Array(llmMessages.prefix(sendState.llmCountBeforeSend))
+            markUserMessageFailed(sendState.userMessageID)
             messages.append(ChatMessage(role: .assistant, content: "Error: \(error.localizedDescription)"))
             persistConversationState()
         }
@@ -251,38 +161,24 @@ final class ChatViewModel: ObservableObject {
         refreshLLMServiceIfNeeded()
         guard messages.isEmpty, llmMessages.isEmpty else { return }
         guard let llmService else { return }
-        guard let appState, appState.hasLLMKey else {
-            messages.append(ChatMessage(role: .assistant, content: "I’m not ready yet. Please add a valid AI provider API key in Settings."))
-            persistConversationState()
-            debugLog("Startup intro skipped: missing LLM key", category: "Chat")
-            return
-        }
-
-        let systemPrompt = buildSystemPrompt()
-        let probeMessage = LLMMessage(
-            role: .user,
-            content: "Connectivity check. Reply with 'ok'."
-        )
-
+        guard hasConfiguredLLMKey() else { return }
         guard canUseSelectedLLMOnCurrentNetwork() else {
-            let errorText = "LM Studio is configured as a local provider and is only available on local Wi-Fi or VPN."
-            messages.append(ChatMessage(role: .assistant, content: errorText))
-            persistConversationState()
+            appendStartupAssistantMessage(
+                "LM Studio is configured as a local provider and is only available on local Wi-Fi or VPN."
+            )
             debugLog("Startup intro skipped: LM Studio not on local Wi-Fi or VPN", category: "Chat")
             return
         }
 
         do {
-            _ = try await llmService.sendMessages([probeMessage], tools: [], systemPrompt: systemPrompt)
+            try await runStartupConnectivityCheck(llmService: llmService)
             let intro = "Hi, I’m NetworkGenius (UniFi WiFi Edition). I can help troubleshoot your UniFi network. What issue are you seeing?"
-            messages.append(ChatMessage(role: .assistant, content: intro))
-            llmMessages.append(LLMMessage(role: .assistant, content: intro))
-            persistConversationState()
+            appendStartupAssistantMessage(intro, addToLLMHistory: true)
             debugLog("Startup LLM connectivity check succeeded; intro shown", category: "Chat")
         } catch {
-            let errorText = "I can’t reach the selected AI provider right now. Check your API key, quota, and internet connection, then try again."
-            messages.append(ChatMessage(role: .assistant, content: errorText))
-            persistConversationState()
+            appendStartupAssistantMessage(
+                "I can’t reach the selected AI provider right now. Check your API key, quota, and internet connection, then try again."
+            )
             debugLog("Startup LLM connectivity check failed: \(error.localizedDescription)", category: "Chat")
         }
     }
@@ -504,63 +400,243 @@ final class ChatViewModel: ObservableObject {
     /// Rebuilds the active LLM service when provider settings have changed.
     private func refreshLLMServiceIfNeeded() {
         guard let appState else { return }
-        let providerChanged = activeLLMProvider != appState.llmProvider
-        let assistantModeChanged = activeAssistantMode != appState.assistantMode
-        let normalizedLMStudioBaseURL = UniFiAPIClient.normalizeBaseURL(appState.lmStudioBaseURL)
-        let normalizedLMStudioModel = appState.lmStudioModel.trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalizedLMStudioMaxPromptChars = appState.lmStudioMaxPromptChars
-        let lmStudioConfigChanged = normalizedLMStudioBaseURL != activeLMStudioBaseURL
-            || normalizedLMStudioModel != activeLMStudioModel
-            || normalizedLMStudioMaxPromptChars != activeLMStudioMaxPromptChars
-
-        guard providerChanged || assistantModeChanged || (appState.llmProvider == .lmStudio && lmStudioConfigChanged) else {
+        let nextConfiguration = runtimeConfiguration(from: appState)
+        guard activeRuntimeConfiguration != nextConfiguration else {
             return
         }
 
         if let networkMonitor {
-            let client = UniFiAPIClient(
-                baseURL: UniFiAPIClient.normalizeBaseURL(appState.consoleURL),
-                allowSelfSigned: appState.allowSelfSignedCerts
-            )
-            let configuredSiteID = appState.siteID.trimmingCharacters(in: .whitespacesAndNewlines)
-            let queryService = UniFiQueryService(
-                client: client,
-                siteID: configuredSiteID.isEmpty ? nil : configuredSiteID
-            )
-            let summaryService = UniFiSummaryService(queryService: queryService)
-            toolExecutor = ToolExecutor(
-                apiClient: client,
-                queryService: queryService,
-                summaryService: summaryService,
-                networkMonitor: networkMonitor,
-                lokiBaseURL: appState.grafanaLokiURL,
-                clientModificationApprovals: appState.clientModificationApprovals,
-                assistantMode: appState.assistantMode
-            )
+            rebuildRuntimeServices(appState: appState, networkMonitor: networkMonitor)
+        } else {
+            llmService = makeLLMService(appState: appState)
+            activeRuntimeConfiguration = nextConfiguration
         }
+        debugLog(
+            "Runtime configuration changed (provider=\(appState.llmProvider.rawValue), mode=\(appState.assistantMode.rawValue)); rebuilt services. Next request will include current thread context (\(llmMessages.count) transcript messages).",
+            category: "Chat"
+        )
+    }
 
+    private struct SendState {
+        let userMessageID: UUID
+        let llmCountBeforeSend: Int
+    }
+
+    private struct RequestContext {
+        let tools: [[String: Any]]
+        let systemPrompt: String
+    }
+
+    /// Builds the runtime configuration key used to decide whether services need rebuilding.
+    private func runtimeConfiguration(from appState: AppState) -> RuntimeConfiguration {
+        RuntimeConfiguration(
+            provider: appState.llmProvider,
+            assistantMode: appState.assistantMode,
+            lmStudioBaseURL: UniFiAPIClient.normalizeBaseURL(appState.lmStudioBaseURL),
+            lmStudioModel: appState.lmStudioModel.trimmingCharacters(in: .whitespacesAndNewlines),
+            lmStudioMaxPromptChars: appState.lmStudioMaxPromptChars
+        )
+    }
+
+    /// Rebuilds the provider client and tool executor together so runtime dependencies stay in sync.
+    private func rebuildRuntimeServices(appState: AppState, networkMonitor: NetworkMonitor) {
+        toolExecutor = makeToolExecutor(appState: appState, networkMonitor: networkMonitor)
+        llmService = makeLLMService(appState: appState)
+        activeRuntimeConfiguration = runtimeConfiguration(from: appState)
+    }
+
+    /// Creates a tool executor from the current app settings.
+    private func makeToolExecutor(appState: AppState, networkMonitor: NetworkMonitor) -> ToolExecutor {
+        let client = UniFiAPIClient(
+            baseURL: UniFiAPIClient.normalizeBaseURL(appState.consoleURL),
+            allowSelfSigned: appState.allowSelfSignedCerts
+        )
+        let configuredSiteID = appState.siteID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let queryService = UniFiQueryService(
+            client: client,
+            siteID: configuredSiteID.isEmpty ? nil : configuredSiteID
+        )
+        let summaryService = UniFiSummaryService(queryService: queryService)
+        return ToolExecutor(
+            apiClient: client,
+            queryService: queryService,
+            summaryService: summaryService,
+            networkMonitor: networkMonitor,
+            lokiBaseURL: appState.grafanaLokiURL,
+            clientModificationApprovals: appState.clientModificationApprovals,
+            assistantMode: appState.assistantMode
+        )
+    }
+
+    /// Creates the active LLM service from the selected provider settings.
+    private func makeLLMService(appState: AppState) -> any LLMService {
         switch appState.llmProvider {
         case .claude:
-            llmService = ClaudeLLMService()
+            return ClaudeLLMService()
         case .openai:
-            llmService = OpenAILLMService()
+            return OpenAILLMService()
         case .lmStudio:
-            llmService = LMStudioLLMService(
+            return LMStudioLLMService(
                 baseURL: appState.lmStudioBaseURL,
                 model: appState.lmStudioModel,
                 maxPromptChars: appState.lmStudioMaxPromptChars
             )
         }
+    }
 
-        activeLLMProvider = appState.llmProvider
-        activeAssistantMode = appState.assistantMode
-        activeLMStudioBaseURL = normalizedLMStudioBaseURL
-        activeLMStudioModel = normalizedLMStudioModel
-        activeLMStudioMaxPromptChars = normalizedLMStudioMaxPromptChars
-        debugLog(
-            "Runtime configuration changed (provider=\(appState.llmProvider.rawValue), mode=\(appState.assistantMode.rawValue)); rebuilt services. Next request will include current thread context (\(llmMessages.count) transcript messages).",
-            category: "Chat"
+    /// Rejects local-only provider use when the current network state cannot reach it.
+    private func ensureSelectedLLMReachableForCurrentNetwork() -> Bool {
+        guard canUseSelectedLLMOnCurrentNetwork() else {
+            let msg = "LM Studio is configured as a local provider and is only available on local Wi-Fi or VPN."
+            debugLog("LM Studio request blocked: not on local Wi-Fi or VPN", category: "Chat")
+            messages.append(ChatMessage(role: .assistant, content: msg))
+            return false
+        }
+        return true
+    }
+
+    /// Ensures startup intro flow only runs once a usable provider key exists.
+    private func hasConfiguredLLMKey() -> Bool {
+        guard let appState, appState.hasLLMKey else {
+            appendStartupAssistantMessage("I’m not ready yet. Please add a valid AI provider API key in Settings.")
+            debugLog("Startup intro skipped: missing LLM key", category: "Chat")
+            return false
+        }
+        return true
+    }
+
+    /// Adds or reuses the outbound user message and records the matching LLM history state.
+    private func queueUserMessage(_ text: String, retryingMessageID: UUID?) -> SendState {
+        let userMessageID: UUID
+        if let retryID = retryingMessageID,
+           let index = messages.firstIndex(where: { $0.id == retryID && $0.role == .user })
+        {
+            messages[index].sendFailed = false
+            userMessageID = retryID
+        } else {
+            let userMessage = ChatMessage(role: .user, content: text)
+            messages.append(userMessage)
+            userMessageID = userMessage.id
+        }
+
+        let llmCountBeforeSend = llmMessages.count
+        llmMessages.append(LLMMessage(role: .user, content: text))
+        trimHistory()
+        persistConversationState()
+        return SendState(userMessageID: userMessageID, llmCountBeforeSend: llmCountBeforeSend)
+    }
+
+    /// Applies the UI-side side effects that happen before an outbound LLM request starts.
+    private func prepareForSendUI(messageLength: Int) {
+        debugLog("User message queued (\(messageLength) chars)", category: "Chat")
+        if appState?.hapticFeedbackEnabled == true {
+            hapticFeedback.prepareForResponseNotification()
+        }
+    }
+
+    /// Captures the tool schema set and system prompt for one request loop.
+    private func makeRequestContext() -> RequestContext {
+        RequestContext(
+            tools: toolsForCurrentState(),
+            systemPrompt: buildSystemPrompt()
         )
+    }
+
+    /// Runs the lightweight provider probe used before showing the first-run intro message.
+    private func runStartupConnectivityCheck(llmService: any LLMService) async throws {
+        let probeMessage = LLMMessage(
+            role: .user,
+            content: "Connectivity check. Reply with 'ok'."
+        )
+        _ = try await llmService.sendMessages([probeMessage], tools: [], systemPrompt: buildSystemPrompt())
+    }
+
+    /// Runs the assistant/tool loop until the provider returns a final assistant response.
+    private func runConversationLoop(
+        llmService: any LLMService,
+        context: RequestContext
+    ) async throws -> LLMResponse {
+        var response = try await sendLLMRequest(
+            llmService: llmService,
+            context: context,
+            phase: "initial"
+        )
+
+        while !response.toolCalls.isEmpty {
+            appendAssistantToolRequest(response)
+            await executeToolCalls(response.toolCalls)
+            response = try await sendLLMRequest(
+                llmService: llmService,
+                context: context,
+                phase: "follow-up"
+            )
+        }
+
+        return response
+    }
+
+    /// Sends one provider request and logs whether it is the initial or follow-up pass.
+    private func sendLLMRequest(
+        llmService: any LLMService,
+        context: RequestContext,
+        phase: String
+    ) async throws -> LLMResponse {
+        debugLog("Sending \(phase) LLM request", category: "Chat")
+        let response = try await llmService.sendMessages(
+            llmMessages,
+            tools: context.tools,
+            systemPrompt: context.systemPrompt
+        )
+        debugLog("\(phase.capitalized) LLM response received (toolCalls=\(response.toolCalls.count))", category: "Chat")
+        return response
+    }
+
+    /// Persists the assistant tool-call envelope into LLM history before tool execution begins.
+    private func appendAssistantToolRequest(_ response: LLMResponse) {
+        let assistantToolText = sanitizeAssistantText(response.text ?? "")
+        llmMessages.append(
+            LLMMessage(
+                role: .assistant,
+                content: assistantToolText,
+                toolCalls: response.toolCalls
+            )
+        )
+    }
+
+    /// Executes the provider-requested tools one by one and appends their outputs to LLM history.
+    private func executeToolCalls(_ toolCalls: [LLMToolCall]) async {
+        for toolCall in toolCalls {
+            currentToolName = toolCall.name
+            messages.append(ChatMessage(role: .toolCall, content: "Querying: \(toolCall.name)...", toolName: toolCall.name))
+            debugLog("Executing tool '\(toolCall.name)'", category: "Chat")
+
+            let result = await toolExecutor?.execute(toolCall: toolCall) ?? "Tool executor not configured"
+            llmMessages.append(LLMMessage(role: .tool, content: result, toolCallID: toolCall.id))
+        }
+        currentToolName = nil
+    }
+
+    /// Appends the final assistant reply and performs the normal post-response side effects.
+    private func deliverAssistantResponse(_ response: LLMResponse) {
+        let finalText = sanitizeAssistantText(response.text ?? "")
+        messages.append(ChatMessage(role: .assistant, content: finalText))
+        llmMessages.append(LLMMessage(role: .assistant, content: finalText))
+        trimHistory()
+        persistConversationState()
+        speechService?.speak(finalText)
+        if appState?.hapticFeedbackEnabled == true {
+            hapticFeedback.notifyResponseReturned()
+        }
+        debugLog("Assistant response delivered (\(finalText.count) chars)", category: "Chat")
+    }
+
+    /// Appends a startup/status assistant message and persists it immediately.
+    private func appendStartupAssistantMessage(_ text: String, addToLLMHistory: Bool = false) {
+        messages.append(ChatMessage(role: .assistant, content: text))
+        if addToLLMHistory {
+            llmMessages.append(LLMMessage(role: .assistant, content: text))
+        }
+        persistConversationState()
     }
 }
 

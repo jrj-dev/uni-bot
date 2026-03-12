@@ -3,6 +3,11 @@ import Network
 import Darwin
 
 final class ToolExecutor {
+    private static let offNetworkCapableTools: Set<String> = [
+        "search_unifi_docs",
+        "get_unifi_doc",
+    ]
+
     private let apiClient: UniFiAPIClient
     private let queryService: UniFiQueryService
     private let summaryService: UniFiSummaryService
@@ -38,8 +43,7 @@ final class ToolExecutor {
     @MainActor
     /// Routes an LLM tool call to the matching UniFi, diagnostics, docs, or app-block operation.
     func execute(toolCall: LLMToolCall) async -> String {
-        let supportsOffNetwork = Set(["search_unifi_docs", "get_unifi_doc"])
-        let requiresLocalNetwork = !supportsOffNetwork.contains(toolCall.name)
+        let requiresLocalNetwork = !Self.offNetworkCapableTools.contains(toolCall.name)
         guard ToolCatalog.supports(toolCall.name, in: assistantMode) else {
             return "Error: \(toolCall.name) is only available in Advanced mode."
         }
@@ -50,255 +54,286 @@ final class ToolExecutor {
         let startedAt = Date()
         debugLog("Tool '\(toolCall.name)' started", category: "Tools")
         do {
-            let output: String
-            switch toolCall.name {
-            case "list_devices":
-                output = try await queryService.query("devices")
-            case "list_clients":
-                output = try await listClients(includeInactiveRaw: toolCall.arguments["include_inactive"])
-            case "list_networks":
-                output = try await queryService.query("networks")
-            case "list_wifi_broadcasts":
-                output = try await queryService.query("wifi-broadcasts")
-            case "list_network_events":
-                output = try await queryService.query("events")
-            case "list_wlan_configs":
-                output = try await queryService.query("wlanconf")
-            case "list_network_configs":
-                output = try await queryService.query("networkconf")
-            case "list_firewall_policies":
-                output = try await queryService.query("firewall-policies")
-            case "list_firewall_zones":
-                output = try await queryService.query("firewall-zones")
-            case "list_acl_rules":
-                output = try await queryService.query("acl-rules")
-            case "list_dns_policies":
-                output = try await queryService.query("dns-policies")
-            case "list_vpn_servers":
-                output = try await queryService.query("vpn-servers")
-            case "list_pending_devices":
-                output = try await queryService.query("pending-devices")
-            case "get_device_details":
-                output = try await queryService.query("device", resourceID: toolCall.arguments["device_id"])
-            case "get_device_stats":
-                output = try await queryService.query("device-stats", resourceID: toolCall.arguments["device_id"])
-            case "get_client_details":
-                output = try await queryService.query("client", resourceID: toolCall.arguments["client_id"])
-            case "ping_client":
-                output = await diagnosticsService.probeReachability(
-                    target: toolCall.arguments["target"],
-                    timeoutSeconds: Int(toolCall.arguments["timeout_seconds"] ?? "")
-                )
-            case "resolve_client_dns":
-                output = diagnosticsService.resolveDNS(target: toolCall.arguments["target"])
-            case "http_probe_client":
-                output = await diagnosticsService.httpProbe(
-                    target: toolCall.arguments["target"],
-                    scheme: toolCall.arguments["scheme"],
-                    path: toolCall.arguments["path"],
-                    timeoutSeconds: Int(toolCall.arguments["timeout_seconds"] ?? "")
-                )
-            case "port_check_client":
-                output = await diagnosticsService.portCheck(
-                    target: toolCall.arguments["target"],
-                    portsCSV: toolCall.arguments["ports"],
-                    timeoutSeconds: Int(toolCall.arguments["timeout_seconds"] ?? "")
-                )
-            case "network_traceroute":
-                output = await diagnosticsService.traceroute(
-                    target: toolCall.arguments["target"],
-                    maxHops: Int(toolCall.arguments["max_hops"] ?? ""),
-                    timeoutSeconds: Int(toolCall.arguments["timeout_seconds"] ?? "")
-                )
-            case "lookup_client_identity":
-                output = try await diagnosticsService.lookupClientIdentity(
-                    queryService: queryService,
-                    query: toolCall.arguments["query"]
-                )
-            case "find_slowest_client":
-                output = try await rankedClientSummary(
-                    kind: .slowestSpeed,
-                    limit: 1,
-                    includeInactiveRaw: toolCall.arguments["include_inactive"]
-                )
-            case "top_slowest_clients":
-                output = try await rankedClientSummary(
-                    kind: .slowestSpeed,
-                    limit: Int(toolCall.arguments["limit"] ?? ""),
-                    includeInactiveRaw: toolCall.arguments["include_inactive"]
-                )
-            case "find_weakest_wifi_client":
-                output = try await rankedClientSummary(
-                    kind: .weakestSignal,
-                    limit: 1,
-                    includeInactiveRaw: toolCall.arguments["include_inactive"]
-                )
-            case "top_weakest_wifi_clients":
-                output = try await rankedClientSummary(
-                    kind: .weakestSignal,
-                    limit: Int(toolCall.arguments["limit"] ?? ""),
-                    includeInactiveRaw: toolCall.arguments["include_inactive"]
-                )
-            case "find_highest_latency_client":
-                output = try await rankedClientSummary(
-                    kind: .highestLatency,
-                    limit: 1,
-                    includeInactiveRaw: toolCall.arguments["include_inactive"]
-                )
-            case "top_highest_latency_clients":
-                output = try await rankedClientSummary(
-                    kind: .highestLatency,
-                    limit: Int(toolCall.arguments["limit"] ?? ""),
-                    includeInactiveRaw: toolCall.arguments["include_inactive"]
-                )
-            case "rank_network_entities":
-                output = try await rankNetworkEntities(
-                    entityType: toolCall.arguments["entity_type"],
-                    metric: toolCall.arguments["metric"],
-                    limit: Int(toolCall.arguments["limit"] ?? ""),
-                    includeInactiveRaw: toolCall.arguments["include_inactive"],
-                    siteRef: toolCall.arguments["site_ref"]
-                )
-            case "resolve_client_for_app_block":
-                output = try await appBlockService.resolveClientForAppBlock(
-                    queryService: queryService,
-                    query: toolCall.arguments["query"],
-                    siteRef: toolCall.arguments["site_ref"]
-                )
-            case "resolve_dpi_application":
-                output = try await appBlockService.resolveDPIApplication(
-                    queryService: queryService,
-                    query: toolCall.arguments["query"]
-                )
-            case "resolve_dpi_category":
-                output = try await appBlockService.resolveDPICategory(
-                    queryService: queryService,
-                    query: toolCall.arguments["query"]
-                )
-            case "list_dpi_applications":
-                output = try await appBlockService.listDPIApplications(
-                    queryService: queryService,
-                    search: toolCall.arguments["search"],
-                    limit: Int(toolCall.arguments["limit"] ?? "")
-                )
-            case "list_dpi_categories":
-                output = try await appBlockService.listDPICategories(
-                    queryService: queryService,
-                    search: toolCall.arguments["search"],
-                    limit: Int(toolCall.arguments["limit"] ?? "")
-                )
-            case "plan_client_app_block":
-                output = try await appBlockService.planClientAppBlock(
-                    queryService: queryService,
-                    clientSelector: toolCall.arguments["client"],
-                    appsCSV: toolCall.arguments["apps"],
-                    categoriesCSV: toolCall.arguments["categories"],
-                    policyName: toolCall.arguments["policy_name"],
-                    siteRef: toolCall.arguments["site_ref"]
-                )
-            case "apply_client_app_block":
-                output = try await appBlockService.applyClientAppBlock(
-                    approveToken: toolCall.arguments["approve_token"]
-                )
-            case "remove_client_app_block":
-                output = try await appBlockService.removeClientAppBlock(
-                    queryService: queryService,
-                    clientSelector: toolCall.arguments["client"],
-                    appsCSV: toolCall.arguments["apps"],
-                    categoriesCSV: toolCall.arguments["categories"],
-                    siteRef: toolCall.arguments["site_ref"]
-                )
-            case "list_client_app_block":
-                output = try await appBlockService.listClientAppBlock(
-                    queryService: queryService,
-                    clientSelector: toolCall.arguments["client"],
-                    siteRef: toolCall.arguments["site_ref"]
-                )
-            case "ssh_collect_unifi_logs":
-                output = await sshLogService.run(
-                    host: toolCall.arguments["host"],
-                    commandID: toolCall.arguments["command_id"],
-                    approveToken: toolCall.arguments["approve_token"],
-                    timeoutSeconds: Int(toolCall.arguments["timeout_seconds"] ?? "")
-                )
-            case "network_overview":
-                output = try await summaryService.summary("overview")
-            case "clients_summary":
-                output = try await summaryService.summary("clients")
-            case "wifi_summary":
-                output = try await summaryService.summary("wifi")
-            case "firewall_summary":
-                output = try await summaryService.summary("firewall")
-            case "security_summary":
-                output = try await summaryService.summary("security")
-            case "wan_gateway_health":
-                output = try await wanGatewayHealth(
-                    logMinutes: Int(toolCall.arguments["minutes"] ?? "")
-                )
-            case "config_diff_from_logs":
-                output = try await lokiService.configDiffSummary(
-                    minutes: Int(toolCall.arguments["minutes"] ?? ""),
-                    limit: Int(toolCall.arguments["limit"] ?? ""),
-                    contains: toolCall.arguments["contains"]
-                )
-            case "search_unifi_docs":
-                output = try await docsService.search(
-                    query: toolCall.arguments["query"] ?? "",
-                    maxResults: Int(toolCall.arguments["max_results"] ?? "")
-                )
-            case "get_unifi_doc":
-                output = try await docsService.article(
-                    articleID: toolCall.arguments["article_id"],
-                    articleURL: toolCall.arguments["article_url"]
-                )
-            case "query_unifi_logs":
-                output = try await lokiService.queryRange(
-                    query: toolCall.arguments["query"],
-                    minutes: Int(toolCall.arguments["minutes"] ?? ""),
-                    limit: Int(toolCall.arguments["limit"] ?? ""),
-                    direction: toolCall.arguments["direction"]
-                )
-            case "query_unifi_logs_instant":
-                output = try await lokiService.queryInstant(
-                    query: toolCall.arguments["query"],
-                    limit: Int(toolCall.arguments["limit"] ?? "")
-                )
-            case "list_unifi_log_labels":
-                output = try await lokiService.listLabels()
-            case "list_unifi_log_label_values":
-                output = try await lokiService.labelValues(label: toolCall.arguments["label"])
-            case "list_unifi_log_series":
-                output = try await lokiService.listSeries(
-                    query: toolCall.arguments["query"],
-                    minutes: Int(toolCall.arguments["minutes"] ?? ""),
-                    limit: Int(toolCall.arguments["limit"] ?? "")
-                )
-            case "get_unifi_log_stats":
-                output = try await lokiService.indexStats(
-                    query: toolCall.arguments["query"],
-                    minutes: Int(toolCall.arguments["minutes"] ?? "")
-                )
-            default:
-                output = "Unknown tool: \(toolCall.name)"
-            }
+            let output = try await executeRoutedTool(toolCall)
             let elapsedMS = Int(Date().timeIntervalSince(startedAt) * 1000)
             debugLog("Tool '\(toolCall.name)' completed in \(elapsedMS)ms", category: "Tools")
             return output
         } catch {
             let elapsedMS = Int(Date().timeIntervalSince(startedAt) * 1000)
             debugLog("Tool '\(toolCall.name)' failed in \(elapsedMS)ms: \(error.localizedDescription)", category: "Tools")
-            if let llmError = error as? LLMError,
-               case let .httpError(statusCode, _) = llmError
-            {
-                if statusCode == 401 || statusCode == 403 {
-                    return "AUTH_ERROR: \(toolCall.name) was denied by the remote API (HTTP \(statusCode)). Check API key or permissions."
-                }
-                if statusCode == 429 {
-                    return "THROTTLED: \(toolCall.name) hit rate limits (HTTP 429). Retry with a smaller query or shortly later."
-                }
-            }
-            return "TOOL_ERROR: \(toolCall.name) failed: \(error.localizedDescription)"
+            return formattedToolError(error, toolName: toolCall.name)
         }
+    }
+
+    /// Dispatches one tool call into the domain-specific handler that owns its behavior.
+    private func executeRoutedTool(_ toolCall: LLMToolCall) async throws -> String {
+        if let output = try await executeInventoryTool(toolCall) { return output }
+        if let output = try await executeDiagnosticsTool(toolCall) { return output }
+        if let output = try await executeRankingTool(toolCall) { return output }
+        if let output = try await executeAppBlockTool(toolCall) { return output }
+        if let output = try await executeSummaryTool(toolCall) { return output }
+        if let output = try await executeDocsAndLogsTool(toolCall) { return output }
+        return "Unknown tool: \(toolCall.name)"
+    }
+
+    /// Handles direct UniFi inventory and detail queries.
+    private func executeInventoryTool(_ toolCall: LLMToolCall) async throws -> String? {
+        switch toolCall.name {
+        case "list_devices":
+            return try await queryService.query("devices")
+        case "list_clients":
+            return try await listClients(includeInactiveRaw: toolCall.arguments["include_inactive"])
+        case "list_networks":
+            return try await queryService.query("networks")
+        case "list_wifi_broadcasts":
+            return try await queryService.query("wifi-broadcasts")
+        case "list_network_events":
+            return try await queryService.query("events")
+        case "list_wlan_configs":
+            return try await queryService.query("wlanconf")
+        case "list_network_configs":
+            return try await queryService.query("networkconf")
+        case "list_firewall_policies":
+            return try await queryService.query("firewall-policies")
+        case "list_firewall_zones":
+            return try await queryService.query("firewall-zones")
+        case "list_acl_rules":
+            return try await queryService.query("acl-rules")
+        case "list_dns_policies":
+            return try await queryService.query("dns-policies")
+        case "list_vpn_servers":
+            return try await queryService.query("vpn-servers")
+        case "list_pending_devices":
+            return try await queryService.query("pending-devices")
+        case "get_device_details":
+            return try await queryService.query("device", resourceID: toolCall.arguments["device_id"])
+        case "get_device_stats":
+            return try await queryService.query("device-stats", resourceID: toolCall.arguments["device_id"])
+        case "get_client_details":
+            return try await queryService.query("client", resourceID: toolCall.arguments["client_id"])
+        default:
+            return nil
+        }
+    }
+
+    /// Handles client diagnostics and identity lookups that operate on one target host or client.
+    private func executeDiagnosticsTool(_ toolCall: LLMToolCall) async throws -> String? {
+        switch toolCall.name {
+        case "ping_client":
+            return await diagnosticsService.probeReachability(
+                target: toolCall.arguments["target"],
+                timeoutSeconds: Int(toolCall.arguments["timeout_seconds"] ?? "")
+            )
+        case "resolve_client_dns":
+            return diagnosticsService.resolveDNS(target: toolCall.arguments["target"])
+        case "http_probe_client":
+            return await diagnosticsService.httpProbe(
+                target: toolCall.arguments["target"],
+                scheme: toolCall.arguments["scheme"],
+                path: toolCall.arguments["path"],
+                timeoutSeconds: Int(toolCall.arguments["timeout_seconds"] ?? "")
+            )
+        case "port_check_client":
+            return await diagnosticsService.portCheck(
+                target: toolCall.arguments["target"],
+                portsCSV: toolCall.arguments["ports"],
+                timeoutSeconds: Int(toolCall.arguments["timeout_seconds"] ?? "")
+            )
+        case "network_traceroute":
+            return await diagnosticsService.traceroute(
+                target: toolCall.arguments["target"],
+                maxHops: Int(toolCall.arguments["max_hops"] ?? ""),
+                timeoutSeconds: Int(toolCall.arguments["timeout_seconds"] ?? "")
+            )
+        case "lookup_client_identity":
+            return try await diagnosticsService.lookupClientIdentity(
+                queryService: queryService,
+                query: toolCall.arguments["query"]
+            )
+        case "ssh_collect_unifi_logs":
+            return await sshLogService.run(
+                host: toolCall.arguments["host"],
+                commandID: toolCall.arguments["command_id"],
+                approveToken: toolCall.arguments["approve_token"],
+                timeoutSeconds: Int(toolCall.arguments["timeout_seconds"] ?? "")
+            )
+        default:
+            return nil
+        }
+    }
+
+    /// Handles ranking-style tools that summarize larger inventories into ordered results.
+    private func executeRankingTool(_ toolCall: LLMToolCall) async throws -> String? {
+        if let request = ClientRankingKind.request(forToolName: toolCall.name) {
+            return try await rankedClientSummary(
+                kind: request.kind,
+                limit: request.resolvedLimit(rawLimit: toolCall.arguments["limit"]),
+                includeInactiveRaw: toolCall.arguments["include_inactive"]
+            )
+        }
+
+        switch toolCall.name {
+        case "rank_network_entities":
+            return try await rankNetworkEntities(
+                entityType: toolCall.arguments["entity_type"],
+                metric: toolCall.arguments["metric"],
+                limit: Int(toolCall.arguments["limit"] ?? ""),
+                includeInactiveRaw: toolCall.arguments["include_inactive"],
+                siteRef: toolCall.arguments["site_ref"]
+            )
+        default:
+            return nil
+        }
+    }
+
+    /// Handles guarded simple app-block planning and execution.
+    private func executeAppBlockTool(_ toolCall: LLMToolCall) async throws -> String? {
+        switch toolCall.name {
+        case "resolve_client_for_app_block":
+            return try await appBlockService.resolveClientForAppBlock(
+                queryService: queryService,
+                query: toolCall.arguments["query"],
+                siteRef: toolCall.arguments["site_ref"]
+            )
+        case "resolve_dpi_application":
+            return try await appBlockService.resolveDPIApplication(
+                queryService: queryService,
+                query: toolCall.arguments["query"]
+            )
+        case "resolve_dpi_category":
+            return try await appBlockService.resolveDPICategory(
+                queryService: queryService,
+                query: toolCall.arguments["query"]
+            )
+        case "list_dpi_applications":
+            return try await appBlockService.listDPIApplications(
+                queryService: queryService,
+                search: toolCall.arguments["search"],
+                limit: Int(toolCall.arguments["limit"] ?? "")
+            )
+        case "list_dpi_categories":
+            return try await appBlockService.listDPICategories(
+                queryService: queryService,
+                search: toolCall.arguments["search"],
+                limit: Int(toolCall.arguments["limit"] ?? "")
+            )
+        case "plan_client_app_block":
+            return try await appBlockService.planClientAppBlock(
+                queryService: queryService,
+                clientSelector: toolCall.arguments["client"],
+                appsCSV: toolCall.arguments["apps"],
+                categoriesCSV: toolCall.arguments["categories"],
+                policyName: toolCall.arguments["policy_name"],
+                siteRef: toolCall.arguments["site_ref"]
+            )
+        case "apply_client_app_block":
+            return try await appBlockService.applyClientAppBlock(
+                approveToken: toolCall.arguments["approve_token"]
+            )
+        case "remove_client_app_block":
+            return try await appBlockService.removeClientAppBlock(
+                queryService: queryService,
+                clientSelector: toolCall.arguments["client"],
+                appsCSV: toolCall.arguments["apps"],
+                categoriesCSV: toolCall.arguments["categories"],
+                siteRef: toolCall.arguments["site_ref"]
+            )
+        case "list_client_app_block":
+            return try await appBlockService.listClientAppBlock(
+                queryService: queryService,
+                clientSelector: toolCall.arguments["client"],
+                siteRef: toolCall.arguments["site_ref"]
+            )
+        default:
+            return nil
+        }
+    }
+
+    /// Handles high-level summaries and health snapshots.
+    private func executeSummaryTool(_ toolCall: LLMToolCall) async throws -> String? {
+        switch toolCall.name {
+        case "network_overview":
+            return try await summaryService.summary("overview")
+        case "clients_summary":
+            return try await summaryService.summary("clients")
+        case "wifi_summary":
+            return try await summaryService.summary("wifi")
+        case "firewall_summary":
+            return try await summaryService.summary("firewall")
+        case "security_summary":
+            return try await summaryService.summary("security")
+        case "wan_gateway_health":
+            return try await wanGatewayHealth(
+                logMinutes: Int(toolCall.arguments["minutes"] ?? "")
+            )
+        default:
+            return nil
+        }
+    }
+
+    /// Handles documentation search/fetch plus Loki-backed log analysis tools.
+    private func executeDocsAndLogsTool(_ toolCall: LLMToolCall) async throws -> String? {
+        switch toolCall.name {
+        case "config_diff_from_logs":
+            return try await lokiService.configDiffSummary(
+                minutes: Int(toolCall.arguments["minutes"] ?? ""),
+                limit: Int(toolCall.arguments["limit"] ?? ""),
+                contains: toolCall.arguments["contains"]
+            )
+        case "search_unifi_docs":
+            return try await docsService.search(
+                query: toolCall.arguments["query"] ?? "",
+                maxResults: Int(toolCall.arguments["max_results"] ?? "")
+            )
+        case "get_unifi_doc":
+            return try await docsService.article(
+                articleID: toolCall.arguments["article_id"],
+                articleURL: toolCall.arguments["article_url"]
+            )
+        case "query_unifi_logs":
+            return try await lokiService.queryRange(
+                query: toolCall.arguments["query"],
+                minutes: Int(toolCall.arguments["minutes"] ?? ""),
+                limit: Int(toolCall.arguments["limit"] ?? ""),
+                direction: toolCall.arguments["direction"]
+            )
+        case "query_unifi_logs_instant":
+            return try await lokiService.queryInstant(
+                query: toolCall.arguments["query"],
+                limit: Int(toolCall.arguments["limit"] ?? "")
+            )
+        case "list_unifi_log_labels":
+            return try await lokiService.listLabels()
+        case "list_unifi_log_label_values":
+            return try await lokiService.labelValues(label: toolCall.arguments["label"])
+        case "list_unifi_log_series":
+            return try await lokiService.listSeries(
+                query: toolCall.arguments["query"],
+                minutes: Int(toolCall.arguments["minutes"] ?? ""),
+                limit: Int(toolCall.arguments["limit"] ?? "")
+            )
+        case "get_unifi_log_stats":
+            return try await lokiService.indexStats(
+                query: toolCall.arguments["query"],
+                minutes: Int(toolCall.arguments["minutes"] ?? "")
+            )
+        default:
+            return nil
+        }
+    }
+
+    private func formattedToolError(_ error: Error, toolName: String) -> String {
+        if let llmError = error as? LLMError,
+           case let .httpError(statusCode, _) = llmError
+        {
+            if statusCode == 401 || statusCode == 403 {
+                return "AUTH_ERROR: \(toolName) was denied by the remote API (HTTP \(statusCode)). Check API key or permissions."
+            }
+            if statusCode == 429 {
+                return "THROTTLED: \(toolName) hit rate limits (HTTP 429). Retry with a smaller query or shortly later."
+            }
+        }
+        return "TOOL_ERROR: \(toolName) failed: \(error.localizedDescription)"
     }
 
     /// Summarizes gateway health by combining live device inventory with recent UniFi log signals.
@@ -306,20 +341,7 @@ final class ToolExecutor {
         let devices = try await queryService.queryItems("devices")
         let gateways = devices.filter { isLikelyGateway($0) }
         let minutes = max(1, min(rawMinutes ?? 120, 1440))
-
-        var gatewayLines: [String] = []
-        for gateway in gateways {
-            let name = firstString(in: gateway, keys: ["name", "hostname", "model", "id"]) ?? "unknown"
-            let ip = firstString(in: gateway, keys: ["ipAddress", "ip", "lanIp"]) ?? "unknown"
-            let mac = firstString(in: gateway, keys: ["macAddress", "mac"]) ?? "unknown"
-            let state = firstString(in: gateway, keys: ["state", "status", "connectionState", "adoptionState"]) ?? "unknown"
-            let version = firstString(in: gateway, keys: ["firmwareVersion", "version"]) ?? "unknown"
-            gatewayLines.append("- \(name) ip=\(ip) mac=\(mac) state=\(state) version=\(version)")
-        }
-        if gatewayLines.isEmpty {
-            gatewayLines = ["- No gateway devices were identified from current device inventory."]
-        }
-
+        let gatewayLines = formattedGatewayLines(gateways)
         let wanLogs = try await lokiService.queryRange(
             query: #"|~ "(?i)wan|gateway|failover|packet loss|latency|jitter|uplink|isp""#,
             minutes: minutes,
@@ -327,7 +349,28 @@ final class ToolExecutor {
             direction: "backward"
         )
 
-        return """
+        return formattedWANHealthSnapshot(gatewayLines: gatewayLines, minutes: minutes, wanLogs: wanLogs)
+    }
+
+    /// Formats the gateway inventory section of the WAN snapshot so inventory extraction
+    /// stays separate from the higher-level report layout.
+    private func formattedGatewayLines(_ gateways: [[String: Any]]) -> [String] {
+        var lines: [String] = gateways.map { gateway in
+            let name = firstString(in: gateway, keys: ["name", "hostname", "model", "id"]) ?? "unknown"
+            let ip = firstString(in: gateway, keys: ["ipAddress", "ip", "lanIp"]) ?? "unknown"
+            let mac = firstString(in: gateway, keys: ["macAddress", "mac"]) ?? "unknown"
+            let state = firstString(in: gateway, keys: ["state", "status", "connectionState", "adoptionState"]) ?? "unknown"
+            let version = firstString(in: gateway, keys: ["firmwareVersion", "version"]) ?? "unknown"
+            return "- \(name) ip=\(ip) mac=\(mac) state=\(state) version=\(version)"
+        }
+        if lines.isEmpty {
+            lines = ["- No gateway devices were identified from current device inventory."]
+        }
+        return lines
+    }
+
+    private func formattedWANHealthSnapshot(gatewayLines: [String], minutes: Int, wanLogs: String) -> String {
+        """
         WAN/Gateway health snapshot:
         \(gatewayLines.joined(separator: "\n"))
 
@@ -374,6 +417,20 @@ final class ToolExecutor {
 
     /// Loads active and inactive client inventories and merges them into one deduplicated list.
     private func resolveClientsIncludingInactive(siteRefHint: String? = nil) async throws -> [[String: Any]] {
+        var bestRows = try await bestIntegrationClientRows()
+        let siteRef = try await resolveLegacySiteRef(siteRefHint)
+        let legacyPath = "/proxy/network/api/s/\(siteRef)/stat/alluser"
+        if let legacyPayload = try? await apiClient.getJSON(path: legacyPath) {
+            let legacyRows = rowsFromAnyPayload(legacyPayload)
+            if legacyRows.count > bestRows.count {
+                bestRows = legacyRows
+            }
+        }
+        return bestRows
+    }
+
+    /// Probes the supported integration endpoints and keeps the richest client inventory response.
+    private func bestIntegrationClientRows() async throws -> [[String: Any]] {
         var bestRows: [[String: Any]] = []
 
         if let rows = try? await queryService.queryItems("clients-all"), rows.count > bestRows.count {
@@ -383,8 +440,17 @@ final class ToolExecutor {
             bestRows = rows
         }
 
+        return bestRows
+    }
+
+    /// Resolves the site reference needed by the legacy `/api/s/{site_ref}` fallback path.
+    private func resolveLegacySiteRef(_ siteRefHint: String?) async throws -> String {
         var siteRef = (siteRefHint ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if siteRef.isEmpty, let sites = try? await queryService.queryItems("sites") {
+        if !siteRef.isEmpty {
+            return siteRef
+        }
+
+        if let sites = try? await queryService.queryItems("sites") {
             if let defaultRef = sites.first(where: { (($0["internalReference"] as? String) ?? "") == "default" })?["internalReference"] as? String,
                !defaultRef.isEmpty
             {
@@ -393,18 +459,8 @@ final class ToolExecutor {
                 siteRef = firstRef
             }
         }
-        if siteRef.isEmpty {
-            siteRef = "default"
-        }
 
-        let legacyPath = "/proxy/network/api/s/\(siteRef)/stat/alluser"
-        if let legacyPayload = try? await apiClient.getJSON(path: legacyPath) {
-            let legacyRows = rowsFromAnyPayload(legacyPayload)
-            if legacyRows.count > bestRows.count {
-                bestRows = legacyRows
-            }
-        }
-        return bestRows
+        return siteRef.isEmpty ? "default" : siteRef
     }
 
     /// Extracts row dictionaries from either a raw array payload or a paginated UniFi response wrapper.
@@ -443,7 +499,20 @@ final class ToolExecutor {
         let includeInactive = parseFlexibleBool(includeInactiveRaw)
         let limit = max(1, min(rawLimit ?? (kind.defaultLimit), 20))
         let clients = try await loadClientsForRanking(includeInactive: includeInactive)
-        let ranked = clients.compactMap { client -> RankedClientMetric? in
+        let ranked = rankClients(clients, by: kind)
+
+        guard !ranked.isEmpty else {
+            return "No clients exposed a usable \(kind.metricLabel) metric."
+        }
+
+        let selected = Array(ranked.prefix(limit))
+        logRankedClientSummary(kind: kind, selectedCount: selected.count, totalCount: ranked.count, includeInactive: includeInactive)
+        return formattedRankedClientSummary(kind: kind, selected: selected, consideredCount: ranked.count, limit: limit)
+    }
+
+    /// Applies the metric-specific extraction and ordering for client-ranking tools.
+    private func rankClients(_ clients: [[String: Any]], by kind: ClientRankingKind) -> [RankedClientMetric] {
+        clients.compactMap { client -> RankedClientMetric? in
             guard let value = metricValue(for: kind, client: client) else { return nil }
             if kind.requiresWireless, isWiredClient(client) { return nil }
             return RankedClientMetric(client: client, value: value)
@@ -454,17 +523,26 @@ final class ToolExecutor {
             }
             return clientDisplayLabel(lhs.client).localizedCaseInsensitiveCompare(clientDisplayLabel(rhs.client)) == .orderedAscending
         }
+    }
 
-        guard !ranked.isEmpty else {
-            return "No clients exposed a usable \(kind.metricLabel) metric."
-        }
-
-        let selected = Array(ranked.prefix(limit))
+    private func logRankedClientSummary(
+        kind: ClientRankingKind,
+        selectedCount: Int,
+        totalCount: Int,
+        includeInactive: Bool
+    ) {
         debugLog(
-            "\(kind.toolLabel) ranked \(selected.count) of \(ranked.count) clients (include_inactive=\(includeInactive))",
+            "\(kind.toolLabel) ranked \(selectedCount) of \(totalCount) clients (include_inactive=\(includeInactive))",
             category: "Tools"
         )
+    }
 
+    private func formattedRankedClientSummary(
+        kind: ClientRankingKind,
+        selected: [RankedClientMetric],
+        consideredCount: Int,
+        limit: Int
+    ) -> String {
         let heading = limit == 1 ? kind.singularHeading : kind.pluralHeading
         let lines = selected.enumerated().map { index, item in
             formatRankedClientLine(index: index + 1, item: item, kind: kind)
@@ -472,7 +550,7 @@ final class ToolExecutor {
         return """
         \(heading):
         - metric: \(kind.metricLabel)
-        - considered_clients: \(ranked.count)
+        - considered_clients: \(consideredCount)
         - returned_clients: \(selected.count)
         \(lines.joined(separator: "\n"))
         """
@@ -622,95 +700,136 @@ final class ToolExecutor {
         includeInactiveRaw: String?,
         siteRef rawSiteRef: String?
     ) async throws -> String {
+        guard let request = parsedNetworkRankingRequest(
+            entityType: rawEntityType,
+            metric: rawMetric,
+            limit: rawLimit,
+            includeInactiveRaw: includeInactiveRaw,
+            siteRef: rawSiteRef
+        ) else {
+            return "Error: rank_network_entities requires non-empty 'entity_type' and 'metric'."
+        }
+        guard let results = try await rankedNetworkEntityResults(for: request) else {
+            return "Error: Unsupported entity_type/metric combination '\(request.entityType)' / '\(request.metric)'."
+        }
+
+        let selected = Array(results.prefix(request.limit))
+        guard !selected.isEmpty else {
+            return "No \(request.displayEntityType) results exposed a usable '\(request.metric)' metric."
+        }
+
+        logNetworkRankingCompletion(request: request, returnedCount: selected.count)
+        return formattedNetworkRankingResults(request: request, selected: selected)
+    }
+
+    private func parsedNetworkRankingRequest(
+        entityType rawEntityType: String?,
+        metric rawMetric: String?,
+        limit rawLimit: Int?,
+        includeInactiveRaw: String?,
+        siteRef rawSiteRef: String?
+    ) -> NetworkRankingRequest? {
         let entityType = normalizeRankingToken(rawEntityType)
         let metric = normalizeRankingToken(rawMetric)
         guard !entityType.isEmpty, !metric.isEmpty else {
-            return "Error: rank_network_entities requires non-empty 'entity_type' and 'metric'."
+            return nil
         }
-        let includeInactive = parseFlexibleBool(includeInactiveRaw)
-        let limit = max(1, min(rawLimit ?? 5, 20))
+        return NetworkRankingRequest(
+            entityType: entityType,
+            metric: metric,
+            limit: max(1, min(rawLimit ?? 5, 20)),
+            includeInactive: parseFlexibleBool(includeInactiveRaw),
+            siteRef: normalizedSiteRef(rawSiteRef)
+        )
+    }
 
-        let results: [RankedEntityResult]
-        switch (entityType, metric) {
+    /// Routes one normalized entity-ranking request to the helper that owns its metric logic.
+    private func rankedNetworkEntityResults(
+        for request: NetworkRankingRequest
+    ) async throws -> [RankedEntityResult]? {
+        switch (request.entityType, request.metric) {
         case ("client", "highest_bandwidth"):
-            results = try await rankClientsByHighestBandwidth(includeInactive: includeInactive)
+            return try await rankClientsByHighestBandwidth(includeInactive: request.includeInactive)
         case ("client", "reconnect_churn"):
-            results = try await rankClientsByReconnectChurn(includeInactive: true)
+            return try await rankClientsByReconnectChurn(includeInactive: true)
         case ("client", "most_retransmits"):
-            results = try await rankClientsByMostRetransmits(includeInactive: includeInactive)
+            return try await rankClientsByMostRetransmits(includeInactive: request.includeInactive)
         case ("client", "offline_recent"):
-            results = try await rankRecentlyOfflineClients()
+            return try await rankRecentlyOfflineClients()
         case ("client", "recent_ip_changes"):
-            results = try await rankClientsByRecentIPChanges(includeInactive: true)
+            return try await rankClientsByRecentIPChanges(includeInactive: true)
         case ("client", "slowest_speed"):
-            results = try await rankClientsByMetric(kind: .slowestSpeed, includeInactive: includeInactive)
+            return try await rankClientsByMetric(kind: .slowestSpeed, includeInactive: request.includeInactive)
         case ("client", "weakest_signal"):
-            results = try await rankClientsByMetric(kind: .weakestSignal, includeInactive: includeInactive)
+            return try await rankClientsByMetric(kind: .weakestSignal, includeInactive: request.includeInactive)
         case ("client", "highest_latency"):
-            results = try await rankClientsByMetric(kind: .highestLatency, includeInactive: includeInactive)
+            return try await rankClientsByMetric(kind: .highestLatency, includeInactive: request.includeInactive)
         case ("access_point", "client_count"):
-            results = try await rankAccessPointsByClientCount(includeInactive: includeInactive)
+            return try await rankAccessPointsByClientCount(includeInactive: request.includeInactive)
         case ("access_point", "weakest_average_signal"):
-            results = try await rankAccessPointsByWeakestAverageSignal(includeInactive: includeInactive)
+            return try await rankAccessPointsByWeakestAverageSignal(includeInactive: request.includeInactive)
         case ("access_point", "roam_churn"):
-            results = try await rankAccessPointsByChurn(kind: .roam, includeInactive: true)
+            return try await rankAccessPointsByChurn(kind: .roam, includeInactive: true)
         case ("access_point", "disconnect_churn"):
-            results = try await rankAccessPointsByChurn(kind: .disconnect, includeInactive: true)
+            return try await rankAccessPointsByChurn(kind: .disconnect, includeInactive: true)
         case ("wifi_broadcast", "client_count"):
-            results = try await rankWiFiBroadcastsByClientCount(includeInactive: includeInactive)
+            return try await rankWiFiBroadcastsByClientCount(includeInactive: request.includeInactive)
         case ("wifi_broadcast", "weakest_average_signal"):
-            results = try await rankWiFiBroadcastsByAverageSignal(includeInactive: includeInactive, strongest: false)
+            return try await rankWiFiBroadcastsByAverageSignal(includeInactive: request.includeInactive, strongest: false)
         case ("wifi_broadcast", "strongest_average_signal"):
-            results = try await rankWiFiBroadcastsByAverageSignal(includeInactive: includeInactive, strongest: true)
+            return try await rankWiFiBroadcastsByAverageSignal(includeInactive: request.includeInactive, strongest: true)
         case ("network", "client_count"):
-            results = try await rankNetworksByClientCount(includeInactive: includeInactive)
+            return try await rankNetworksByClientCount(includeInactive: request.includeInactive)
         case ("network", "reference_count"):
-            results = try await rankNetworksByReferenceCount()
+            return try await rankNetworksByReferenceCount()
         case ("switch_port", "errors"):
-            results = try await rankSwitchPortsByErrors()
+            return try await rankSwitchPortsByErrors()
         case ("switch_port", "disconnected_client_count"):
-            results = try await rankSwitchPortsByDisconnectedClients()
+            return try await rankSwitchPortsByDisconnectedClients()
         case ("switch_port", "flapping"):
-            results = try await rankSwitchPortsByFlapping()
+            return try await rankSwitchPortsByFlapping()
         case ("firewall_rule", "hits"):
-            results = try await rankFirewallRulesByHits()
+            return try await rankFirewallRulesByHits()
         case ("firewall_rule", "shadow_risk"):
-            results = try await rankFirewallRulesByShadowRisk()
+            return try await rankFirewallRulesByShadowRisk()
         case ("acl_rule", "ordering_risk"):
-            results = try await rankACLRulesByOrderingRisk()
+            return try await rankACLRulesByOrderingRisk()
         case ("vpn_tunnel", "down"):
-            results = try await rankVPNTunnels(metric: .down)
+            return try await rankVPNTunnels(metric: .down)
         case ("vpn_tunnel", "up"):
-            results = try await rankVPNTunnels(metric: .up)
+            return try await rankVPNTunnels(metric: .up)
         case ("vpn_tunnel", "stale"):
-            results = try await rankVPNTunnels(metric: .stale)
+            return try await rankVPNTunnels(metric: .stale)
         case ("wan_profile", "healthy"):
-            results = try await rankWANProfiles(metric: .healthy)
+            return try await rankWANProfiles(metric: .healthy)
         case ("wan_profile", "unhealthy"):
-            results = try await rankWANProfiles(metric: .unhealthy)
+            return try await rankWANProfiles(metric: .unhealthy)
         case ("dns_policy", "client_count"):
-            results = try await rankDNSPoliciesByClientCount()
+            return try await rankDNSPoliciesByClientCount()
         case ("app_block", "target_count"):
-            results = try await rankAppBlocksByTargetCount(siteRef: normalizedSiteRef(rawSiteRef))
+            return try await rankAppBlocksByTargetCount(siteRef: request.siteRef)
         default:
-            return "Error: Unsupported entity_type/metric combination '\(entityType)' / '\(metric)'."
+            return nil
         }
+    }
 
-        let selected = Array(results.prefix(limit))
-        guard !selected.isEmpty else {
-            return "No \(entityType.replacingOccurrences(of: "_", with: " ")) results exposed a usable '\(metric)' metric."
-        }
-
+    private func logNetworkRankingCompletion(request: NetworkRankingRequest, returnedCount: Int) {
         debugLog(
-            "rank_network_entities completed (entity_type=\(entityType), metric=\(metric), returned=\(selected.count), include_inactive=\(includeInactive))",
+            "rank_network_entities completed (entity_type=\(request.entityType), metric=\(request.metric), returned=\(returnedCount), include_inactive=\(request.includeInactive))",
             category: "Tools"
         )
+    }
+
+    private func formattedNetworkRankingResults(
+        request: NetworkRankingRequest,
+        selected: [RankedEntityResult]
+    ) -> String {
         let lines = selected.enumerated().map { index, item in
-            "\(index + 1). \(item.label), \(metric)=\(item.valueText)\(item.detail.isEmpty ? "" : ", \(item.detail)")"
+            "\(index + 1). \(item.label), \(request.metric)=\(item.valueText)\(item.detail.isEmpty ? "" : ", \(item.detail)")"
         }
         return """
-        Ranked \(entityType.replacingOccurrences(of: "_", with: " ")) results:
-        - metric: \(metric)
+        Ranked \(request.displayEntityType) results:
+        - metric: \(request.metric)
         - result_count: \(selected.count)
         \(lines.joined(separator: "\n"))
         """
@@ -842,6 +961,51 @@ final class ToolExecutor {
 
     /// Ranks access points by the number of currently associated clients.
     private func rankAccessPointsByClientCount(includeInactive: Bool) async throws -> [RankedEntityResult] {
+        let context = try await accessPointRankingContext()
+        let clients = try await loadClientsForRanking(includeInactive: includeInactive)
+        let grouped = groupClientsByAccessPoint(
+            clients,
+            onlineDeviceIDs: context.onlineDeviceIDs
+        ) { client in
+            isClientActiveForRanking(client)
+        }
+        return rankedAccessPointCounts(grouped, nameByID: context.deviceNameByID)
+    }
+
+    /// Ranks access points by the weakest average signal across their associated WiFi clients.
+    private func rankAccessPointsByWeakestAverageSignal(includeInactive: Bool) async throws -> [RankedEntityResult] {
+        let context = try await accessPointRankingContext()
+        let clients = try await loadClientsForRanking(includeInactive: includeInactive)
+        let grouped = groupClientsByAccessPoint(
+            clients,
+            onlineDeviceIDs: context.onlineDeviceIDs
+        ) { client in
+            isClientActiveForRanking(client) && !isWiredClient(client)
+        }
+        return rankedAccessPointAverages(
+            grouped,
+            nameByID: context.deviceNameByID,
+            metricExtractor: { metricValue(for: .weakestSignal, client: $0) },
+            valueFormatter: { String(format: "%.1f dBm", $0) },
+            detailFormatter: { "clients=\($0.count), device_id=\($0.uplinkID)" },
+            prefersLowerValues: true
+        )
+    }
+
+    /// Ranks access points by cumulative roam or disconnect churn observed in their associated clients.
+    private func rankAccessPointsByChurn(kind: AccessPointChurnKind, includeInactive: Bool) async throws -> [RankedEntityResult] {
+        let context = try await accessPointRankingContext()
+        let clients = try await loadClientsForRanking(includeInactive: includeInactive)
+        let grouped = groupClientsByAccessPoint(clients)
+        return rankedAccessPointTotals(
+            grouped,
+            nameByID: context.deviceNameByID,
+            totalExtractor: { rows in rows.reduce(0) { $0 + sumNumericValues(in: $1, keys: kind.keys) } }
+        )
+    }
+
+    /// Builds the shared AP/device lookup tables used across access-point ranking helpers.
+    private func accessPointRankingContext() async throws -> AccessPointRankingContext {
         let devices = try await queryService.queryItems("devices")
         let onlineDeviceIDs = Set(devices.compactMap { device -> String? in
             guard isDeviceOnlineForRanking(device) else { return nil }
@@ -851,21 +1015,41 @@ final class ToolExecutor {
             guard let id = firstString(in: device, keys: ["id", "_id"]) else { return nil }
             return (id, firstString(in: device, keys: ["name", "hostname", "model"]) ?? id)
         })
-        let clients = try await loadClientsForRanking(includeInactive: includeInactive)
-        let currentClients = clients.filter { client in
-            guard isClientActiveForRanking(client),
-                  let uplinkID = firstString(in: client, keys: ["uplinkDeviceId", "uplink_device_id", "apId", "ap_id", "uplinkApId"])
-            else {
+        return AccessPointRankingContext(deviceNameByID: deviceNameByID, onlineDeviceIDs: onlineDeviceIDs)
+    }
+
+    /// Groups client rows by uplink device, optionally restricting to online APs and a caller-supplied predicate.
+    private func groupClientsByAccessPoint(
+        _ clients: [[String: Any]],
+        onlineDeviceIDs: Set<String>? = nil,
+        predicate: (([String: Any]) -> Bool)? = nil
+    ) -> [String: [[String: Any]]] {
+        let filtered = clients.filter { client in
+            if let predicate, !predicate(client) {
                 return false
             }
-            return onlineDeviceIDs.contains(uplinkID)
+            guard let uplinkID = accessPointID(for: client) else {
+                return false
+            }
+            if let onlineDeviceIDs {
+                return onlineDeviceIDs.contains(uplinkID)
+            }
+            return true
         }
-        let grouped = Dictionary(grouping: currentClients) { client in
-            firstString(in: client, keys: ["uplinkDeviceId", "uplink_device_id", "apId", "ap_id", "uplinkApId"]) ?? "unknown"
-        }
-        return grouped.compactMap { uplinkID, rows in
+        return Dictionary(grouping: filtered) { accessPointID(for: $0) ?? "unknown" }
+    }
+
+    private func accessPointID(for client: [String: Any]) -> String? {
+        firstString(in: client, keys: ["uplinkDeviceId", "uplink_device_id", "apId", "ap_id", "uplinkApId"])
+    }
+
+    private func rankedAccessPointCounts(
+        _ grouped: [String: [[String: Any]]],
+        nameByID: [String: String]
+    ) -> [RankedEntityResult] {
+        grouped.compactMap { uplinkID, rows in
             guard uplinkID != "unknown" else { return nil }
-            let label = deviceNameByID[uplinkID] ?? uplinkID
+            let label = nameByID[uplinkID] ?? uplinkID
             return RankedEntityResult(
                 label: "access_point=\(label)",
                 value: Double(rows.count),
@@ -876,71 +1060,46 @@ final class ToolExecutor {
         .sorted { $0.value == $1.value ? $0.label < $1.label : $0.value > $1.value }
     }
 
-    /// Ranks access points by the weakest average signal across their associated WiFi clients.
-    private func rankAccessPointsByWeakestAverageSignal(includeInactive: Bool) async throws -> [RankedEntityResult] {
-        let devices = try await queryService.queryItems("devices")
-        let onlineDeviceIDs = Set(devices.compactMap { device -> String? in
-            guard isDeviceOnlineForRanking(device) else { return nil }
-            return firstString(in: device, keys: ["id", "_id"])
-        })
-        let deviceNameByID = Dictionary(uniqueKeysWithValues: devices.compactMap { device -> (String, String)? in
-            guard let id = firstString(in: device, keys: ["id", "_id"]) else { return nil }
-            return (id, firstString(in: device, keys: ["name", "hostname", "model"]) ?? id)
-        })
-        let clients = try await loadClientsForRanking(includeInactive: includeInactive)
-        let wifiClients = clients.filter { client in
-            guard isClientActiveForRanking(client),
-                  !isWiredClient(client),
-                  let uplinkID = firstString(in: client, keys: ["uplinkDeviceId", "uplink_device_id", "apId", "ap_id", "uplinkApId"])
-            else {
-                return false
-            }
-            return onlineDeviceIDs.contains(uplinkID)
-        }
-        let grouped = Dictionary(grouping: wifiClients) { client in
-            firstString(in: client, keys: ["uplinkDeviceId", "uplink_device_id", "apId", "ap_id", "uplinkApId"]) ?? "unknown"
-        }
-        return grouped.compactMap { uplinkID, rows in
-            let signals = rows.compactMap { metricValue(for: .weakestSignal, client: $0) }
-            guard !signals.isEmpty else { return nil }
-            let average = signals.reduce(0, +) / Double(signals.count)
-            let label = deviceNameByID[uplinkID] ?? uplinkID
+    private func rankedAccessPointAverages(
+        _ grouped: [String: [[String: Any]]],
+        nameByID: [String: String],
+        metricExtractor: ([String: Any]) -> Double?,
+        valueFormatter: (Double) -> String,
+        detailFormatter: ((uplinkID: String, rows: [[String: Any]])) -> String,
+        prefersLowerValues: Bool
+    ) -> [RankedEntityResult] {
+        grouped.compactMap { uplinkID, rows in
+            let values = rows.compactMap(metricExtractor)
+            guard !values.isEmpty else { return nil }
+            let average = values.reduce(0, +) / Double(values.count)
+            let label = nameByID[uplinkID] ?? uplinkID
             return RankedEntityResult(
                 label: "access_point=\(label)",
                 value: average,
-                valueText: String(format: "%.1f dBm", average),
-                detail: "clients=\(rows.count), device_id=\(uplinkID)"
+                valueText: valueFormatter(average),
+                detail: detailFormatter((uplinkID, rows))
             )
         }
-        .sorted { $0.value == $1.value ? $0.label < $1.label : $0.value < $1.value }
+        .sorted {
+            if $0.value == $1.value { return $0.label < $1.label }
+            return prefersLowerValues ? ($0.value < $1.value) : ($0.value > $1.value)
+        }
     }
 
-    /// Ranks access points by cumulative roam or disconnect churn observed in their associated clients.
-    private func rankAccessPointsByChurn(kind: AccessPointChurnKind, includeInactive: Bool) async throws -> [RankedEntityResult] {
-        let devices = try await queryService.queryItems("devices")
-        let deviceNameByID = Dictionary(uniqueKeysWithValues: devices.compactMap { device -> (String, String)? in
-            guard let id = firstString(in: device, keys: ["id", "_id"]) else { return nil }
-            return (id, firstString(in: device, keys: ["name", "hostname", "model"]) ?? id)
-        })
-        let clients = try await loadClientsForRanking(includeInactive: includeInactive)
-        var totals: [String: Double] = [:]
-        var clientCounts: [String: Int] = [:]
-        for client in clients {
-            guard let uplinkID = firstString(in: client, keys: ["uplinkDeviceId", "uplink_device_id", "apId", "ap_id", "uplinkApId"]) else {
-                continue
-            }
-            let value = sumNumericValues(in: client, keys: kind.keys)
-            guard value > 0 else { continue }
-            totals[uplinkID, default: 0] += value
-            clientCounts[uplinkID, default: 0] += 1
-        }
-        return totals.compactMap { uplinkID, total in
-            let label = deviceNameByID[uplinkID] ?? uplinkID
+    private func rankedAccessPointTotals(
+        _ grouped: [String: [[String: Any]]],
+        nameByID: [String: String],
+        totalExtractor: ([[String: Any]]) -> Double
+    ) -> [RankedEntityResult] {
+        grouped.compactMap { uplinkID, rows in
+            let total = totalExtractor(rows)
+            guard total > 0 else { return nil }
+            let label = nameByID[uplinkID] ?? uplinkID
             return RankedEntityResult(
                 label: "access_point=\(label)",
                 value: total,
                 valueText: String(format: "%.0f", total),
-                detail: "clients=\(clientCounts[uplinkID] ?? 0), device_id=\(uplinkID)"
+                detail: "clients=\(rows.count), device_id=\(uplinkID)"
             )
         }
         .sorted { $0.value == $1.value ? $0.label < $1.label : $0.value > $1.value }
@@ -950,71 +1109,32 @@ final class ToolExecutor {
     private func rankWiFiBroadcastsByClientCount(includeInactive: Bool) async throws -> [RankedEntityResult] {
         let wifiBroadcasts = try await queryService.queryItems("wifi-broadcasts")
         let clients = try await loadClientsForRanking(includeInactive: includeInactive)
-        var counts: [String: Int] = [:]
-        for client in clients where !isWiredClient(client) && isClientActiveForRanking(client) {
-            guard let name = wifiBroadcastName(for: client, broadcasts: wifiBroadcasts) else { continue }
-            counts[name, default: 0] += 1
-        }
-        return counts.map { name, count in
-            RankedEntityResult(
-                label: "wifi_broadcast=\(name)",
-                value: Double(count),
-                valueText: "\(count)",
-                detail: ""
-            )
-        }
-        .sorted { $0.value == $1.value ? $0.label < $1.label : $0.value > $1.value }
+        let grouped = groupWirelessClientsByBroadcast(clients, broadcasts: wifiBroadcasts)
+        return rankedNamedCounts(grouped, labelPrefix: "wifi_broadcast", detailBuilder: { _ in "" })
     }
 
     /// Ranks WiFi broadcasts by their average client signal, strongest or weakest first.
     private func rankWiFiBroadcastsByAverageSignal(includeInactive: Bool, strongest: Bool) async throws -> [RankedEntityResult] {
         let wifiBroadcasts = try await queryService.queryItems("wifi-broadcasts")
         let clients = try await loadClientsForRanking(includeInactive: includeInactive)
-        var grouped: [String: [Double]] = [:]
-        for client in clients where !isWiredClient(client) && isClientActiveForRanking(client) {
-            guard let name = wifiBroadcastName(for: client, broadcasts: wifiBroadcasts) else { continue }
-            guard let signal = metricValue(for: .weakestSignal, client: client) else { continue }
-            grouped[name, default: []].append(signal)
-        }
-        return grouped.compactMap { name, values in
-            guard !values.isEmpty else { return nil }
-            let average = values.reduce(0, +) / Double(values.count)
-            return RankedEntityResult(
-                label: "wifi_broadcast=\(name)",
-                value: average,
-                valueText: String(format: "%.1f dBm", average),
-                detail: "clients=\(values.count)"
-            )
-        }
-        .sorted {
-            if $0.value == $1.value { return $0.label < $1.label }
-            return strongest ? ($0.value > $1.value) : ($0.value < $1.value)
-        }
+        let grouped = groupWirelessClientsByBroadcast(clients, broadcasts: wifiBroadcasts)
+        return rankedNamedAverages(
+            grouped,
+            labelPrefix: "wifi_broadcast",
+            metricExtractor: { metricValue(for: .weakestSignal, client: $0) },
+            valueFormatter: { String(format: "%.1f dBm", $0) },
+            detailFormatter: { rows in "clients=\(rows.count)" },
+            prefersLowerValues: !strongest
+        )
     }
 
     /// Ranks networks by how many client rows currently point at them.
     private func rankNetworksByClientCount(includeInactive: Bool) async throws -> [RankedEntityResult] {
         let networks = try await queryService.queryItems("networks")
-        let networkNameByID = Dictionary(uniqueKeysWithValues: networks.compactMap { network -> (String, String)? in
-            guard let id = firstString(in: network, keys: ["id", "_id"]) else { return nil }
-            return (id, firstString(in: network, keys: ["name"]) ?? id)
-        })
+        let networkNameByID = networkNameMap(networks)
         let clients = try await loadClientsForRanking(includeInactive: includeInactive)
-        let currentClients = clients.filter { isClientActiveForRanking($0) }
-        let grouped = Dictionary(grouping: currentClients) { client in
-            firstString(in: client, keys: ["networkId", "network_id", "last_connection_network_id", "lastConnectionNetworkId"]) ?? "unknown"
-        }
-        return grouped.compactMap { networkID, rows in
-            guard networkID != "unknown" else { return nil }
-            let label = networkNameByID[networkID] ?? networkID
-            return RankedEntityResult(
-                label: "network=\(label)",
-                value: Double(rows.count),
-                valueText: "\(rows.count)",
-                detail: "network_id=\(networkID)"
-            )
-        }
-        .sorted { $0.value == $1.value ? $0.label < $1.label : $0.value > $1.value }
+        let grouped = groupActiveClientsByNetwork(clients)
+        return rankedNetworkCounts(grouped, nameByID: networkNameByID)
     }
 
     /// Ranks networks by how many policy-like objects reference them.
@@ -1027,65 +1147,204 @@ final class ToolExecutor {
 
         return networks.compactMap { network -> RankedEntityResult? in
             guard let networkID = firstString(in: network, keys: ["id", "_id"]) else { return nil }
-            let label = firstString(in: network, keys: ["name"]) ?? networkID
             let count =
                 referenceCount(for: networkID, in: wifiBroadcasts) +
                 referenceCount(for: networkID, in: dnsPolicies) +
                 referenceCount(for: networkID, in: firewallPolicies) +
                 referenceCount(for: networkID, in: aclRules)
-            guard count > 0 else { return nil }
+            return makeNetworkRankingResult(networkID: networkID, label: firstString(in: network, keys: ["name"]) ?? networkID, count: count)
+        }
+        .sorted { $0.value == $1.value ? $0.label < $1.label : $0.value > $1.value }
+    }
+
+    /// Groups active wireless clients by resolved Wi-Fi broadcast name.
+    private func groupWirelessClientsByBroadcast(
+        _ clients: [[String: Any]],
+        broadcasts: [[String: Any]]
+    ) -> [String: [[String: Any]]] {
+        let wirelessClients = clients.filter { !isWiredClient($0) && isClientActiveForRanking($0) }
+        return Dictionary(grouping: wirelessClients) { client in
+            wifiBroadcastName(for: client, broadcasts: broadcasts) ?? "unknown"
+        }
+    }
+
+    private func rankedNamedCounts(
+        _ grouped: [String: [[String: Any]]],
+        labelPrefix: String,
+        detailBuilder: (String) -> String
+    ) -> [RankedEntityResult] {
+        grouped.compactMap { name, rows in
+            guard name != "unknown" else { return nil }
+            return RankedEntityResult(
+                label: "\(labelPrefix)=\(name)",
+                value: Double(rows.count),
+                valueText: "\(rows.count)",
+                detail: detailBuilder(name)
+            )
+        }
+        .sorted { $0.value == $1.value ? $0.label < $1.label : $0.value > $1.value }
+    }
+
+    private func rankedNamedAverages(
+        _ grouped: [String: [[String: Any]]],
+        labelPrefix: String,
+        metricExtractor: ([String: Any]) -> Double?,
+        valueFormatter: (Double) -> String,
+        detailFormatter: ([[String: Any]]) -> String,
+        prefersLowerValues: Bool
+    ) -> [RankedEntityResult] {
+        grouped.compactMap { name, rows in
+            guard name != "unknown" else { return nil }
+            let values = rows.compactMap(metricExtractor)
+            guard !values.isEmpty else { return nil }
+            let average = values.reduce(0, +) / Double(values.count)
+            return RankedEntityResult(
+                label: "\(labelPrefix)=\(name)",
+                value: average,
+                valueText: valueFormatter(average),
+                detail: detailFormatter(rows)
+            )
+        }
+        .sorted {
+            if $0.value == $1.value { return $0.label < $1.label }
+            return prefersLowerValues ? ($0.value < $1.value) : ($0.value > $1.value)
+        }
+    }
+
+    private func networkNameMap(_ networks: [[String: Any]]) -> [String: String] {
+        Dictionary(uniqueKeysWithValues: networks.compactMap { network -> (String, String)? in
+            guard let id = firstString(in: network, keys: ["id", "_id"]) else { return nil }
+            return (id, firstString(in: network, keys: ["name"]) ?? id)
+        })
+    }
+
+    private func groupActiveClientsByNetwork(_ clients: [[String: Any]]) -> [String: [[String: Any]]] {
+        let currentClients = clients.filter { isClientActiveForRanking($0) }
+        return Dictionary(grouping: currentClients) { client in
+            firstString(in: client, keys: ["networkId", "network_id", "last_connection_network_id", "lastConnectionNetworkId"]) ?? "unknown"
+        }
+    }
+
+    private func rankedNetworkCounts(
+        _ grouped: [String: [[String: Any]]],
+        nameByID: [String: String]
+    ) -> [RankedEntityResult] {
+        grouped.compactMap { networkID, rows in
+            guard networkID != "unknown" else { return nil }
+            let label = nameByID[networkID] ?? networkID
             return RankedEntityResult(
                 label: "network=\(label)",
-                value: Double(count),
-                valueText: "\(count)",
+                value: Double(rows.count),
+                valueText: "\(rows.count)",
                 detail: "network_id=\(networkID)"
             )
         }
         .sorted { $0.value == $1.value ? $0.label < $1.label : $0.value > $1.value }
     }
 
+    private func makeNetworkRankingResult(networkID: String, label: String, count: Int) -> RankedEntityResult? {
+        guard count > 0 else { return nil }
+        return RankedEntityResult(
+            label: "network=\(label)",
+            value: Double(count),
+            valueText: "\(count)",
+            detail: "network_id=\(networkID)"
+        )
+    }
+
     /// Ranks switch ports by accumulated error counters exposed in the device payload.
     private func rankSwitchPortsByErrors() async throws -> [RankedEntityResult] {
-        let devices = try await queryService.queryItems("devices")
-        var results: [RankedEntityResult] = []
-        for device in devices {
-            let deviceLabel = firstString(in: device, keys: ["name", "hostname", "model", "id"]) ?? "unknown-device"
-            for port in extractPortRows(from: device) {
-                let errors = sumNumericValues(
+        let context = try await switchPortRankingContext()
+        return rankedSwitchPorts(
+            devices: context.devices,
+            valueExtractor: { port in
+                sumNumericValues(
                     in: port,
                     keys: ["errors", "errorCount", "rxErrors", "txErrors", "crcErrors", "drops", "dropped", "discarded"]
                 )
-                guard errors > 0 else { continue }
-                let portLabel = firstString(in: port, keys: ["name", "portName", "port", "portIdx", "index", "id"]) ?? "unknown-port"
-                results.append(
-                    RankedEntityResult(
-                        label: "switch_port=\(deviceLabel) port \(portLabel)",
-                        value: errors,
-                        valueText: String(format: "%.0f", errors),
-                        detail: "device=\(deviceLabel)"
-                    )
-                )
-            }
-        }
-        return results.sorted { $0.value == $1.value ? $0.label < $1.label : $0.value > $1.value }
+            },
+            valueFormatter: { String(format: "%.0f", $0) },
+            minimumValue: 0
+        )
     }
 
     /// Ranks switch ports by how many inactive clients last reported behind them.
     private func rankSwitchPortsByDisconnectedClients() async throws -> [RankedEntityResult] {
+        let context = try await switchPortRankingContext()
+        let clients = try await loadClientsForRanking(includeInactive: true)
+        let counts = disconnectedClientCountsBySwitchPort(clients)
+        return rankedDisconnectedSwitchPorts(counts, nameByID: context.deviceNameByID)
+    }
+
+    /// Ranks switch ports by flap-like counters that indicate repeated link state changes.
+    private func rankSwitchPortsByFlapping() async throws -> [RankedEntityResult] {
+        let context = try await switchPortRankingContext()
+        return rankedSwitchPorts(
+            devices: context.devices,
+            valueExtractor: { port in
+                sumNumericValues(
+                    in: port,
+                    keys: ["linkFlaps", "link_flaps", "flaps", "upDownCount", "up_down_count", "linkDownCount", "linkUpCount", "stpTransitions", "stateChanges"]
+                )
+            },
+            valueFormatter: { String(format: "%.0f", $0) },
+            minimumValue: 0
+        )
+    }
+
+    /// Builds the shared switch/device lookup tables used across switch-port ranking helpers.
+    private func switchPortRankingContext() async throws -> SwitchPortRankingContext {
         let devices = try await queryService.queryItems("devices")
         let deviceNameByID = Dictionary(uniqueKeysWithValues: devices.compactMap { device -> (String, String)? in
             guard let id = firstString(in: device, keys: ["id", "_id"]) else { return nil }
             return (id, firstString(in: device, keys: ["name", "hostname", "model"]) ?? id)
         })
-        let clients = try await loadClientsForRanking(includeInactive: true)
+        return SwitchPortRankingContext(devices: devices, deviceNameByID: deviceNameByID)
+    }
+
+    /// Extracts one ranked result per switch port using the provided numeric port metric.
+    private func rankedSwitchPorts(
+        devices: [[String: Any]],
+        valueExtractor: ([String: Any]) -> Double,
+        valueFormatter: (Double) -> String,
+        minimumValue: Double
+    ) -> [RankedEntityResult] {
+        var results: [RankedEntityResult] = []
+        for device in devices {
+            let deviceLabel = firstString(in: device, keys: ["name", "hostname", "model", "id"]) ?? "unknown-device"
+            for port in extractPortRows(from: device) {
+                let value = valueExtractor(port)
+                guard value > minimumValue else { continue }
+                let portLabel = switchPortLabel(port)
+                results.append(
+                    RankedEntityResult(
+                        label: "switch_port=\(deviceLabel) port \(portLabel)",
+                        value: value,
+                        valueText: valueFormatter(value),
+                        detail: "device=\(deviceLabel)"
+                    )
+                )
+            }
+        }
+        return sortDescendingRankedEntities(results)
+    }
+
+    private func disconnectedClientCountsBySwitchPort(_ clients: [[String: Any]]) -> [String: Int] {
         var counts: [String: Int] = [:]
         for client in clients where !isClientActiveForRanking(client) {
             guard let key = switchPortKey(for: client) else { continue }
             counts[key, default: 0] += 1
         }
-        return counts.map { key, count in
+        return counts
+    }
+
+    private func rankedDisconnectedSwitchPorts(
+        _ counts: [String: Int],
+        nameByID: [String: String]
+    ) -> [RankedEntityResult] {
+        counts.map { key, count in
             let parsed = splitSwitchPortKey(key)
-            let deviceLabel = deviceNameByID[parsed.deviceID] ?? parsed.deviceID
+            let deviceLabel = nameByID[parsed.deviceID] ?? parsed.deviceID
             return RankedEntityResult(
                 label: "switch_port=\(deviceLabel) port \(parsed.portLabel)",
                 value: Double(count),
@@ -1096,47 +1355,18 @@ final class ToolExecutor {
         .sorted { $0.value == $1.value ? $0.label < $1.label : $0.value > $1.value }
     }
 
-    /// Ranks switch ports by flap-like counters that indicate repeated link state changes.
-    private func rankSwitchPortsByFlapping() async throws -> [RankedEntityResult] {
-        let devices = try await queryService.queryItems("devices")
-        var results: [RankedEntityResult] = []
-        for device in devices {
-            let deviceLabel = firstString(in: device, keys: ["name", "hostname", "model", "id"]) ?? "unknown-device"
-            for port in extractPortRows(from: device) {
-                let flaps = sumNumericValues(
-                    in: port,
-                    keys: ["linkFlaps", "link_flaps", "flaps", "upDownCount", "up_down_count", "linkDownCount", "linkUpCount", "stpTransitions", "stateChanges"]
-                )
-                guard flaps > 0 else { continue }
-                let portLabel = firstString(in: port, keys: ["name", "portName", "port", "portIdx", "index", "id"]) ?? "unknown-port"
-                results.append(
-                    RankedEntityResult(
-                        label: "switch_port=\(deviceLabel) port \(portLabel)",
-                        value: flaps,
-                        valueText: String(format: "%.0f", flaps),
-                        detail: "device=\(deviceLabel)"
-                    )
-                )
-            }
-        }
-        return results.sorted { $0.value == $1.value ? $0.label < $1.label : $0.value > $1.value }
+    private func switchPortLabel(_ port: [String: Any]) -> String {
+        firstString(in: port, keys: ["name", "portName", "port", "portIdx", "index", "id"]) ?? "unknown-port"
     }
 
     /// Ranks firewall rules by hit or match counters.
     private func rankFirewallRulesByHits() async throws -> [RankedEntityResult] {
         let policies = try await queryService.queryItems("firewall-policies")
-        return policies.compactMap { policy in
-            let hits = firstPositiveValue(in: policy, keys: ["hitCount", "hit_count", "hits", "packetCount", "matchCount", "matchedPackets"], nestedKeys: ["statistics", "stats"])
-            guard let hits, hits > 0 else { return nil }
-            let label = firstString(in: policy, keys: ["name", "id", "_id"]) ?? "unknown-rule"
-            return RankedEntityResult(
-                label: "firewall_rule=\(label)",
-                value: hits,
-                valueText: String(format: "%.0f", hits),
-                detail: "rule_id=\(firstString(in: policy, keys: ["id", "_id"]) ?? "unknown")"
-            )
-        }
-        .sorted { $0.value == $1.value ? $0.label < $1.label : $0.value > $1.value }
+        return rankedRuleHits(
+            policies,
+            labelPrefix: "firewall_rule",
+            detailPrefix: "rule_id"
+        )
     }
 
     /// Ranks firewall rules that look shadowed by earlier rules with matching scope.
@@ -1154,114 +1384,185 @@ final class ToolExecutor {
     /// Ranks VPN tunnels by state or staleness without returning the full tunnel list.
     private func rankVPNTunnels(metric: VPNTunnelMetric) async throws -> [RankedEntityResult] {
         let tunnels = try await queryService.queryItems("site-to-site-vpn")
-        return tunnels.compactMap { tunnel in
-            let state = ruleStateText(from: tunnel)
-            let isUp = stateLooksHealthy(state)
-            let name = firstString(in: tunnel, keys: ["name", "displayName", "remoteSiteName", "peerName", "id", "_id"]) ?? "unknown-tunnel"
-            let lastSeen = latestDate(in: tunnel, keys: ["lastSeen", "last_seen", "lastConnected", "connectedAt", "updatedAt", "lastHandshake", "last_handshake"])
-            let age = lastSeen.map { max(0, Date().timeIntervalSince($0)) } ?? 0
-            switch metric {
-            case .down:
-                guard !isUp else { return nil }
-                return RankedEntityResult(
-                    label: "vpn_tunnel=\(name)",
-                    value: age > 0 ? age : 1,
-                    valueText: state.isEmpty ? "down" : state,
-                    detail: lastSeen.map { "last_seen=\(isoDateString($0))" } ?? "last_seen=unknown"
-                )
-            case .up:
-                guard isUp else { return nil }
-                return RankedEntityResult(
-                    label: "vpn_tunnel=\(name)",
-                    value: lastSeen?.timeIntervalSince1970 ?? 1,
-                    valueText: state.isEmpty ? "up" : state,
-                    detail: lastSeen.map { "last_seen=\(isoDateString($0))" } ?? "last_seen=unknown"
-                )
-            case .stale:
-                guard age > 0 else { return nil }
-                return RankedEntityResult(
-                    label: "vpn_tunnel=\(name)",
-                    value: age,
-                    valueText: String(format: "%.0f min", age / 60),
-                    detail: "state=\(state.isEmpty ? "unknown" : state)"
-                )
-            }
-        }
-        .sorted {
-            if $0.value == $1.value { return $0.label < $1.label }
-            return metric == .up ? ($0.value > $1.value) : ($0.value > $1.value)
-        }
+        return tunnels.compactMap { rankedVPNTunnel($0, metric: metric) }
+            .sorted { $0.value == $1.value ? $0.label < $1.label : $0.value > $1.value }
     }
 
     /// Ranks WAN profiles by a heuristic health score derived from state and available telemetry.
     private func rankWANProfiles(metric: WANHealthMetric) async throws -> [RankedEntityResult] {
         let profiles = try await queryService.queryItems("wan-profiles")
-        return profiles.compactMap { profile in
-            let name = firstString(in: profile, keys: ["name", "displayName", "ispName", "id", "_id"]) ?? "unknown-wan"
-            let state = ruleStateText(from: profile)
-            let packetLoss = firstPositiveValue(in: profile, keys: ["packetLoss", "packet_loss", "lossPct", "loss_percent"], nestedKeys: ["health", "statistics", "stats"]) ?? 0
-            let latency = firstPositiveValue(in: profile, keys: ["latency", "avgLatency", "latencyMs", "latency_ms"], nestedKeys: ["health", "statistics", "stats"]) ?? 0
-            let jitter = firstPositiveValue(in: profile, keys: ["jitter", "jitterMs", "jitter_ms"], nestedKeys: ["health", "statistics", "stats"]) ?? 0
-            let penalty = (stateLooksHealthy(state) ? 0 : 100) + packetLoss * 5 + (latency / 10) + (jitter / 5)
-            let healthyScore = max(0, 100 - penalty)
-            switch metric {
-            case .healthy:
-                guard healthyScore > 0 else { return nil }
-                return RankedEntityResult(
-                    label: "wan_profile=\(name)",
-                    value: healthyScore,
-                    valueText: String(format: "%.0f", healthyScore),
-                    detail: "state=\(state.isEmpty ? "unknown" : state), loss=\(Int(packetLoss))%, latency=\(Int(latency))ms, jitter=\(Int(jitter))ms"
-                )
-            case .unhealthy:
-                guard penalty > 0 else { return nil }
-                return RankedEntityResult(
-                    label: "wan_profile=\(name)",
-                    value: penalty,
-                    valueText: String(format: "%.0f", penalty),
-                    detail: "state=\(state.isEmpty ? "unknown" : state), loss=\(Int(packetLoss))%, latency=\(Int(latency))ms, jitter=\(Int(jitter))ms"
-                )
-            }
-        }
-        .sorted {
-            if $0.value == $1.value { return $0.label < $1.label }
-            return metric == .healthy ? ($0.value > $1.value) : ($0.value > $1.value)
-        }
+        return profiles.compactMap { rankedWANProfile($0, metric: metric) }
+            .sorted { $0.value == $1.value ? $0.label < $1.label : $0.value > $1.value }
     }
 
     /// Ranks DNS policies by the number of explicit clients or devices they target.
     private func rankDNSPoliciesByClientCount() async throws -> [RankedEntityResult] {
         let policies = try await queryService.queryItems("dns-policies")
-        return policies.compactMap { policy in
-            let count = targetCount(for: policy)
-            guard count > 0 else { return nil }
-            let label = firstString(in: policy, keys: ["name", "id", "_id"]) ?? "unknown-policy"
-            return RankedEntityResult(
-                label: "dns_policy=\(label)",
-                value: Double(count),
-                valueText: "\(count)",
-                detail: "policy_id=\(firstString(in: policy, keys: ["id", "_id"]) ?? "unknown")"
-            )
-        }
-        .sorted { $0.value == $1.value ? $0.label < $1.label : $0.value > $1.value }
+        return rankedTargetCounts(
+            policies,
+            labelPrefix: "dns_policy",
+            detailPrefix: "policy_id",
+            countExtractor: { targetCount(for: $0) }
+        )
     }
 
     /// Ranks simple app-block rules by how many client targets they contain.
     private func rankAppBlocksByTargetCount(siteRef: String) async throws -> [RankedEntityResult] {
         let payload = try await apiClient.getJSON(path: "/proxy/network/v2/api/site/\(siteRef)/firewall-app-blocks")
         let rules = rowsFromAnyPayload(payload)
-        return rules.compactMap { rule in
-            let count = max(targetCount(for: rule), stringCandidates(in: rule, keys: ["client_macs"]).count)
-            guard count > 0 else { return nil }
-            let label = firstString(in: rule, keys: ["name", "_id", "id"]) ?? "unknown-app-block"
+        return rankedTargetCounts(
+            rules,
+            labelPrefix: "app_block",
+            detailPrefix: "site_ref",
+            countExtractor: { max(targetCount(for: $0), stringCandidates(in: $0, keys: ["client_macs"]).count) },
+            detailValue: siteRef
+        )
+    }
+
+    private func rankedRuleHits(
+        _ rows: [[String: Any]],
+        labelPrefix: String,
+        detailPrefix: String
+    ) -> [RankedEntityResult] {
+        rows.compactMap { row in
+            let hits = firstPositiveValue(
+                in: row,
+                keys: ["hitCount", "hit_count", "hits", "packetCount", "matchCount", "matchedPackets"],
+                nestedKeys: ["statistics", "stats"]
+            )
+            guard let hits, hits > 0 else { return nil }
             return RankedEntityResult(
-                label: "app_block=\(label)",
-                value: Double(count),
-                valueText: "\(count)",
-                detail: "site_ref=\(siteRef)"
+                label: "\(labelPrefix)=\(ruleDisplayLabel(row))",
+                value: hits,
+                valueText: String(format: "%.0f", hits),
+                detail: "\(detailPrefix)=\(ruleIdentifier(row))"
             )
         }
         .sorted { $0.value == $1.value ? $0.label < $1.label : $0.value > $1.value }
+    }
+
+    private func rankedVPNTunnel(_ tunnel: [String: Any], metric: VPNTunnelMetric) -> RankedEntityResult? {
+        let state = ruleStateText(from: tunnel)
+        let isUp = stateLooksHealthy(state)
+        let label = "vpn_tunnel=\(vpnTunnelLabel(tunnel))"
+        let detail = vpnTunnelLastSeenDetail(tunnel)
+        let age = vpnTunnelAge(tunnel)
+
+        switch metric {
+        case .down:
+            guard !isUp else { return nil }
+            return RankedEntityResult(
+                label: label,
+                value: age > 0 ? age : 1,
+                valueText: state.isEmpty ? "down" : state,
+                detail: detail
+            )
+        case .up:
+            guard isUp else { return nil }
+            return RankedEntityResult(
+                label: label,
+                value: latestDate(in: tunnel, keys: vpnTunnelLastSeenKeys)?.timeIntervalSince1970 ?? 1,
+                valueText: state.isEmpty ? "up" : state,
+                detail: detail
+            )
+        case .stale:
+            guard age > 0 else { return nil }
+            return RankedEntityResult(
+                label: label,
+                value: age,
+                valueText: String(format: "%.0f min", age / 60),
+                detail: "state=\(state.isEmpty ? "unknown" : state)"
+            )
+        }
+    }
+
+    private var vpnTunnelLastSeenKeys: [String] {
+        ["lastSeen", "last_seen", "lastConnected", "connectedAt", "updatedAt", "lastHandshake", "last_handshake"]
+    }
+
+    private func vpnTunnelLabel(_ tunnel: [String: Any]) -> String {
+        firstString(in: tunnel, keys: ["name", "displayName", "remoteSiteName", "peerName", "id", "_id"]) ?? "unknown-tunnel"
+    }
+
+    private func vpnTunnelAge(_ tunnel: [String: Any]) -> Double {
+        latestDate(in: tunnel, keys: vpnTunnelLastSeenKeys).map { max(0, Date().timeIntervalSince($0)) } ?? 0
+    }
+
+    private func vpnTunnelLastSeenDetail(_ tunnel: [String: Any]) -> String {
+        latestDate(in: tunnel, keys: vpnTunnelLastSeenKeys).map { "last_seen=\(isoDateString($0))" } ?? "last_seen=unknown"
+    }
+
+    private func rankedWANProfile(_ profile: [String: Any], metric: WANHealthMetric) -> RankedEntityResult? {
+        let telemetry = wanProfileTelemetry(profile)
+        let detail = wanProfileDetail(telemetry)
+        let label = "wan_profile=\(wanProfileLabel(profile))"
+
+        switch metric {
+        case .healthy:
+            guard telemetry.healthyScore > 0 else { return nil }
+            return RankedEntityResult(
+                label: label,
+                value: telemetry.healthyScore,
+                valueText: String(format: "%.0f", telemetry.healthyScore),
+                detail: detail
+            )
+        case .unhealthy:
+            guard telemetry.penalty > 0 else { return nil }
+            return RankedEntityResult(
+                label: label,
+                value: telemetry.penalty,
+                valueText: String(format: "%.0f", telemetry.penalty),
+                detail: detail
+            )
+        }
+    }
+
+    private func wanProfileLabel(_ profile: [String: Any]) -> String {
+        firstString(in: profile, keys: ["name", "displayName", "ispName", "id", "_id"]) ?? "unknown-wan"
+    }
+
+    private func wanProfileTelemetry(_ profile: [String: Any]) -> (state: String, packetLoss: Double, latency: Double, jitter: Double, penalty: Double, healthyScore: Double) {
+        let state = ruleStateText(from: profile)
+        let packetLoss = firstPositiveValue(in: profile, keys: ["packetLoss", "packet_loss", "lossPct", "loss_percent"], nestedKeys: ["health", "statistics", "stats"]) ?? 0
+        let latency = firstPositiveValue(in: profile, keys: ["latency", "avgLatency", "latencyMs", "latency_ms"], nestedKeys: ["health", "statistics", "stats"]) ?? 0
+        let jitter = firstPositiveValue(in: profile, keys: ["jitter", "jitterMs", "jitter_ms"], nestedKeys: ["health", "statistics", "stats"]) ?? 0
+        let penalty = (stateLooksHealthy(state) ? 0 : 100) + packetLoss * 5 + (latency / 10) + (jitter / 5)
+        let healthyScore = max(0, 100 - penalty)
+        return (state, packetLoss, latency, jitter, penalty, healthyScore)
+    }
+
+    private func wanProfileDetail(_ telemetry: (state: String, packetLoss: Double, latency: Double, jitter: Double, penalty: Double, healthyScore: Double)) -> String {
+        "state=\(telemetry.state.isEmpty ? "unknown" : telemetry.state), loss=\(Int(telemetry.packetLoss))%, latency=\(Int(telemetry.latency))ms, jitter=\(Int(telemetry.jitter))ms"
+    }
+
+    private func rankedTargetCounts(
+        _ rows: [[String: Any]],
+        labelPrefix: String,
+        detailPrefix: String,
+        countExtractor: ([String: Any]) -> Int,
+        detailValue: String? = nil
+    ) -> [RankedEntityResult] {
+        rows.compactMap { row in
+            let count = countExtractor(row)
+            guard count > 0 else { return nil }
+            let label = firstString(in: row, keys: ["name", "_id", "id"]) ?? "unknown"
+            let detail = detailValue ?? ruleIdentifier(row)
+            return RankedEntityResult(
+                label: "\(labelPrefix)=\(label)",
+                value: Double(count),
+                valueText: "\(count)",
+                detail: "\(detailPrefix)=\(detail)"
+            )
+        }
+        .sorted { $0.value == $1.value ? $0.label < $1.label : $0.value > $1.value }
+    }
+
+    private func ruleDisplayLabel(_ row: [String: Any]) -> String {
+        firstString(in: row, keys: ["name", "id", "_id"]) ?? "unknown-rule"
+    }
+
+    private func ruleIdentifier(_ row: [String: Any]) -> String {
+        firstString(in: row, keys: ["id", "_id"]) ?? "unknown"
     }
 
     /// Normalizes ranking tokens so tool arguments can use spaces, hyphens, or underscores interchangeably.
@@ -1571,6 +1872,28 @@ private struct RankedEntityResult {
     let detail: String
 }
 
+private struct NetworkRankingRequest {
+    let entityType: String
+    let metric: String
+    let limit: Int
+    let includeInactive: Bool
+    let siteRef: String
+
+    var displayEntityType: String {
+        entityType.replacingOccurrences(of: "_", with: " ")
+    }
+}
+
+private struct AccessPointRankingContext {
+    let deviceNameByID: [String: String]
+    let onlineDeviceIDs: Set<String>
+}
+
+private struct SwitchPortRankingContext {
+    let devices: [[String: Any]]
+    let deviceNameByID: [String: String]
+}
+
 private enum AccessPointChurnKind {
     case roam
     case disconnect
@@ -1597,9 +1920,37 @@ private enum WANHealthMetric {
 }
 
 private enum ClientRankingKind {
+    struct ToolRequest {
+        let kind: ClientRankingKind
+        let singleResult: Bool
+
+        func resolvedLimit(rawLimit: String?) -> Int? {
+            singleResult ? 1 : Int(rawLimit ?? "")
+        }
+    }
+
     case slowestSpeed
     case weakestSignal
     case highestLatency
+
+    static func request(forToolName toolName: String) -> ToolRequest? {
+        switch toolName {
+        case "find_slowest_client":
+            return ToolRequest(kind: .slowestSpeed, singleResult: true)
+        case "top_slowest_clients":
+            return ToolRequest(kind: .slowestSpeed, singleResult: false)
+        case "find_weakest_wifi_client":
+            return ToolRequest(kind: .weakestSignal, singleResult: true)
+        case "top_weakest_wifi_clients":
+            return ToolRequest(kind: .weakestSignal, singleResult: false)
+        case "find_highest_latency_client":
+            return ToolRequest(kind: .highestLatency, singleResult: true)
+        case "top_highest_latency_clients":
+            return ToolRequest(kind: .highestLatency, singleResult: false)
+        default:
+            return nil
+        }
+    }
 
     var metricLabel: String {
         switch self {
@@ -2331,6 +2682,25 @@ private actor AppBlockApprovalStore {
 }
 
 private struct UniFiAppBlockService {
+    private struct SimpleAppBlockApplyResult {
+        let rules: [[String: Any]]
+        let createdCount: Int
+        let updatedCount: Int
+        let resultLines: [String]
+    }
+
+    private struct SimpleAppBlockRemovalResult {
+        let rules: [[String: Any]]
+        let deletedCount: Int
+        let updatedCount: Int
+    }
+
+    private enum SimpleAppBlockRemovalAction {
+        case delete
+        case update([String: Any])
+        case unchanged
+    }
+
     private let apiClient: UniFiAPIClient
     private let approvedAppBlockClients: [ClientModificationApproval]
     private let approvals = AppBlockApprovalStore()
@@ -2580,50 +2950,21 @@ private struct UniFiAppBlockService {
 
         // UniFi persists simple app blocks by replacing the full collection, not by
         // posting individual traffic rules, so we fetch, merge, then POST the whole list.
-        let path = "/proxy/network/v2/api/site/\(plan.siteRef)/firewall-app-blocks"
-        var existingRules = try await fetchSimpleAppBlocks(siteRef: plan.siteRef)
-        var createdCount = 0
-        var updatedCount = 0
-        var resultLines: [String] = []
-        var nextRules = existingRules
-        for rawPayload in plan.payloads {
-            let payload = materializeSimpleAppBlockPayload(rawPayload)
-            debugLog(
-                "apply_client_app_block materialized payload (site_ref=\(plan.siteRef), payload=\(previewJSON(payload)))",
-                category: "Tools"
-            )
-            let targetClientMac = canonicalMAC(String(describing: (payload["client_macs"] as? [Any])?.first ?? "")) ?? ""
-            guard !targetClientMac.isEmpty else {
-                return "Error: App-block apply aborted because client_macs is missing or invalid for client '\(plan.clientName)'. Re-run plan_client_app_block and select the client by MAC."
-            }
-
-            if let existing = findMatchingRule(for: payload, in: existingRules),
-               let ruleID = trafficRuleID(existing)
-            {
-                let merged = mergeRule(existing: existing, incoming: payload)
-                updatedCount += 1
-                nextRules = nextRules.map { trafficRuleID($0) == ruleID ? merged : $0 }
-                resultLines.append("updated \(ruleID): \(String(previewJSON(merged).prefix(220)))")
-                continue
-            }
-
-            createdCount += 1
-            nextRules.append(payload)
-            resultLines.append("created: \(String(previewJSON(payload).prefix(220)))")
-        }
-        let response = try await writeSimpleAppBlocks(path: path, blocks: nextRules)
-        existingRules = try await fetchSimpleAppBlocks(siteRef: plan.siteRef)
-        let verifiedCount = plan.payloads.filter { findMatchingRule(for: materializeSimpleAppBlockPayload($0), in: existingRules) != nil }.count
+        let existingRules = try await fetchSimpleAppBlocks(siteRef: plan.siteRef)
+        let applyResult = try buildApplyResult(for: plan, existingRules: existingRules)
+        let response = try await writeSimpleAppBlocks(siteRef: plan.siteRef, blocks: applyResult.rules)
+        let verifiedRules = try await fetchSimpleAppBlocks(siteRef: plan.siteRef)
+        let verifiedCount = verifyAppliedRuleCount(payloads: plan.payloads, in: verifiedRules)
         return """
         App-block apply completed:
         - client: \(plan.clientName)
         - site_ref: \(plan.siteRef)
-        - rules_created: \(createdCount)
-        - rules_updated: \(updatedCount)
+        - rules_created: \(applyResult.createdCount)
+        - rules_updated: \(applyResult.updatedCount)
         - verified_rules: \(verifiedCount)/\(plan.payloads.count)
         - response_preview:
         \(String(previewJSON(response).prefix(220)))
-        \(resultLines.joined(separator: "\n"))
+        \(applyResult.resultLines.joined(separator: "\n"))
         """
     }
 
@@ -2663,56 +3004,17 @@ private struct UniFiAppBlockService {
 
         // Deletions use the same collection-write flow as creation, so we edit the
         // in-memory list and submit the full replacement set once.
-        var rules = try await fetchSimpleAppBlocks(siteRef: siteRef)
-        let path = "/proxy/network/v2/api/site/\(siteRef)/firewall-app-blocks"
-        var deleted = 0
-        var updated = 0
+        let rules = try await fetchSimpleAppBlocks(siteRef: siteRef)
+        let removal = removeTargetsFromRules(rules, clientMac: clientMac, appIDs: appIDs, categoryIDs: categoryIDs)
 
-        for rule in rules {
-            guard isSimpleAppRule(rule), ruleTargetsClient(rule, mac: clientMac) else { continue }
-            guard let ruleID = trafficRuleID(rule) else { continue }
-            let targetType = normalize(rule["target_type"] ?? rule["targetType"])
-
-            if appIDs.isEmpty, categoryIDs.isEmpty {
-                rules.removeAll { trafficRuleID($0) == ruleID }
-                deleted += 1
-                continue
-            }
-
-            var next = rule
-            if targetType == "app_id", !appIDs.isEmpty {
-                let kept = arrayStrings(rule["app_ids"]).filter { !appIDs.contains(normalize($0)) }
-                next["app_ids"] = kept
-                if kept.isEmpty {
-                    rules.removeAll { trafficRuleID($0) == ruleID }
-                    deleted += 1
-                    continue
-                }
-            } else if targetType == "app_category", !categoryIDs.isEmpty {
-                let kept = arrayStrings(rule["app_category_ids"]).filter { !categoryIDs.contains(normalize($0)) }
-                next["app_category_ids"] = kept
-                if kept.isEmpty {
-                    rules.removeAll { trafficRuleID($0) == ruleID }
-                    deleted += 1
-                    continue
-                }
-            } else {
-                continue
-            }
-
-            let updatedRule = materializeSimpleAppBlockPayload(next)
-            rules = rules.map { trafficRuleID($0) == ruleID ? updatedRule : $0 }
-            updated += 1
-        }
-
-        _ = try await writeSimpleAppBlocks(path: path, blocks: rules)
+        _ = try await writeSimpleAppBlocks(siteRef: siteRef, blocks: removal.rules)
 
         return """
         App-block removal completed:
         - client: \(clientDisplayName(client))
         - site_ref: \(siteRef)
-        - rules_deleted: \(deleted)
-        - rules_updated: \(updated)
+        - rules_deleted: \(removal.deletedCount)
+        - rules_updated: \(removal.updatedCount)
         """
     }
 
@@ -2739,21 +3041,12 @@ private struct UniFiAppBlockService {
         let appNameByID = nameMapByID(applications)
         let categoryNameByID = nameMapByID(categories)
 
-        let rules = try await fetchSimpleAppBlocks(siteRef: siteRef)
-            .filter { isSimpleAppRule($0) && ruleTargetsClient($0, mac: clientMac) }
-
-        let lines = rules.enumerated().map { index, rule in
-            let ruleID = trafficRuleID(rule) ?? "unknown"
-            let targetType = canonicalTargetType(rule)
-            let action = String(describing: rule["action"] ?? "BLOCK")
-            let schedule = scheduleMode(rule)
-            let appIDs = uniqueStrings(arrayStrings(rule["app_ids"]) + arrayStrings(rule["appIds"]))
-            let categoryIDs = uniqueStrings(arrayStrings(rule["app_category_ids"]) + arrayStrings(rule["appCategoryIds"]))
-            let appSummary = summarizeResolvedIDs(appIDs, nameMap: appNameByID)
-            let categorySummary = summarizeResolvedIDs(categoryIDs, nameMap: categoryNameByID)
-            let targetLabel = targetType == "app_category" ? "APP_CATEGORY" : "APP"
-            return "\(index + 1). id=\(ruleID), target=\(targetLabel), action=\(action), schedule=\(schedule), apps=\(appSummary), categories=\(categorySummary)"
-        }
+        let rules = try await clientAppBlockRules(siteRef: siteRef, clientMac: clientMac)
+        let lines = formattedClientAppBlockLines(
+            rules: rules,
+            appNameByID: appNameByID,
+            categoryNameByID: categoryNameByID
+        )
 
         return """
         Client app-block rules:
@@ -2867,26 +3160,8 @@ private struct UniFiAppBlockService {
 
     /// Fetches the current simple app-block collection from UniFi.
     private func fetchSimpleAppBlocks(siteRef: String) async throws -> [[String: Any]] {
-        let path = "/proxy/network/v2/api/site/\(siteRef)/firewall-app-blocks"
-        let payload = try await apiClient.getJSON(path: path)
-        if let rows = payload as? [[String: Any]] {
-            return rows
-        }
-        if let dict = payload as? [String: Any], let data = dict["data"] as? [[String: Any]] {
-            return data
-        }
-        return []
-    }
-
-    /// Normalizes a raw rule payload into the dictionary shape used by the app-block helpers.
-    private func normalizeTrafficRule(_ payload: Any) -> [String: Any]? {
-        if let dict = payload as? [String: Any] {
-            if let data = dict["data"] as? [[String: Any]], let first = data.first {
-                return first
-            }
-            return dict
-        }
-        return nil
+        let payload = try await apiClient.getJSON(path: simpleAppBlockPath(siteRef: siteRef))
+        return rowsFromPayload(payload)
     }
 
     /// Returns the first usable identifier for an existing simple app-block rule.
@@ -2925,6 +3200,12 @@ private struct UniFiAppBlockService {
         })
     }
 
+    /// Filters the full collection down to simple app-block rules for one resolved client.
+    private func clientAppBlockRules(siteRef: String, clientMac: String) async throws -> [[String: Any]] {
+        try await fetchSimpleAppBlocks(siteRef: siteRef)
+            .filter { isSimpleAppRule($0) && ruleTargetsClient($0, mac: clientMac) }
+    }
+
     /// Merges newly requested app or category targets into an existing simple app-block rule.
     private func mergeRule(existing: [String: Any], incoming: [String: Any]) -> [String: Any] {
         var merged = existing
@@ -2951,6 +3232,129 @@ private struct UniFiAppBlockService {
             merged["app_ids"] = []
         }
         return merged
+    }
+
+    /// Merges one approved plan into the fetched collection and returns the replacement write payload.
+    private func buildApplyResult(
+        for plan: AppBlockApprovalStore.PendingPlan,
+        existingRules: [[String: Any]]
+    ) throws -> SimpleAppBlockApplyResult {
+        var createdCount = 0
+        var updatedCount = 0
+        var resultLines: [String] = []
+        var nextRules = existingRules
+
+        for rawPayload in plan.payloads {
+            let payload = materializeSimpleAppBlockPayload(rawPayload)
+            debugLog(
+                "apply_client_app_block materialized payload (site_ref=\(plan.siteRef), payload=\(previewJSON(payload)))",
+                category: "Tools"
+            )
+            try validateAppBlockPayloadClientMAC(payload, clientName: plan.clientName)
+
+            if let existing = findMatchingRule(for: payload, in: nextRules),
+               let ruleID = trafficRuleID(existing)
+            {
+                let merged = mergeRule(existing: existing, incoming: payload)
+                updatedCount += 1
+                nextRules = nextRules.map { trafficRuleID($0) == ruleID ? merged : $0 }
+                resultLines.append("updated \(ruleID): \(String(previewJSON(merged).prefix(220)))")
+                continue
+            }
+
+            createdCount += 1
+            nextRules.append(payload)
+            resultLines.append("created: \(String(previewJSON(payload).prefix(220)))")
+        }
+
+        return SimpleAppBlockApplyResult(
+            rules: nextRules,
+            createdCount: createdCount,
+            updatedCount: updatedCount,
+            resultLines: resultLines
+        )
+    }
+
+    /// Ensures an approved plan still resolves to a concrete target MAC before we rewrite the collection.
+    private func validateAppBlockPayloadClientMAC(_ payload: [String: Any], clientName: String) throws {
+        let targetClientMac = canonicalMAC(String(describing: (payload["client_macs"] as? [Any])?.first ?? "")) ?? ""
+        guard !targetClientMac.isEmpty else {
+            throw NSError(
+                domain: "UniFiAppBlockService",
+                code: 1,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "App-block apply aborted because client_macs is missing or invalid for client '\(clientName)'. Re-run plan_client_app_block and select the client by MAC."
+                ]
+            )
+        }
+    }
+
+    /// Counts how many planned payloads can be found again after the replacement write completes.
+    private func verifyAppliedRuleCount(payloads: [[String: Any]], in rules: [[String: Any]]) -> Int {
+        payloads.filter { findMatchingRule(for: materializeSimpleAppBlockPayload($0), in: rules) != nil }.count
+    }
+
+    /// Applies removals in memory so the caller can do one collection replacement write.
+    private func removeTargetsFromRules(
+        _ rules: [[String: Any]],
+        clientMac: String,
+        appIDs: Set<String>,
+        categoryIDs: Set<String>
+    ) -> SimpleAppBlockRemovalResult {
+        var nextRules = rules
+        var deletedCount = 0
+        var updatedCount = 0
+
+        for rule in rules {
+            guard isSimpleAppRule(rule), ruleTargetsClient(rule, mac: clientMac) else { continue }
+            guard let ruleID = trafficRuleID(rule) else { continue }
+
+            switch removalAction(for: rule, appIDs: appIDs, categoryIDs: categoryIDs) {
+            case .delete:
+                nextRules.removeAll { trafficRuleID($0) == ruleID }
+                deletedCount += 1
+            case let .update(updatedRule):
+                nextRules = nextRules.map { trafficRuleID($0) == ruleID ? updatedRule : $0 }
+                updatedCount += 1
+            case .unchanged:
+                continue
+            }
+        }
+
+        return SimpleAppBlockRemovalResult(
+            rules: nextRules,
+            deletedCount: deletedCount,
+            updatedCount: updatedCount
+        )
+    }
+
+    /// Decides whether one existing rule should be deleted, updated, or left alone by a removal request.
+    private func removalAction(
+        for rule: [String: Any],
+        appIDs: Set<String>,
+        categoryIDs: Set<String>
+    ) -> SimpleAppBlockRemovalAction {
+        if appIDs.isEmpty, categoryIDs.isEmpty {
+            return .delete
+        }
+
+        switch canonicalTargetType(rule) {
+        case "app_id" where !appIDs.isEmpty:
+            let kept = arrayStrings(rule["app_ids"]).filter { !appIDs.contains(normalize($0)) }
+            guard !kept.isEmpty else { return .delete }
+            var next = rule
+            next["app_ids"] = kept
+            return .update(materializeSimpleAppBlockPayload(next))
+        case "app_category" where !categoryIDs.isEmpty:
+            let kept = arrayStrings(rule["app_category_ids"]).filter { !categoryIDs.contains(normalize($0)) }
+            guard !kept.isEmpty else { return .delete }
+            var next = rule
+            next["app_category_ids"] = kept
+            return .update(materializeSimpleAppBlockPayload(next))
+        default:
+            return .unchanged
+        }
     }
 
     /// Builds the normalized payload sent to UniFi's firewall-app-blocks collection API.
@@ -3033,14 +3437,19 @@ private struct UniFiAppBlockService {
         return devices
     }
 
+    /// Returns the UniFi collection endpoint used for full simple-app-block replacement writes.
+    private func simpleAppBlockPath(siteRef: String) -> String {
+        "/proxy/network/v2/api/site/\(siteRef)/firewall-app-blocks"
+    }
+
     /// Posts the full simple app-block collection back to UniFi in one replacement write.
-    private func writeSimpleAppBlocks(path: String, blocks: [[String: Any]]) async throws -> Any {
+    private func writeSimpleAppBlocks(siteRef: String, blocks: [[String: Any]]) async throws -> Any {
         // This endpoint expects the complete simple-app-block collection in one POST.
         debugLog(
             "SimpleAppBlocks POST payload: count=\(blocks.count), first=\(blocks.first.map(summarizeTrafficRulePayload) ?? "none")",
             category: "UniFiAPI"
         )
-        return try await apiClient.postJSON(path: path, body: blocks)
+        return try await apiClient.postJSON(path: simpleAppBlockPath(siteRef: siteRef), body: blocks)
     }
 
     /// Builds a compact log summary of a simple app-block payload before submission.
@@ -3065,6 +3474,26 @@ private struct UniFiAppBlockService {
         }()
 
         return "action=\(action), matchingTarget=\(matchingTarget), target_type=\(targetType), client_macs=\(clientMACs), targetDevices.count=\(targetDeviceCount), app_ids.count=\(appCount), app_category_ids.count=\(categoryCount), schedule=\(scheduleMode)"
+    }
+
+    /// Formats the per-rule lines for list_client_app_block so the route method stays focused on orchestration.
+    private func formattedClientAppBlockLines(
+        rules: [[String: Any]],
+        appNameByID: [String: String],
+        categoryNameByID: [String: String]
+    ) -> [String] {
+        rules.enumerated().map { index, rule in
+            let ruleID = trafficRuleID(rule) ?? "unknown"
+            let targetType = canonicalTargetType(rule)
+            let action = String(describing: rule["action"] ?? "BLOCK")
+            let schedule = scheduleMode(rule)
+            let appIDs = uniqueStrings(arrayStrings(rule["app_ids"]) + arrayStrings(rule["appIds"]))
+            let categoryIDs = uniqueStrings(arrayStrings(rule["app_category_ids"]) + arrayStrings(rule["appCategoryIds"]))
+            let appSummary = summarizeResolvedIDs(appIDs, nameMap: appNameByID)
+            let categorySummary = summarizeResolvedIDs(categoryIDs, nameMap: categoryNameByID)
+            let targetLabel = targetType == "app_category" ? "APP_CATEGORY" : "APP"
+            return "\(index + 1). id=\(ruleID), target=\(targetLabel), action=\(action), schedule=\(schedule), apps=\(appSummary), categories=\(categorySummary)"
+        }
     }
 
     /// Builds a shortened JSON preview string for debug logging.

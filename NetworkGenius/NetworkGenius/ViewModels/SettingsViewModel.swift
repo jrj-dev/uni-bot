@@ -3,15 +3,37 @@ import SwiftUI
 import Darwin
 import CFNetwork
 
+/// View-friendly representation of one UniFi client option, keeping stable identity
+/// fields separate from the rendered subtitle so merge logic does not need to
+/// reverse-engineer structured data from UI text.
 struct GuardrailClientOption: Identifiable, Hashable {
     let id: String
     let selector: String
     let title: String
     let subtitle: String
+    let hostname: String
+    let mac: String
+    let ip: String
     var isActive: Bool
 
+    var approvalKey: String {
+        selector.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    var identityTokens: [String] {
+        [
+            mac.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+            SettingsViewModel.normalizeHostToken(hostname),
+            title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+        ].filter { !$0.isEmpty }
+    }
+
+    var hasMAC: Bool {
+        !mac.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     var searchText: String {
-        "\(title) \(subtitle) \(selector)".lowercased()
+        "\(title) \(subtitle) \(selector) \(hostname) \(mac) \(ip)".lowercased()
     }
 }
 
@@ -232,24 +254,14 @@ final class SettingsViewModel: ObservableObject {
         clientModificationApprovalResult = nil
         defer { isLoadingClientModificationApprovals = false }
 
-        let normalizedConsoleURL = UniFiAPIClient.normalizeBaseURL(consoleURL)
-        guard !normalizedConsoleURL.isEmpty else {
-            clientModificationApprovalResult = "Failed: Console URL is invalid."
+        guard let client = prepareUniFiSettingsClient(errorSink: \.clientModificationApprovalResult) else {
             return
-        }
-        guard !normalizedKey(unifiAPIKey).isEmpty || KeychainHelper.exists(key: .unifiAPIKey) else {
-            clientModificationApprovalResult = "Failed: UniFi API key is required."
-            return
-        }
-
-        let hadKey = KeychainHelper.exists(key: .unifiAPIKey)
-        if !normalizedKey(unifiAPIKey).isEmpty {
-            KeychainHelper.save(key: .unifiAPIKey, string: normalizedKey(unifiAPIKey))
         }
 
         do {
-            let client = UniFiAPIClient(baseURL: normalizedConsoleURL, allowSelfSigned: allowSelfSignedCerts)
-            let options = try await fetchGuardrailClientOptions(client: client)
+            let options = try await withPreparedUniFiAPIKey {
+                try await fetchGuardrailClientOptions(client: client)
+            }
             availableGuardrailClients = options
             clientModificationApprovals = mergeGuardrailOptionsIntoApprovals(
                 options,
@@ -261,10 +273,6 @@ final class SettingsViewModel: ObservableObject {
         } catch {
             clientModificationApprovalResult = "Failed: \(error.localizedDescription)"
         }
-
-        if !hadKey && normalizedKey(unifiAPIKey).isEmpty {
-            KeychainHelper.delete(key: .unifiAPIKey)
-        }
     }
 
     func removeClientModificationApproval(_ approval: ClientModificationApproval) {
@@ -273,7 +281,7 @@ final class SettingsViewModel: ObservableObject {
 
     /// Adds a historical client into the main guardrail list without automatically approving writes.
     func addLegacyGuardrailClient(_ option: GuardrailClientOption) {
-        let key = normalizedApprovalKey(from: option.selector)
+        let key = option.approvalKey
         guard !key.isEmpty else { return }
         guard !clientModificationApprovals.contains(where: { $0.approvalKey == key }) else {
             legacyGuardrailClientsLoadResult = "\(option.title) is already in Client Guardrails."
@@ -285,9 +293,9 @@ final class SettingsViewModel: ObservableObject {
                 approvalKey: key,
                 clientID: option.id,
                 name: option.title,
-                hostname: inferredHostname(from: option),
-                mac: inferredMAC(from: option),
-                ip: inferredIP(from: option),
+                hostname: option.hostname,
+                mac: option.mac,
+                ip: option.ip,
                 allowClientModifications: false,
                 allowAppBlocks: false,
                 isCurrentlyConnected: option.isActive,
@@ -295,7 +303,7 @@ final class SettingsViewModel: ObservableObject {
             )
         )
         sortClientModificationApprovals()
-        availableLegacyGuardrailClients.removeAll { normalizedApprovalKey(from: $0.selector) == key }
+        availableLegacyGuardrailClients.removeAll { $0.approvalKey == key }
         legacyGuardrailClientsLoadResult = "Added \(option.title) to Client Guardrails."
     }
 
@@ -321,16 +329,14 @@ final class SettingsViewModel: ObservableObject {
         connectionTestResult = nil
         defer { isTesting = false }
 
-        let normalizedConsoleURL = UniFiAPIClient.normalizeBaseURL(consoleURL)
-        let client = UniFiAPIClient(baseURL: normalizedConsoleURL, allowSelfSigned: allowSelfSignedCerts)
-        // Temporarily save the key so the client can use it
-        let hadKey = KeychainHelper.exists(key: .unifiAPIKey)
-        if !unifiAPIKey.isEmpty {
-            KeychainHelper.save(key: .unifiAPIKey, string: unifiAPIKey)
+        guard let client = prepareUniFiSettingsClient(errorSink: \.connectionTestResult) else {
+            return
         }
 
         do {
-            let data = try await client.getJSON(path: "/proxy/network/integration/v1/sites")
+            let data = try await withPreparedUniFiAPIKey {
+                try await client.getJSON(path: "/proxy/network/integration/v1/sites")
+            }
             if let dict = data as? [String: Any], let items = dict["data"] as? [Any] {
                 connectionTestResult = "Connected! Found \(items.count) site(s)."
             } else {
@@ -338,9 +344,6 @@ final class SettingsViewModel: ObservableObject {
             }
         } catch {
             connectionTestResult = "Failed: \(error.localizedDescription)"
-            if !hadKey {
-                KeychainHelper.delete(key: .unifiAPIKey)
-            }
         }
     }
 
@@ -351,21 +354,12 @@ final class SettingsViewModel: ObservableObject {
         defer { isTestingLLMKey = false }
 
         do {
-            switch selectedProvider {
-            case .claude:
-                try await testClaudeKey()
-                llmKeyTestResult = "Connected! Claude API key is valid."
-            case .openai:
-                try await testOpenAIKey()
-                llmKeyTestResult = "Connected! OpenAI API key is valid."
-            case .lmStudio:
-                try await testLMStudioKey()
-                llmKeyTestResult = "Connected! LM Studio API key is valid."
-            }
+            try await validateSelectedLLMProviderKey()
+            llmKeyTestResult = selectedProviderSuccessMessage(selectedProvider)
         } catch let error as LLMError {
             llmKeyTestResult = "Failed: \(error.localizedDescription)"
         } catch {
-            llmKeyTestResult = "Failed: \(friendlyLMStudioError(error))"
+            llmKeyTestResult = "Failed: \(friendlyProviderError(error, provider: selectedProvider))"
         }
     }
 
@@ -375,34 +369,20 @@ final class SettingsViewModel: ObservableObject {
         guardrailClientsLoadResult = nil
         defer { isLoadingGuardrailClients = false }
 
-        let normalizedConsoleURL = UniFiAPIClient.normalizeBaseURL(consoleURL)
-        guard !normalizedConsoleURL.isEmpty else {
-            guardrailClientsLoadResult = "Failed: Console URL is invalid."
+        guard let client = prepareUniFiSettingsClient(errorSink: \.guardrailClientsLoadResult) else {
             return
-        }
-        guard !normalizedKey(unifiAPIKey).isEmpty || KeychainHelper.exists(key: .unifiAPIKey) else {
-            guardrailClientsLoadResult = "Failed: UniFi API key is required."
-            return
-        }
-
-        let hadKey = KeychainHelper.exists(key: .unifiAPIKey)
-        if !normalizedKey(unifiAPIKey).isEmpty {
-            KeychainHelper.save(key: .unifiAPIKey, string: normalizedKey(unifiAPIKey))
         }
 
         do {
-            let client = UniFiAPIClient(baseURL: normalizedConsoleURL, allowSelfSigned: allowSelfSignedCerts)
-            availableGuardrailClients = try await fetchGuardrailClientOptions(client: client)
+            availableGuardrailClients = try await withPreparedUniFiAPIKey {
+                try await fetchGuardrailClientOptions(client: client)
+            }
             let count = availableGuardrailClients.count
             guardrailClientsLoadResult = count == 0
                 ? "Loaded 0 clients."
                 : "Loaded \(count) clients (including inactive when available)."
         } catch {
             guardrailClientsLoadResult = "Failed: \(error.localizedDescription)"
-        }
-
-        if !hadKey && normalizedKey(unifiAPIKey).isEmpty {
-            KeychainHelper.delete(key: .unifiAPIKey)
         }
     }
 
@@ -412,40 +392,28 @@ final class SettingsViewModel: ObservableObject {
         legacyGuardrailClientsLoadResult = nil
         defer { isLoadingLegacyGuardrailClients = false }
 
-        let normalizedConsoleURL = UniFiAPIClient.normalizeBaseURL(consoleURL)
-        guard !normalizedConsoleURL.isEmpty else {
-            legacyGuardrailClientsLoadResult = "Failed: Console URL is invalid."
+        guard let client = prepareUniFiSettingsClient(errorSink: \.legacyGuardrailClientsLoadResult) else {
             return
-        }
-        guard !normalizedKey(unifiAPIKey).isEmpty || KeychainHelper.exists(key: .unifiAPIKey) else {
-            legacyGuardrailClientsLoadResult = "Failed: UniFi API key is required."
-            return
-        }
-
-        let hadKey = KeychainHelper.exists(key: .unifiAPIKey)
-        if !normalizedKey(unifiAPIKey).isEmpty {
-            KeychainHelper.save(key: .unifiAPIKey, string: normalizedKey(unifiAPIKey))
         }
 
         do {
-            let client = UniFiAPIClient(baseURL: normalizedConsoleURL, allowSelfSigned: allowSelfSignedCerts)
-            let currentOptions = try await fetchGuardrailClientOptions(client: client)
-            let currentKeys = Set(currentOptions.map { normalizedApprovalKey(from: $0.selector) })
+            let currentOptions = try await withPreparedUniFiAPIKey {
+                try await fetchGuardrailClientOptions(client: client)
+            }
+            let currentKeys = Set(currentOptions.map(\.approvalKey))
             let approvedKeys = Set(clientModificationApprovals.map(\.approvalKey))
-            availableLegacyGuardrailClients = try await fetchLegacyGuardrailClientOptions(
-                client: client,
-                excludingApprovalKeys: currentKeys.union(approvedKeys)
-            )
+            availableLegacyGuardrailClients = try await withPreparedUniFiAPIKey {
+                try await fetchLegacyGuardrailClientOptions(
+                    client: client,
+                    excludingApprovalKeys: currentKeys.union(approvedKeys)
+                )
+            }
             let count = availableLegacyGuardrailClients.count
             legacyGuardrailClientsLoadResult = count == 0
                 ? "Loaded 0 historical-only clients."
                 : "Loaded \(count) historical-only clients from UniFi legacy history."
         } catch {
             legacyGuardrailClientsLoadResult = "Failed: \(error.localizedDescription)"
-        }
-
-        if !hadKey && normalizedKey(unifiAPIKey).isEmpty {
-            KeychainHelper.delete(key: .unifiAPIKey)
         }
     }
 
@@ -528,21 +496,14 @@ final class SettingsViewModel: ObservableObject {
 
         do {
             let models = try await fetchLMStudioModels()
-            lmStudioModels = models
-            let selected = normalizedKey(lmStudioModel)
-            if models.contains(selected), !selected.isEmpty {
-                lmStudioModel = selected
-            } else if let first = models.first {
-                lmStudioModel = first
-                UserDefaults.standard.set(first, forKey: Self.lmStudioLastKnownGoodModelKey)
-            }
+            applyLoadedLMStudioModels(models)
             lmStudioModelListResult = models.isEmpty
                 ? "Connected, but no loaded models were returned."
                 : "Loaded \(models.count) model(s)."
         } catch let error as LLMError {
             lmStudioModelListResult = "Failed: \(error.localizedDescription)"
         } catch {
-            lmStudioModelListResult = "Failed: \(friendlyLMStudioError(error))"
+            lmStudioModelListResult = "Failed: \(friendlyProviderError(error, provider: .lmStudio))"
         }
     }
 
@@ -553,66 +514,24 @@ final class SettingsViewModel: ObservableObject {
         defer { isTestingLMStudioChat = false }
 
         do {
-            let model = try await resolveLMStudioModelForChat()
-            let apiKey = normalizedKey(lmStudioAPIKey)
-            guard !apiKey.isEmpty else {
-                throw LLMError.missingAPIKey
-            }
-            let url = try lmStudioURL(path: "/v1/chat/completions")
-            let payload: [String: Any] = [
-                "model": model,
-                "messages": [
-                    ["role": "user", "content": "reply with ok"],
-                ],
-            ]
-            var request = URLRequest(url: url)
-            request.httpMethod = "POST"
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-            request.timeoutInterval = 25
-            request.httpBody = try JSONSerialization.data(withJSONObject: payload)
-
-            debugLog("LM Studio chat test started (model=\(model), url=\(url.absoluteString))", category: "LLM")
-            let startedAt = Date()
-            let (data, response) = try await lmStudioSession.data(for: request)
-            if let http = response as? HTTPURLResponse {
-                let elapsedMS = Int(Date().timeIntervalSince(startedAt) * 1000)
-                debugLog("LM Studio chat test HTTP \(http.statusCode) in \(elapsedMS)ms", category: "LLM")
-            }
-            try validateHTTP(response: response, data: data)
-
-            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let choices = json["choices"] as? [[String: Any]],
-                  let first = choices.first,
-                  let message = first["message"] as? [String: Any],
-                  let content = message["content"] as? String
-            else {
-                throw LLMError.invalidResponse("LM Studio chat test returned an unexpected response format.")
-            }
-
+            let (model, content) = try await runLMStudioChatProbe()
             UserDefaults.standard.set(model, forKey: Self.lmStudioLastKnownGoodModelKey)
             lmStudioChatTestResult = "Connected! LM Studio responded: \(content.trimmingCharacters(in: .whitespacesAndNewlines))"
         } catch let error as LLMError {
             lmStudioChatTestResult = "Failed: \(error.localizedDescription)"
         } catch {
-            lmStudioChatTestResult = "Failed: \(friendlyLMStudioError(error))"
+            lmStudioChatTestResult = "Failed: \(friendlyProviderError(error, provider: .lmStudio))"
         }
     }
 
     /// Runs a lightweight OpenAI request to validate the configured API key.
     private func testOpenAIKey() async throws {
-        let apiKey = normalizedKey(openaiAPIKey)
-        guard !apiKey.isEmpty else {
-            throw LLMError.missingAPIKey
-        }
-
+        let apiKey = try requiredAPIKey(openaiAPIKey)
         var request = URLRequest(url: URL(string: "https://api.openai.com/v1/models")!)
         request.httpMethod = "GET"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.timeoutInterval = 20
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-        try validateHTTP(response: response, data: data)
+        try await runHTTPValidationRequest(request)
     }
 
     /// Builds the display option used for a saved guardrail client selector.
@@ -653,6 +572,9 @@ final class SettingsViewModel: ObservableObject {
             selector: selector,
             title: title,
             subtitle: detailParts.joined(separator: " • "),
+            hostname: hostname,
+            mac: mac,
+            ip: ip,
             isActive: isActive
         )
     }
@@ -731,18 +653,46 @@ final class SettingsViewModel: ObservableObject {
             configuredSiteID: configuredSiteID
         )
         let siteIDPath = resolvedSite.id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? resolvedSite.id
-        let siteRefQuery = resolvedSite.reference.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? resolvedSite.reference
-        let candidates: [String] = [
+        let candidatePaths = guardrailClientCandidatePaths(for: resolvedSite)
+        let selection = await selectGuardrailClientRows(from: candidatePaths, client: client)
+        let rows = selection.rows
+        if let selectedPath = selection.path {
+            debugLog("Guardrail clients selected endpoint: \(selectedPath) (rows=\(rows.count))", category: "Settings")
+        } else {
+            debugLog("Guardrail clients candidates returned no rows; falling back to active-only reconciliation", category: "Settings")
+        }
+
+        let activeRowsBySelector = await loadActiveClientRowsBySelector(
+            client: client,
+            siteIDPath: siteIDPath
+        )
+        return normalizeGuardrailClientOptions(rows, activeRowsBySelector: activeRowsBySelector)
+    }
+
+    /// Returns the ordered list of client endpoints to probe, preferring the widest
+    /// inactive/offline-capable path available on the current controller version.
+    private func guardrailClientCandidatePaths(for site: (id: String, reference: String)) -> [String] {
+        let siteIDPath = site.id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? site.id
+        let siteRefQuery = site.reference.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? site.reference
+        return [
             "/proxy/network/integration/v1/sites/\(siteIDPath)/clients?includeInactive=true",
             "/proxy/network/integration/v1/sites/\(siteIDPath)/clients?includeOffline=true",
             "/proxy/network/integration/v1/clients?site_id=\(siteRefQuery)&includeInactive=true",
             "/proxy/network/integration/v1/clients?site_id=\(siteRefQuery)",
             "/proxy/network/integration/v1/sites/\(siteIDPath)/clients",
         ]
+    }
 
+    /// Probes each candidate path and keeps the richest successful response so guardrail
+    /// loading can tolerate controller-version differences without hard failing.
+    private func selectGuardrailClientRows(
+        from candidatePaths: [String],
+        client: UniFiAPIClient
+    ) async -> (path: String?, rows: [[String: Any]]) {
         var selectedRows: [[String: Any]] = []
         var selectedPath: String?
-        for path in candidates {
+
+        for path in candidatePaths {
             do {
                 let rows = try await fetchGuardrailClientRows(path: path, client: client)
                 debugLog("Guardrail clients candidate succeeded (path=\(path), rows=\(rows.count))", category: "Settings")
@@ -754,34 +704,28 @@ final class SettingsViewModel: ObservableObject {
                 debugLog("Guardrail clients candidate failed (path=\(path), error=\(error.localizedDescription))", category: "Settings")
             }
         }
-        let rows = selectedRows
-        if let selectedPath {
-            debugLog("Guardrail clients selected endpoint: \(selectedPath) (rows=\(rows.count))", category: "Settings")
-        }
 
-        let activeRowsBySelector = await loadActiveClientRowsBySelector(
-            client: client,
-            siteIDPath: siteIDPath
-        )
+        return (selectedPath, selectedRows)
+    }
+
+    /// Reconciles inactive-capable rows with the active client feed so the final picker
+    /// keeps the richest identity data while still marking currently connected devices.
+    private func normalizeGuardrailClientOptions(
+        _ rows: [[String: Any]],
+        activeRowsBySelector: [String: [String: Any]]
+    ) -> [GuardrailClientOption] {
         let activeSelectors = Set(activeRowsBySelector.keys)
-
         var uniqueBySelector: [String: GuardrailClientOption] = [:]
-        for row in rows {
-            var sourceRow = row
-            if let activeRow = Self.bestMatchingActiveRow(for: row, activeRowsBySelector: activeRowsBySelector) {
-                sourceRow = Self.mergeClientRows(primary: activeRow, fallback: row)
-            }
-            guard let option = Self.guardrailOption(from: sourceRow) else { continue }
-            var resolved = option
-            if activeSelectors.contains(option.selector.lowercased()) {
-                resolved.isActive = true
-            }
 
-            if let existingKey = Self.bestMatchingOptionKey(for: resolved, optionsBySelector: uniqueBySelector) {
-                if let existing = uniqueBySelector[existingKey] {
-                    uniqueBySelector.removeValue(forKey: existingKey)
-                    uniqueBySelector[resolved.selector] = Self.mergeGuardrailOptions(primary: resolved, fallback: existing)
-                }
+        for row in rows {
+            let resolved = resolveGuardrailOption(from: row, activeRowsBySelector: activeRowsBySelector, activeSelectors: activeSelectors)
+            guard let resolved else { continue }
+
+            if let existingKey = Self.bestMatchingOptionKey(for: resolved, optionsBySelector: uniqueBySelector),
+               let existing = uniqueBySelector[existingKey]
+            {
+                uniqueBySelector.removeValue(forKey: existingKey)
+                uniqueBySelector[resolved.selector] = Self.mergeGuardrailOptions(primary: resolved, fallback: existing)
             } else {
                 uniqueBySelector[resolved.selector] = resolved
             }
@@ -793,6 +737,26 @@ final class SettingsViewModel: ObservableObject {
             }
             return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
         }
+    }
+
+    /// Builds one normalized picker option from a raw client row, preferring the live
+    /// active row when the wider inactive catalog points at the same client.
+    private func resolveGuardrailOption(
+        from row: [String: Any],
+        activeRowsBySelector: [String: [String: Any]],
+        activeSelectors: Set<String>
+    ) -> GuardrailClientOption? {
+        var sourceRow = row
+        if let activeRow = Self.bestMatchingActiveRow(for: row, activeRowsBySelector: activeRowsBySelector) {
+            sourceRow = Self.mergeClientRows(primary: activeRow, fallback: row)
+        }
+        guard var option = Self.guardrailOption(from: sourceRow) else {
+            return nil
+        }
+        if activeSelectors.contains(option.selector.lowercased()) {
+            option.isActive = true
+        }
+        return option
     }
 
     /// Loads legacy `alluser` clients, removes anything already visible in live guardrails, and deduplicates by stable approval key.
@@ -815,7 +779,7 @@ final class SettingsViewModel: ObservableObject {
         for row in dedupedRows {
             guard Self.wasSeenWithinLastWeek(row) else { continue }
             guard let option = Self.guardrailOption(from: row) else { continue }
-            let key = normalizedApprovalKey(from: option.selector)
+            let key = option.approvalKey
             guard !key.isEmpty, !excludingApprovalKeys.contains(key) else { continue }
             if let existing = uniqueByKey[key] {
                 uniqueByKey[key] = Self.mergeLegacyGuardrailOptions(primary: existing, fallback: option)
@@ -946,41 +910,64 @@ final class SettingsViewModel: ObservableObject {
     ) -> [ClientModificationApproval] {
         let existingByKey = Dictionary(uniqueKeysWithValues: existing.map { ($0.approvalKey, $0) })
         var mergedByKey: [String: ClientModificationApproval] = [:]
-        let activeKeys = Set(options.filter(\.isActive).map { normalizedApprovalKey(from: $0.selector) })
+        let activeKeys = Set(options.filter(\.isActive).map(\.approvalKey))
 
         for option in options {
-            let key = normalizedApprovalKey(from: option.selector)
+            let key = option.approvalKey
             guard !key.isEmpty else { continue }
-            let previous = existingByKey[key]
-            let detailParts = option.subtitle
-                .split(separator: "•")
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            let inferredIP = detailParts.first(where: { $0.contains(".") })
-            let inferredMAC = detailParts.first(where: { $0.contains(":") })
-            let inferredHostname = detailParts.last(where: { !$0.contains(".") && !$0.contains(":") && $0.lowercased() != "offline" })
-
-            mergedByKey[key] = ClientModificationApproval(
-                approvalKey: key,
-                clientID: previous?.clientID ?? option.id,
-                name: option.title,
-                hostname: previous?.hostname.isEmpty == false ? previous!.hostname : (inferredHostname ?? ""),
-                mac: previous?.mac.isEmpty == false ? previous!.mac : (inferredMAC ?? (option.selector.contains(":") ? option.selector : "")),
-                ip: previous?.ip.isEmpty == false ? previous!.ip : (inferredIP ?? ""),
-                allowClientModifications: previous?.allowClientModifications ?? false,
-                allowAppBlocks: previous?.allowClientModifications ?? false,
-                isCurrentlyConnected: activeKeys.contains(key),
-                isLegacyHistoryEntry: false
+            mergedByKey[key] = mergedApproval(
+                for: option,
+                previous: existingByKey[key],
+                activeKeys: activeKeys
             )
         }
 
         for previous in existing where mergedByKey[previous.approvalKey] == nil {
-            guard previous.isLegacyHistoryEntry, previous.allowClientModifications else { continue }
-            var preserved = previous
-            preserved.isCurrentlyConnected = false
+            guard let preserved = preservedLegacyApprovalIfNeeded(previous) else { continue }
             mergedByKey[previous.approvalKey] = preserved
         }
 
         return sortClientModificationApprovals(Array(mergedByKey.values))
+    }
+
+    /// Rebuilds one approval entry from the latest resolved option while preserving any
+    /// previously granted permissions and richer stored identity fields.
+    private func mergedApproval(
+        for option: GuardrailClientOption,
+        previous: ClientModificationApproval?,
+        activeKeys: Set<String>
+    ) -> ClientModificationApproval {
+        let key = option.approvalKey
+        return ClientModificationApproval(
+            approvalKey: key,
+            clientID: previous?.clientID ?? option.id,
+            name: option.title,
+            hostname: preferredApprovalField(previous?.hostname, fallback: option.hostname),
+            mac: preferredApprovalField(previous?.mac, fallback: option.mac),
+            ip: preferredApprovalField(previous?.ip, fallback: option.ip),
+            allowClientModifications: previous?.allowClientModifications ?? false,
+            allowAppBlocks: previous?.allowClientModifications ?? false,
+            isCurrentlyConnected: activeKeys.contains(key),
+            isLegacyHistoryEntry: false
+        )
+    }
+
+    /// Keeps explicitly approved legacy-only entries in the stored set even when they no
+    /// longer appear in the current live client catalog.
+    private func preservedLegacyApprovalIfNeeded(
+        _ approval: ClientModificationApproval
+    ) -> ClientModificationApproval? {
+        guard approval.isLegacyHistoryEntry, approval.allowClientModifications else {
+            return nil
+        }
+        var preserved = approval
+        preserved.isCurrentlyConnected = false
+        return preserved
+    }
+
+    private func preferredApprovalField(_ current: String?, fallback: String) -> String {
+        let cleanedCurrent = current?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return cleanedCurrent.isEmpty ? fallback : cleanedCurrent
     }
 
     /// Returns approvals sorted so enabled and currently connected entries stay near the top.
@@ -1011,11 +998,14 @@ final class SettingsViewModel: ObservableObject {
             selector: selector,
             title: approval.displayName,
             subtitle: approval.detailLine,
+            hostname: approval.hostname,
+            mac: approval.mac,
+            ip: approval.ip,
             isActive: false
         )
-        let key = normalizedApprovalKey(from: selector)
+        let key = option.approvalKey
         if let existingIndex = availableLegacyGuardrailClients.firstIndex(where: {
-            normalizedApprovalKey(from: $0.selector) == key
+            $0.approvalKey == key
         }) {
             availableLegacyGuardrailClients[existingIndex] = Self.mergeLegacyGuardrailOptions(
                 primary: availableLegacyGuardrailClients[existingIndex],
@@ -1034,42 +1024,44 @@ final class SettingsViewModel: ObservableObject {
         guard !approval.isCurrentlyConnected else { return false }
         if approval.isLegacyHistoryEntry { return true }
         let key = approval.approvalKey
-        let liveKeys = Set(availableGuardrailClients.map { normalizedApprovalKey(from: $0.selector) })
+        let liveKeys = Set(availableGuardrailClients.map(\.approvalKey))
         return !liveKeys.contains(key)
     }
 
-    /// Normalizes a selector into the approval key format used across persisted client guardrails.
-    private func normalizedApprovalKey(from selector: String) -> String {
-        selector.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    }
-
-    /// Extracts the first IP-like detail from a guardrail option subtitle.
-    private func inferredIP(from option: GuardrailClientOption) -> String {
-        option.subtitle
-            .split(separator: "•")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .first(where: { $0.contains(".") }) ?? ""
-    }
-
-    /// Extracts the first MAC-like detail from a guardrail option subtitle or selector.
-    private func inferredMAC(from option: GuardrailClientOption) -> String {
-        if option.selector.contains(":") {
-            return option.selector
+    /// Validates the minimum UniFi settings needed for settings-driven client loads and
+    /// builds the API client used by the guardrail pickers.
+    private func prepareUniFiSettingsClient(
+        errorSink: ReferenceWritableKeyPath<SettingsViewModel, String?>
+    ) -> UniFiAPIClient? {
+        let normalizedConsoleURL = UniFiAPIClient.normalizeBaseURL(consoleURL)
+        guard !normalizedConsoleURL.isEmpty else {
+            self[keyPath: errorSink] = "Failed: Console URL is invalid."
+            return nil
         }
-        return option.subtitle
-            .split(separator: "•")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .first(where: { $0.contains(":") }) ?? ""
+        guard !normalizedKey(unifiAPIKey).isEmpty || KeychainHelper.exists(key: .unifiAPIKey) else {
+            self[keyPath: errorSink] = "Failed: UniFi API key is required."
+            return nil
+        }
+
+        return UniFiAPIClient(baseURL: normalizedConsoleURL, allowSelfSigned: allowSelfSignedCerts)
     }
 
-    /// Extracts the hostname-like detail from a guardrail option subtitle when present.
-    private func inferredHostname(from option: GuardrailClientOption) -> String {
-        option.subtitle
-            .split(separator: "•")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .first(where: {
-                !$0.contains(".") && !$0.contains(":") && $0.lowercased() != "offline" && $0.caseInsensitiveCompare(option.title) != .orderedSame
-            }) ?? ""
+    /// Persists a newly typed UniFi API key long enough for async settings calls to use
+    /// the normal API client path without duplicating keychain setup/cleanup logic.
+    private func withPreparedUniFiAPIKey<T>(
+        _ operation: () async throws -> T
+    ) async throws -> T {
+        let normalizedTypedKey = normalizedKey(unifiAPIKey)
+        let hadStoredKey = KeychainHelper.exists(key: .unifiAPIKey)
+        if !normalizedTypedKey.isEmpty {
+            KeychainHelper.save(key: .unifiAPIKey, string: normalizedTypedKey)
+        }
+        defer {
+            if !hadStoredKey && normalizedTypedKey.isEmpty {
+                KeychainHelper.delete(key: .unifiAPIKey)
+            }
+        }
+        return try await operation()
     }
 
     /// Loads active client rows for the saved guardrail selectors.
@@ -1177,9 +1169,9 @@ final class SettingsViewModel: ObservableObject {
         for option: GuardrailClientOption,
         optionsBySelector: [String: GuardrailClientOption]
     ) -> String? {
-        let tokens = optionIdentityTokens(option)
+        let tokens = option.identityTokens
         for (key, existing) in optionsBySelector {
-            let existingTokens = optionIdentityTokens(existing)
+            let existingTokens = existing.identityTokens
             if !Set(tokens).isDisjoint(with: existingTokens) {
                 return key
             }
@@ -1192,8 +1184,8 @@ final class SettingsViewModel: ObservableObject {
         primary: GuardrailClientOption,
         fallback: GuardrailClientOption
     ) -> GuardrailClientOption {
-        let primaryHasMAC = primary.selector.contains(":") || primary.subtitle.contains(":")
-        let fallbackHasMAC = fallback.selector.contains(":") || fallback.subtitle.contains(":")
+        let primaryHasMAC = primary.hasMAC
+        let fallbackHasMAC = fallback.hasMAC
         let chosen = (primaryHasMAC && !fallbackHasMAC) ? primary : fallback
         let secondary = (chosen.id == primary.id && chosen.selector == primary.selector) ? fallback : primary
         return GuardrailClientOption(
@@ -1201,6 +1193,9 @@ final class SettingsViewModel: ObservableObject {
             selector: chosen.selector,
             title: chosen.title.isEmpty ? secondary.title : chosen.title,
             subtitle: chosen.subtitle.isEmpty ? secondary.subtitle : chosen.subtitle,
+            hostname: chosen.hostname.isEmpty ? secondary.hostname : chosen.hostname,
+            mac: chosen.mac.isEmpty ? secondary.mac : chosen.mac,
+            ip: chosen.ip.isEmpty ? secondary.ip : chosen.ip,
             isActive: primary.isActive || fallback.isActive
         )
     }
@@ -1219,21 +1214,11 @@ final class SettingsViewModel: ObservableObject {
             selector: chosen.selector,
             title: chosen.title,
             subtitle: chosen.subtitle.count >= secondary.subtitle.count ? chosen.subtitle : secondary.subtitle,
+            hostname: chosen.hostname.isEmpty ? secondary.hostname : chosen.hostname,
+            mac: chosen.mac.isEmpty ? secondary.mac : chosen.mac,
+            ip: chosen.ip.isEmpty ? secondary.ip : chosen.ip,
             isActive: primary.isActive || fallback.isActive
         )
-    }
-
-    /// Returns the identity tokens used to collapse duplicate guardrail options.
-    private static func optionIdentityTokens(_ option: GuardrailClientOption) -> [String] {
-        let subtitleParts = option.subtitle
-            .split(separator: "•")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
-        let mac = subtitleParts.first(where: { $0.contains(":") }) ?? (option.selector.contains(":") ? option.selector.lowercased() : "")
-        let hostname = normalizeHostToken(
-            subtitleParts.first(where: { !$0.contains(":") && !$0.contains(".") && $0 != "offline" }) ?? ""
-        )
-        let title = option.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return [mac, hostname, title].filter { !$0.isEmpty }
     }
 
     /// Scores a legacy option by whether it carries a descriptive title and detailed subtitle.
@@ -1242,9 +1227,9 @@ final class SettingsViewModel: ObservableObject {
         if option.title.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(option.selector) != .orderedSame {
             score += 4
         }
-        if option.subtitle.contains(":") { score += 2 }
-        if option.subtitle.contains(".") { score += 1 }
-        if !normalizeHostToken(option.title).isEmpty { score += 1 }
+        if option.hasMAC { score += 2 }
+        if !option.ip.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { score += 1 }
+        if !normalizeHostToken(option.hostname).isEmpty { score += 1 }
         score += min(option.subtitle.count / 12, 3)
         return score
     }
@@ -1317,42 +1302,19 @@ final class SettingsViewModel: ObservableObject {
 
     /// Runs a lightweight Claude request to validate the configured API key.
     private func testClaudeKey() async throws {
-        let apiKey = normalizedKey(claudeAPIKey)
-        guard !apiKey.isEmpty else {
-            throw LLMError.missingAPIKey
-        }
-
+        let apiKey = try requiredAPIKey(claudeAPIKey)
         var request = URLRequest(url: URL(string: "https://api.anthropic.com/v1/models")!)
         request.httpMethod = "GET"
         request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         request.timeoutInterval = 20
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-        try validateHTTP(response: response, data: data)
+        try await runHTTPValidationRequest(request)
     }
 
     /// Runs a lightweight LM Studio request to validate the configured endpoint.
     private func testLMStudioKey() async throws {
-        let apiKey = normalizedKey(lmStudioAPIKey)
-        guard !apiKey.isEmpty else {
-            throw LLMError.missingAPIKey
-        }
-        let url = try lmStudioURL(path: "/v1/models")
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.timeoutInterval = 20
-
-        let startedAt = Date()
-        debugLog("LM Studio models probe started (url=\(url.absoluteString))", category: "LLM")
-        let (data, response) = try await lmStudioSession.data(for: request)
-        if let http = response as? HTTPURLResponse {
-            let elapsedMS = Int(Date().timeIntervalSince(startedAt) * 1000)
-            debugLog("LM Studio models probe HTTP \(http.statusCode) in \(elapsedMS)ms", category: "LLM")
-        }
-        try validateHTTP(response: response, data: data)
+        let request = try lmStudioRequest(path: "/v1/models")
+        _ = try await runLMStudioRequest(request, logName: "models probe")
     }
 
     /// Chooses a model ID for LM Studio chat tests.
@@ -1376,34 +1338,127 @@ final class SettingsViewModel: ObservableObject {
 
     /// Fetches the list of model IDs exposed by LM Studio.
     private func fetchLMStudioModels() async throws -> [String] {
-        let apiKey = normalizedKey(lmStudioAPIKey)
-        guard !apiKey.isEmpty else {
-            throw LLMError.missingAPIKey
-        }
-        let url = try lmStudioURL(path: "/v1/models")
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.timeoutInterval = 20
-
-        let startedAt = Date()
-        debugLog("LM Studio model list request started (url=\(url.absoluteString))", category: "LLM")
-        let (data, response) = try await lmStudioSession.data(for: request)
-        if let http = response as? HTTPURLResponse {
-            let elapsedMS = Int(Date().timeIntervalSince(startedAt) * 1000)
-            debugLog(
-                "LM Studio model list HTTP \(http.statusCode) in \(elapsedMS)ms (bytes=\(data.count))",
-                category: "LLM"
-            )
-        }
-        try validateHTTP(response: response, data: data)
+        let request = try lmStudioRequest(path: "/v1/models")
+        let data = try await runLMStudioRequest(request, logName: "model list")
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let rawModels = json["data"] as? [[String: Any]] else {
             throw LLMError.invalidResponse("LM Studio models response missing data array")
         }
         let ids = rawModels.compactMap { $0["id"] as? String }.sorted()
         return Array(Set(ids)).sorted()
+    }
+
+    /// Validates the currently selected provider and leaves result-string formatting to the caller.
+    private func validateSelectedLLMProviderKey() async throws {
+        switch selectedProvider {
+        case .claude:
+            try await testClaudeKey()
+        case .openai:
+            try await testOpenAIKey()
+        case .lmStudio:
+            try await testLMStudioKey()
+        }
+    }
+
+    private func selectedProviderSuccessMessage(_ provider: LLMProvider) -> String {
+        switch provider {
+        case .claude:
+            return "Connected! Claude API key is valid."
+        case .openai:
+            return "Connected! OpenAI API key is valid."
+        case .lmStudio:
+            return "Connected! LM Studio API key is valid."
+        }
+    }
+
+    private func applyLoadedLMStudioModels(_ models: [String]) {
+        lmStudioModels = models
+        let selected = normalizedKey(lmStudioModel)
+        if models.contains(selected), !selected.isEmpty {
+            lmStudioModel = selected
+        } else if let first = models.first {
+            lmStudioModel = first
+            UserDefaults.standard.set(first, forKey: Self.lmStudioLastKnownGoodModelKey)
+        }
+    }
+
+    /// Runs a minimal chat completion against LM Studio and returns the chosen model plus response text.
+    private func runLMStudioChatProbe() async throws -> (model: String, content: String) {
+        let model = try await resolveLMStudioModelForChat()
+        let payload: [String: Any] = [
+            "model": model,
+            "messages": [
+                ["role": "user", "content": "reply with ok"],
+            ],
+        ]
+        var request = try lmStudioRequest(path: "/v1/chat/completions")
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 25
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+
+        let data = try await runLMStudioRequest(request, logName: "chat test", extraLogContext: "model=\(model)")
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let choices = json["choices"] as? [[String: Any]],
+              let first = choices.first,
+              let message = first["message"] as? [String: Any],
+              let content = message["content"] as? String
+        else {
+            throw LLMError.invalidResponse("LM Studio chat test returned an unexpected response format.")
+        }
+        return (model, content)
+    }
+
+    private func requiredAPIKey(_ rawKey: String) throws -> String {
+        let apiKey = normalizedKey(rawKey)
+        guard !apiKey.isEmpty else {
+            throw LLMError.missingAPIKey
+        }
+        return apiKey
+    }
+
+    private func runHTTPValidationRequest(
+        _ request: URLRequest,
+        session: URLSession = .shared
+    ) async throws {
+        let (data, response) = try await session.data(for: request)
+        try validateHTTP(response: response, data: data)
+    }
+
+    /// Creates a standard authenticated LM Studio request against the configured base URL.
+    private func lmStudioRequest(path: String) throws -> URLRequest {
+        let apiKey = try requiredAPIKey(lmStudioAPIKey)
+        let url = try lmStudioURL(path: path)
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 20
+        return request
+    }
+
+    /// Executes an LM Studio request with consistent debug logging around start, latency,
+    /// and HTTP validation so settings flows report transport issues the same way.
+    private func runLMStudioRequest(
+        _ request: URLRequest,
+        logName: String,
+        extraLogContext: String? = nil
+    ) async throws -> Data {
+        let contextSuffix = extraLogContext.map { ", \($0)" } ?? ""
+        debugLog(
+            "LM Studio \(logName) request started (url=\(request.url?.absoluteString ?? "<missing>")\(contextSuffix))",
+            category: "LLM"
+        )
+        let startedAt = Date()
+        let (data, response) = try await lmStudioSession.data(for: request)
+        if let http = response as? HTTPURLResponse {
+            let elapsedMS = Int(Date().timeIntervalSince(startedAt) * 1000)
+            debugLog(
+                "LM Studio \(logName) HTTP \(http.statusCode) in \(elapsedMS)ms (bytes=\(data.count))",
+                category: "LLM"
+            )
+        }
+        try validateHTTP(response: response, data: data)
+        return data
     }
 
     /// Throws a user-facing error when an HTTP response is missing or unsuccessful.
@@ -1516,6 +1571,17 @@ final class SettingsViewModel: ObservableObject {
     /// Normalizes an API key string by trimming surrounding whitespace.
     private func normalizedKey(_ key: String) -> String {
         key.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Applies provider-specific transport guidance where needed while leaving other
+    /// providers on their standard localized error text.
+    private func friendlyProviderError(_ error: Error, provider: LLMProvider) -> String {
+        switch provider {
+        case .lmStudio:
+            return friendlyLMStudioError(error)
+        case .claude, .openai:
+            return error.localizedDescription
+        }
     }
 
     /// Converts LM Studio transport failures into clearer settings-screen error text.
