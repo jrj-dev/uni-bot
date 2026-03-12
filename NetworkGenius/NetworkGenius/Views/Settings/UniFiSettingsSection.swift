@@ -83,6 +83,66 @@ struct UniFiSettingsSection: View {
                 }
             }
 
+            Section("Legacy Client History") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Button {
+                        Task { await viewModel.loadLegacyGuardrailClients() }
+                    } label: {
+                        HStack {
+                            if viewModel.isLoadingLegacyGuardrailClients {
+                                ProgressView()
+                                    .controlSize(.small)
+                            }
+                            Text("Load Legacy History")
+                        }
+                    }
+
+                    Text("Loads historical UniFi clients from the legacy alluser feed that are not in the current live guardrail source and were seen within the last week. Use this to add offline clients back into Client Guardrails explicitly.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    TextField("Search legacy clients", text: $viewModel.legacyGuardrailClientSearchText)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+
+                    if let result = viewModel.legacyGuardrailClientsLoadResult {
+                        Text(result)
+                            .font(.caption)
+                            .foregroundStyle(result.hasPrefix("Loaded") || result.hasPrefix("Added") ? .green : .red)
+                    }
+                }
+
+                let filteredLegacyClients = viewModel.availableLegacyGuardrailClients.filter {
+                    viewModel.legacyGuardrailClientSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || $0.searchText.contains(viewModel.legacyGuardrailClientSearchText.lowercased())
+                }
+
+                if filteredLegacyClients.isEmpty {
+                    Text("No legacy-only clients loaded.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(filteredLegacyClients) { option in
+                        VStack(alignment: .leading, spacing: 8) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(option.title)
+                                if !option.subtitle.isEmpty {
+                                    Text(option.subtitle)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+
+                            Button("Add To Client Guardrails") {
+                                viewModel.addLegacyGuardrailClient(option)
+                            }
+                            .font(.caption)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+            }
+
             Section("Grafana Loki Logs") {
                 TextField("Loki Base URL", text: $viewModel.grafanaLokiURL)
                     .keyboardType(.URL)

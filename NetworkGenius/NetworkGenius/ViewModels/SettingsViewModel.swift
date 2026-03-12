@@ -29,6 +29,10 @@ final class SettingsViewModel: ObservableObject {
     @Published var guardrailClientSearchText: String = ""
     @Published var isLoadingGuardrailClients = false
     @Published var guardrailClientsLoadResult: String?
+    @Published var availableLegacyGuardrailClients: [GuardrailClientOption] = []
+    @Published var legacyGuardrailClientSearchText: String = ""
+    @Published var isLoadingLegacyGuardrailClients = false
+    @Published var legacyGuardrailClientsLoadResult: String?
     @Published var lmStudioBaseURL: String = ""
     @Published var lmStudioModel: String = ""
     @Published var lmStudioMaxPromptChars: Double = 4098
@@ -268,6 +272,41 @@ final class SettingsViewModel: ObservableObject {
         clientModificationApprovals.removeAll { $0.id == approval.id }
     }
 
+    /// Adds a historical client into the main guardrail list without automatically approving writes.
+    func addLegacyGuardrailClient(_ option: GuardrailClientOption) {
+        let key = normalizedApprovalKey(from: option.selector)
+        guard !key.isEmpty else { return }
+        guard !clientModificationApprovals.contains(where: { $0.approvalKey == key }) else {
+            legacyGuardrailClientsLoadResult = "\(option.title) is already in Client Guardrails."
+            return
+        }
+
+        clientModificationApprovals.append(
+            ClientModificationApproval(
+                approvalKey: key,
+                clientID: option.id,
+                name: option.title,
+                hostname: inferredHostname(from: option),
+                mac: inferredMAC(from: option),
+                ip: inferredIP(from: option),
+                allowClientModifications: false,
+                allowAppBlocks: false,
+                isCurrentlyConnected: option.isActive
+            )
+        )
+        clientModificationApprovals.sort { lhs, rhs in
+            if lhs.allowClientModifications != rhs.allowClientModifications {
+                return lhs.allowClientModifications && !rhs.allowClientModifications
+            }
+            if lhs.isCurrentlyConnected != rhs.isCurrentlyConnected {
+                return lhs.isCurrentlyConnected && !rhs.isCurrentlyConnected
+            }
+            return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+        }
+        availableLegacyGuardrailClients.removeAll { normalizedApprovalKey(from: $0.selector) == key }
+        legacyGuardrailClientsLoadResult = "Added \(option.title) to Client Guardrails."
+    }
+
     /// Tests the configured UniFi connection and updates the settings UI with the result.
     func testConnection() async {
         isTesting = true
@@ -352,6 +391,49 @@ final class SettingsViewModel: ObservableObject {
                 : "Loaded \(count) clients (including inactive when available)."
         } catch {
             guardrailClientsLoadResult = "Failed: \(error.localizedDescription)"
+        }
+
+        if !hadKey && normalizedKey(unifiAPIKey).isEmpty {
+            KeychainHelper.delete(key: .unifiAPIKey)
+        }
+    }
+
+    /// Loads legacy client history entries that are not present in the main live guardrail source.
+    func loadLegacyGuardrailClients() async {
+        isLoadingLegacyGuardrailClients = true
+        legacyGuardrailClientsLoadResult = nil
+        defer { isLoadingLegacyGuardrailClients = false }
+
+        let normalizedConsoleURL = UniFiAPIClient.normalizeBaseURL(consoleURL)
+        guard !normalizedConsoleURL.isEmpty else {
+            legacyGuardrailClientsLoadResult = "Failed: Console URL is invalid."
+            return
+        }
+        guard !normalizedKey(unifiAPIKey).isEmpty || KeychainHelper.exists(key: .unifiAPIKey) else {
+            legacyGuardrailClientsLoadResult = "Failed: UniFi API key is required."
+            return
+        }
+
+        let hadKey = KeychainHelper.exists(key: .unifiAPIKey)
+        if !normalizedKey(unifiAPIKey).isEmpty {
+            KeychainHelper.save(key: .unifiAPIKey, string: normalizedKey(unifiAPIKey))
+        }
+
+        do {
+            let client = UniFiAPIClient(baseURL: normalizedConsoleURL, allowSelfSigned: allowSelfSignedCerts)
+            let currentOptions = try await fetchGuardrailClientOptions(client: client)
+            let currentKeys = Set(currentOptions.map { normalizedApprovalKey(from: $0.selector) })
+            let approvedKeys = Set(clientModificationApprovals.map(\.approvalKey))
+            availableLegacyGuardrailClients = try await fetchLegacyGuardrailClientOptions(
+                client: client,
+                excludingApprovalKeys: currentKeys.union(approvedKeys)
+            )
+            let count = availableLegacyGuardrailClients.count
+            legacyGuardrailClientsLoadResult = count == 0
+                ? "Loaded 0 historical-only clients."
+                : "Loaded \(count) historical-only clients from UniFi legacy history."
+        } catch {
+            legacyGuardrailClientsLoadResult = "Failed: \(error.localizedDescription)"
         }
 
         if !hadKey && normalizedKey(unifiAPIKey).isEmpty {
@@ -705,6 +787,76 @@ final class SettingsViewModel: ObservableObject {
         }
     }
 
+    /// Loads legacy `alluser` clients, removes anything already visible in live guardrails, and deduplicates by stable approval key.
+    private func fetchLegacyGuardrailClientOptions(
+        client: UniFiAPIClient,
+        excludingApprovalKeys: Set<String>
+    ) async throws -> [GuardrailClientOption] {
+        let configuredSiteID = siteID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedSite = try await resolveSiteForGuardrailClientLoad(
+            client: client,
+            configuredSiteID: configuredSiteID
+        )
+        let siteRefQuery = resolvedSite.reference.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? resolvedSite.reference
+        let path = "/proxy/network/api/s/\(siteRefQuery)/stat/alluser"
+        let rows = try await fetchGuardrailClientRows(path: path, client: client)
+        debugLog("Legacy guardrail clients loaded (path=\(path), rows=\(rows.count))", category: "Settings")
+
+        var uniqueByKey: [String: GuardrailClientOption] = [:]
+        for row in rows {
+            guard Self.wasSeenWithinLastWeek(row) else { continue }
+            guard let option = Self.guardrailOption(from: row) else { continue }
+            let key = normalizedApprovalKey(from: option.selector)
+            guard !key.isEmpty, !excludingApprovalKeys.contains(key) else { continue }
+            if let existing = uniqueByKey[key] {
+                uniqueByKey[key] = Self.mergeLegacyGuardrailOptions(primary: existing, fallback: option)
+            } else {
+                uniqueByKey[key] = option
+            }
+        }
+
+        return uniqueByKey.values.sorted { lhs, rhs in
+            lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+        }
+    }
+
+    /// Returns true when a legacy `alluser` row was seen within the past seven days.
+    private static func wasSeenWithinLastWeek(_ row: [String: Any]) -> Bool {
+        let lastSeenCandidates: [Any?] = [
+            row["last_seen"],
+            row["lastSeen"],
+            row["disconnect_timestamp"],
+            row["disconnectTimestamp"]
+        ]
+
+        for value in lastSeenCandidates {
+            if let timestamp = unixTimestamp(from: value) {
+                return Date().timeIntervalSince1970 - timestamp <= 7 * 24 * 60 * 60
+            }
+        }
+        return false
+    }
+
+    /// Normalizes UniFi timestamp fields into Unix seconds.
+    private static func unixTimestamp(from value: Any?) -> TimeInterval? {
+        switch value {
+        case let seconds as TimeInterval:
+            return seconds > 1_000_000_000_000 ? seconds / 1000 : seconds
+        case let seconds as Double:
+            return seconds > 1_000_000_000_000 ? seconds / 1000 : seconds
+        case let seconds as Int:
+            let interval = TimeInterval(seconds)
+            return interval > 1_000_000_000_000 ? interval / 1000 : interval
+        case let text as String:
+            guard let parsed = Double(text.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+                return nil
+            }
+            return parsed > 1_000_000_000_000 ? parsed / 1000 : parsed
+        default:
+            return nil
+        }
+    }
+
     /// Merges resolved client options into the persisted approval list without dropping offline entries.
     private func mergeGuardrailOptionsIntoApprovals(
         _ options: [GuardrailClientOption],
@@ -752,6 +904,35 @@ final class SettingsViewModel: ObservableObject {
     /// Normalizes a selector into the approval key format used across persisted client guardrails.
     private func normalizedApprovalKey(from selector: String) -> String {
         selector.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    /// Extracts the first IP-like detail from a guardrail option subtitle.
+    private func inferredIP(from option: GuardrailClientOption) -> String {
+        option.subtitle
+            .split(separator: "•")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first(where: { $0.contains(".") }) ?? ""
+    }
+
+    /// Extracts the first MAC-like detail from a guardrail option subtitle or selector.
+    private func inferredMAC(from option: GuardrailClientOption) -> String {
+        if option.selector.contains(":") {
+            return option.selector
+        }
+        return option.subtitle
+            .split(separator: "•")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first(where: { $0.contains(":") }) ?? ""
+    }
+
+    /// Extracts the hostname-like detail from a guardrail option subtitle when present.
+    private func inferredHostname(from option: GuardrailClientOption) -> String {
+        option.subtitle
+            .split(separator: "•")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first(where: {
+                !$0.contains(".") && !$0.contains(":") && $0.lowercased() != "offline" && $0.caseInsensitiveCompare(option.title) != .orderedSame
+            }) ?? ""
     }
 
     /// Loads active client rows for the saved guardrail selectors.
@@ -883,6 +1064,24 @@ final class SettingsViewModel: ObservableObject {
             selector: chosen.selector,
             title: chosen.title.isEmpty ? secondary.title : chosen.title,
             subtitle: chosen.subtitle.isEmpty ? secondary.subtitle : chosen.subtitle,
+            isActive: primary.isActive || fallback.isActive
+        )
+    }
+
+    /// Merges two legacy options for the same approval key while preferring the richer subtitle and human-friendly title.
+    private static func mergeLegacyGuardrailOptions(
+        primary: GuardrailClientOption,
+        fallback: GuardrailClientOption
+    ) -> GuardrailClientOption {
+        let primaryLooksNamed = primary.title != primary.selector
+        let fallbackLooksNamed = fallback.title != fallback.selector
+        let chosen = (primaryLooksNamed && !fallbackLooksNamed) ? primary : fallback
+        let secondary = (chosen.id == primary.id && chosen.selector == primary.selector) ? fallback : primary
+        return GuardrailClientOption(
+            id: chosen.id,
+            selector: chosen.selector,
+            title: chosen.title,
+            subtitle: chosen.subtitle.count >= secondary.subtitle.count ? chosen.subtitle : secondary.subtitle,
             isActive: primary.isActive || fallback.isActive
         )
     }
