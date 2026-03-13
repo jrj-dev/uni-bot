@@ -7,7 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		A10000000000000000000001 /* NetworkGeniusApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000001 /* NetworkGeniusApp.swift */; };
+		A10000000000000000000001 /* UniBotApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000001 /* UniBotApp.swift */; };
 		A10000000000000000000002 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000002 /* AppState.swift */; };
 		A10000000000000000000003 /* ChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000003 /* ChatMessage.swift */; };
 		A10000000000000000000004 /* UniFiModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000004 /* UniFiModels.swift */; };
@@ -44,7 +44,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		B10000000000000000000001 /* NetworkGeniusApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkGeniusApp.swift; sourceTree = "<group>"; };
+		B10000000000000000000001 /* UniBotApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UniBotApp.swift; sourceTree = "<group>"; };
 		B10000000000000000000002 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		B10000000000000000000003 /* ChatMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatMessage.swift; sourceTree = "<group>"; };
 		B10000000000000000000004 /* UniFiModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UniFiModels.swift; sourceTree = "<group>"; };
@@ -78,7 +78,7 @@
 		B10000000000000000000032 /* VoiceSettingsSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceSettingsSection.swift; sourceTree = "<group>"; };
 		B10000000000000000000033 /* AgentInstructions.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = AgentInstructions.txt; sourceTree = "<group>"; };
 		B10000000000000000000034 /* LMStudioLLMService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LMStudioLLMService.swift; sourceTree = "<group>"; };
-		C10000000000000000000001 /* NetworkGenius.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NetworkGenius.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C10000000000000000000001 /* UniBot.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = UniBot.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -95,12 +95,12 @@
 		E10000000000000000000001 = {
 			isa = PBXGroup;
 			children = (
-				E10000000000000000000002 /* NetworkGenius */,
+				E10000000000000000000002 /* UniBot */,
 				E10000000000000000000099 /* Products */,
 			);
 			sourceTree = "<group>";
 		};
-		E10000000000000000000002 /* NetworkGenius */ = {
+		E10000000000000000000002 /* UniBot */ = {
 			isa = PBXGroup;
 			children = (
 				E10000000000000000000003 /* App */,
@@ -110,13 +110,13 @@
 				E10000000000000000000011 /* Views */,
 				E10000000000000000000016 /* Resources */,
 			);
-			path = NetworkGenius;
+			path = UniBot;
 			sourceTree = "<group>";
 		};
 		E10000000000000000000003 /* App */ = {
 			isa = PBXGroup;
 			children = (
-				B10000000000000000000001 /* NetworkGeniusApp.swift */,
+				B10000000000000000000001 /* UniBotApp.swift */,
 				B10000000000000000000002 /* AppState.swift */,
 			);
 			path = App;
@@ -240,7 +240,7 @@
 		E10000000000000000000099 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				C10000000000000000000001 /* NetworkGenius.app */,
+				C10000000000000000000001 /* UniBot.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -248,9 +248,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		F10000000000000000000001 /* NetworkGenius */ = {
+		F10000000000000000000001 /* UniBot */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = F20000000000000000000001 /* Build configuration list for PBXNativeTarget "NetworkGenius" */;
+			buildConfigurationList = F20000000000000000000001 /* Build configuration list for PBXNativeTarget "UniBot" */;
 			buildPhases = (
 				F30000000000000000000001 /* Sources */,
 				D10000000000000000000001 /* Frameworks */,
@@ -260,9 +260,9 @@
 			);
 			dependencies = (
 			);
-			name = NetworkGenius;
-			productName = NetworkGenius;
-			productReference = C10000000000000000000001 /* NetworkGenius.app */;
+			name = UniBot;
+			productName = UniBot;
+			productReference = C10000000000000000000001 /* UniBot.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -280,7 +280,7 @@
 					};
 				};
 			};
-			buildConfigurationList = F60000000000000000000001 /* Build configuration list for PBXProject "NetworkGenius" */;
+			buildConfigurationList = F60000000000000000000001 /* Build configuration list for PBXProject "UniBot" */;
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
@@ -293,7 +293,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				F10000000000000000000001 /* NetworkGenius */,
+				F10000000000000000000001 /* UniBot */,
 			);
 		};
 /* End PBXProject section */
@@ -316,7 +316,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A10000000000000000000001 /* NetworkGeniusApp.swift in Sources */,
+				A10000000000000000000001 /* UniBotApp.swift in Sources */,
 				A10000000000000000000002 /* AppState.swift in Sources */,
 				A10000000000000000000003 /* ChatMessage.swift in Sources */,
 				A10000000000000000000004 /* UniFiModels.swift in Sources */,
@@ -482,14 +482,15 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = NetworkGenius/Info.plist;
+				INFOPLIST_FILE = UniBot/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = UniBot;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.networkgenius.app;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = com.unibot.app;
+				PRODUCT_NAME = UniBot;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -506,14 +507,15 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = NetworkGenius/Info.plist;
+				INFOPLIST_FILE = UniBot/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = UniBot;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.networkgenius.app;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = com.unibot.app;
+				PRODUCT_NAME = UniBot;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -525,7 +527,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		F20000000000000000000001 /* Build configuration list for PBXNativeTarget "NetworkGenius" */ = {
+		F20000000000000000000001 /* Build configuration list for PBXNativeTarget "UniBot" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				G20000000000000000000001 /* Debug */,
@@ -534,7 +536,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		F60000000000000000000001 /* Build configuration list for PBXProject "NetworkGenius" */ = {
+		F60000000000000000000001 /* Build configuration list for PBXProject "UniBot" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				G10000000000000000000001 /* Debug */,

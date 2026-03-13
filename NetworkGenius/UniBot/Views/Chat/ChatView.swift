@@ -64,7 +64,7 @@ struct ChatView: View {
                     activeSheet = .settings
                 }, speechService: speechService)
             }
-            .navigationTitle("NetworkGenius")
+            .navigationTitle("UniBot WiFi")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -79,7 +79,7 @@ struct ChatView: View {
                 }
                 ToolbarItem(placement: .principal) {
                     VStack(spacing: 2) {
-                        Text("NetworkGenius UniFi WiFi")
+                        Text("UniBot WiFi")
                             .font(.headline)
                         NetworkStatusBadge()
                     }

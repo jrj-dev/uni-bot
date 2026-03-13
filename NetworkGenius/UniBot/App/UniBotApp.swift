@@ -2,7 +2,7 @@ import SwiftUI
 import SwiftData
 
 @main
-struct NetworkGeniusApp: App {
+struct UniBotApp: App {
     @StateObject private var appState = AppState()
     @StateObject private var networkMonitor = NetworkMonitor()
 

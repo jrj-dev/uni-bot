@@ -1,5 +1,5 @@
 import XCTest
-@testable import NetworkGenius
+@testable import UniBot
 
 final class ToolExecutorTests: XCTestCase {
     func testToolCatalogHas48Tools() {

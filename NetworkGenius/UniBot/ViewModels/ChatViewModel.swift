@@ -175,7 +175,7 @@ final class ChatViewModel: ObservableObject {
 
         do {
             try await runStartupConnectivityCheck(llmService: llmService)
-            let intro = "Hi, I’m NetworkGenius (UniFi WiFi Edition). I can help troubleshoot your UniFi network. What issue are you seeing?"
+            let intro = "Hi, I’m UniBot WiFi. I can help troubleshoot your UniFi network. What issue are you seeing?"
             appendStartupAssistantMessage(intro, addToLLMHistory: true)
             debugLog("Startup LLM connectivity check succeeded; intro shown", category: "Chat")
         } catch {
