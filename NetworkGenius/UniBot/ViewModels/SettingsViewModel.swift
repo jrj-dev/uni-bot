@@ -115,7 +115,7 @@ final class SettingsViewModel: ObservableObject {
         lmStudioBaseURL = appState.lmStudioBaseURL
         lmStudioModel = appState.lmStudioModel
         lmStudioMaxPromptChars = Double(appState.lmStudioMaxPromptChars)
-        if normalizedKey(lmStudioModel).isEmpty,
+        if normalizedText(lmStudioModel).isEmpty,
            let lastGood = UserDefaults.standard.string(forKey: Self.lmStudioLastKnownGoodModelKey),
            !lastGood.isEmpty
         {
@@ -159,7 +159,7 @@ final class SettingsViewModel: ObservableObject {
         appState.appBlockAllowedClients = ""
         appState.appBlockAllowedClientNameMap = ""
         appState.lmStudioBaseURL = UniFiAPIClient.normalizeBaseURL(lmStudioBaseURL)
-        appState.lmStudioModel = normalizedKey(lmStudioModel)
+        appState.lmStudioModel = normalizedText(lmStudioModel)
         appState.lmStudioMaxPromptChars = max(1028, min(Int(lmStudioMaxPromptChars.rounded()), 9026))
         appState.siteID = siteID.trimmingCharacters(in: .whitespacesAndNewlines)
         appState.allowSelfSignedCerts = allowSelfSignedCerts
@@ -171,45 +171,23 @@ final class SettingsViewModel: ObservableObject {
         appState.hapticFeedbackEnabled = hapticFeedbackEnabled
         appState.clientModificationApprovals = clientModificationApprovals
 
-        let normalizedUniFiKey = normalizedKey(unifiAPIKey)
-        let normalizedUniFiSSHUsername = normalizedKey(unifiSSHUsername)
+        let normalizedUniFiKey = normalizedSecret(unifiAPIKey)
+        let normalizedUniFiSSHUsername = normalizedText(unifiSSHUsername)
         let normalizedUniFiSSHPrivateKey = unifiSSHPrivateKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalizedUniFiSSHPassword = normalizedKey(unifiSSHPassword)
-        let normalizedGrafanaLokiKey = normalizedKey(grafanaLokiAPIKey)
-        let normalizedLMStudioKey = normalizedKey(lmStudioAPIKey)
-        let normalizedClaudeKey = normalizedKey(claudeAPIKey)
-        let normalizedOpenAIKey = normalizedKey(openaiAPIKey)
+        let normalizedUniFiSSHPassword = normalizedSecret(unifiSSHPassword)
+        let normalizedGrafanaLokiKey = normalizedSecret(grafanaLokiAPIKey)
+        let normalizedLMStudioKey = normalizedSecret(lmStudioAPIKey)
+        let normalizedClaudeKey = normalizedSecret(claudeAPIKey)
+        let normalizedOpenAIKey = normalizedSecret(openaiAPIKey)
 
-        if !normalizedUniFiKey.isEmpty {
-            KeychainHelper.save(key: .unifiAPIKey, string: normalizedUniFiKey)
-        }
-        if !normalizedUniFiSSHUsername.isEmpty {
-            KeychainHelper.save(key: .unifiSSHUsername, string: normalizedUniFiSSHUsername)
-        } else {
-            KeychainHelper.delete(key: .unifiSSHUsername)
-        }
-        if !normalizedUniFiSSHPrivateKey.isEmpty {
-            KeychainHelper.save(key: .unifiSSHPrivateKey, string: normalizedUniFiSSHPrivateKey)
-        } else {
-            KeychainHelper.delete(key: .unifiSSHPrivateKey)
-        }
-        if !normalizedUniFiSSHPassword.isEmpty {
-            KeychainHelper.save(key: .unifiSSHPassword, string: normalizedUniFiSSHPassword)
-        } else {
-            KeychainHelper.delete(key: .unifiSSHPassword)
-        }
-        if !normalizedGrafanaLokiKey.isEmpty {
-            KeychainHelper.save(key: .grafanaLokiAPIKey, string: normalizedGrafanaLokiKey)
-        }
-        if !normalizedLMStudioKey.isEmpty {
-            KeychainHelper.save(key: .lmStudioAPIKey, string: normalizedLMStudioKey)
-        }
-        if !normalizedClaudeKey.isEmpty {
-            KeychainHelper.save(key: .claudeAPIKey, string: normalizedClaudeKey)
-        }
-        if !normalizedOpenAIKey.isEmpty {
-            KeychainHelper.save(key: .openaiAPIKey, string: normalizedOpenAIKey)
-        }
+        saveKeychainValue(normalizedUniFiKey, key: .unifiAPIKey, label: "UniFi API key", secret: true)
+        saveKeychainValue(normalizedUniFiSSHUsername, key: .unifiSSHUsername, label: "UniFi SSH username")
+        saveKeychainValue(normalizedUniFiSSHPrivateKey, key: .unifiSSHPrivateKey, label: "UniFi SSH private key", secret: true)
+        saveKeychainValue(normalizedUniFiSSHPassword, key: .unifiSSHPassword, label: "UniFi SSH password", secret: true)
+        saveKeychainValue(normalizedGrafanaLokiKey, key: .grafanaLokiAPIKey, label: "Loki API key", secret: true)
+        saveKeychainValue(normalizedLMStudioKey, key: .lmStudioAPIKey, label: "LM Studio API key", secret: true)
+        saveKeychainValue(normalizedClaudeKey, key: .claudeAPIKey, label: "Claude API key", secret: true)
+        saveKeychainValue(normalizedOpenAIKey, key: .openaiAPIKey, label: "OpenAI API key", secret: true)
 
         UserDefaults.standard.set(voiceEnabled, forKey: "voiceEnabled")
         UserDefaults.standard.set(selectedVoiceID, forKey: "selectedVoiceID")
@@ -219,7 +197,7 @@ final class SettingsViewModel: ObservableObject {
 
     var isValid: Bool {
         !UniFiAPIClient.normalizeBaseURL(consoleURL).isEmpty
-            && !normalizedKey(unifiAPIKey).isEmpty
+            && !normalizedSecret(unifiAPIKey).isEmpty
             && hasSelectedLLMConfig
     }
 
@@ -232,9 +210,9 @@ final class SettingsViewModel: ObservableObject {
 
     var hasSelectedLLMKey: Bool {
         switch selectedProvider {
-        case .claude: return !normalizedKey(claudeAPIKey).isEmpty
-        case .openai: return !normalizedKey(openaiAPIKey).isEmpty
-        case .lmStudio: return !normalizedKey(lmStudioAPIKey).isEmpty
+        case .claude: return !normalizedSecret(claudeAPIKey).isEmpty
+        case .openai: return !normalizedSecret(openaiAPIKey).isEmpty
+        case .lmStudio: return !normalizedSecret(lmStudioAPIKey).isEmpty
         }
     }
 
@@ -245,7 +223,7 @@ final class SettingsViewModel: ObservableObject {
         case .lmStudio:
             return hasSelectedLLMKey
                 && !UniFiAPIClient.normalizeBaseURL(lmStudioBaseURL).isEmpty
-                && !normalizedKey(lmStudioModel).isEmpty
+                && !normalizedText(lmStudioModel).isEmpty
         }
     }
 
@@ -353,13 +331,23 @@ final class SettingsViewModel: ObservableObject {
         llmKeyTestResult = nil
         defer { isTestingLLMKey = false }
 
+        let provider = selectedProvider
+        let startedAt = Date()
+        debugLog("LLM API key test started (provider=\(provider.rawValue))", category: "LLM")
         do {
             try await validateSelectedLLMProviderKey()
-            llmKeyTestResult = selectedProviderSuccessMessage(selectedProvider)
+            let elapsedMS = Int(Date().timeIntervalSince(startedAt) * 1000)
+            llmKeyTestResult = selectedProviderSuccessMessage(provider)
+            debugLog("LLM API key test succeeded (provider=\(provider.rawValue), elapsed_ms=\(elapsedMS))", category: "LLM")
         } catch let error as LLMError {
             llmKeyTestResult = "Failed: \(error.localizedDescription)"
+            let elapsedMS = Int(Date().timeIntervalSince(startedAt) * 1000)
+            debugLog("LLM API key test failed (provider=\(provider.rawValue), elapsed_ms=\(elapsedMS), error=\(error.localizedDescription))", category: "LLM")
         } catch {
-            llmKeyTestResult = "Failed: \(friendlyProviderError(error, provider: selectedProvider))"
+            let message = friendlyProviderError(error, provider: provider)
+            llmKeyTestResult = "Failed: \(message)"
+            let elapsedMS = Int(Date().timeIntervalSince(startedAt) * 1000)
+            debugLog("LLM API key test failed (provider=\(provider.rawValue), elapsed_ms=\(elapsedMS), error=\(message))", category: "LLM")
         }
     }
 
@@ -438,7 +426,7 @@ final class SettingsViewModel: ObservableObject {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        let token = normalizedKey(grafanaLokiAPIKey)
+        let token = normalizedSecret(grafanaLokiAPIKey)
         if !token.isEmpty {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
@@ -527,11 +515,13 @@ final class SettingsViewModel: ObservableObject {
     /// Runs a lightweight OpenAI request to validate the configured API key.
     private func testOpenAIKey() async throws {
         let apiKey = try requiredAPIKey(openaiAPIKey)
-        var request = URLRequest(url: URL(string: "https://api.openai.com/v1/models")!)
+        let url = try providerValidationURL(baseURL: "https://api.openai.com", path: "/v1/models", providerName: "OpenAI")
+        var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.timeoutInterval = 20
-        try await runHTTPValidationRequest(request)
+        debugLog("OpenAI API key probe prepared (url=\(request.url?.absoluteString ?? "unknown"))", category: "LLM")
+        try await runHTTPValidationRequest(request, logName: "OpenAI")
     }
 
     /// Builds the display option used for a saved guardrail client selector.
@@ -1038,7 +1028,7 @@ final class SettingsViewModel: ObservableObject {
             self[keyPath: errorSink] = "Failed: Console URL is invalid."
             return nil
         }
-        guard !normalizedKey(unifiAPIKey).isEmpty || KeychainHelper.exists(key: .unifiAPIKey) else {
+        guard !normalizedSecret(unifiAPIKey).isEmpty || KeychainHelper.exists(key: .unifiAPIKey) else {
             self[keyPath: errorSink] = "Failed: UniFi API key is required."
             return nil
         }
@@ -1051,7 +1041,7 @@ final class SettingsViewModel: ObservableObject {
     private func withPreparedUniFiAPIKey<T>(
         _ operation: () async throws -> T
     ) async throws -> T {
-        let normalizedTypedKey = normalizedKey(unifiAPIKey)
+        let normalizedTypedKey = normalizedSecret(unifiAPIKey)
         let hadStoredKey = KeychainHelper.exists(key: .unifiAPIKey)
         if !normalizedTypedKey.isEmpty {
             KeychainHelper.save(key: .unifiAPIKey, string: normalizedTypedKey)
@@ -1294,23 +1284,26 @@ final class SettingsViewModel: ObservableObject {
     /// Runs a lightweight Claude request to validate the configured API key.
     private func testClaudeKey() async throws {
         let apiKey = try requiredAPIKey(claudeAPIKey)
-        var request = URLRequest(url: URL(string: "https://api.anthropic.com/v1/models")!)
+        let url = try providerValidationURL(baseURL: "https://api.anthropic.com", path: "/v1/models", providerName: "Claude")
+        var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         request.timeoutInterval = 20
-        try await runHTTPValidationRequest(request)
+        debugLog("Claude API key probe prepared (url=\(request.url?.absoluteString ?? "unknown"))", category: "LLM")
+        try await runHTTPValidationRequest(request, logName: "Claude")
     }
 
     /// Runs a lightweight LM Studio request to validate the configured endpoint.
     private func testLMStudioKey() async throws {
         let request = try lmStudioRequest(path: "/v1/models")
+        debugLog("LM Studio API key probe prepared (url=\(request.url?.absoluteString ?? "unknown"))", category: "LLM")
         _ = try await runLMStudioRequest(request, logName: "models probe")
     }
 
     /// Chooses a model ID for LM Studio chat tests.
     private func resolveLMStudioModelForChat() async throws -> String {
-        let selected = normalizedKey(lmStudioModel)
+        let selected = normalizedText(lmStudioModel)
         let models = try await fetchLMStudioModels()
         lmStudioModels = models
         if models.isEmpty {
@@ -1364,7 +1357,7 @@ final class SettingsViewModel: ObservableObject {
 
     private func applyLoadedLMStudioModels(_ models: [String]) {
         lmStudioModels = models
-        let selected = normalizedKey(lmStudioModel)
+        let selected = normalizedText(lmStudioModel)
         if models.contains(selected), !selected.isEmpty {
             lmStudioModel = selected
         } else if let first = models.first {
@@ -1401,7 +1394,7 @@ final class SettingsViewModel: ObservableObject {
     }
 
     private func requiredAPIKey(_ rawKey: String) throws -> String {
-        let apiKey = normalizedKey(rawKey)
+        let apiKey = normalizedSecret(rawKey)
         guard !apiKey.isEmpty else {
             throw LLMError.missingAPIKey
         }
@@ -1410,10 +1403,26 @@ final class SettingsViewModel: ObservableObject {
 
     private func runHTTPValidationRequest(
         _ request: URLRequest,
-        session: URLSession = .shared
+        session: URLSession = .shared,
+        logName: String
     ) async throws {
-        let (data, response) = try await session.data(for: request)
-        try validateHTTP(response: response, data: data)
+        let startedAt = Date()
+        let url = request.url?.absoluteString ?? "unknown"
+        debugLog("\(logName) HTTP validation request started (method=\(request.httpMethod ?? "GET"), url=\(url))", category: "LLM")
+        do {
+            let (data, response) = try await session.data(for: request)
+            let elapsedMS = Int(Date().timeIntervalSince(startedAt) * 1000)
+            if let http = response as? HTTPURLResponse {
+                debugLog("\(logName) HTTP validation response received (url=\(url), status=\(http.statusCode), elapsed_ms=\(elapsedMS), bytes=\(data.count))", category: "LLM")
+            } else {
+                debugLog("\(logName) HTTP validation non-HTTP response received (url=\(url), elapsed_ms=\(elapsedMS), bytes=\(data.count))", category: "LLM")
+            }
+            try validateHTTP(response: response, data: data, logName: logName)
+        } catch {
+            let elapsedMS = Int(Date().timeIntervalSince(startedAt) * 1000)
+            debugLog("\(logName) HTTP validation request failed (url=\(url), elapsed_ms=\(elapsedMS), error=\(error.localizedDescription))", category: "LLM")
+            throw error
+        }
     }
 
     /// Creates a standard authenticated LM Studio request against the configured base URL.
@@ -1425,6 +1434,26 @@ final class SettingsViewModel: ObservableObject {
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.timeoutInterval = 20
         return request
+    }
+
+    /// Builds a provider validation URL and logs the resolver result for the upstream API host.
+    private func providerValidationURL(baseURL: String, path: String, providerName: String) throws -> URL {
+        guard var components = URLComponents(string: baseURL) else {
+            throw LLMError.invalidResponse("\(providerName) base URL is invalid.")
+        }
+        if let host = components.host {
+            let resolvedIP = resolvedIPv4Address(for: host)
+            if let resolvedIP {
+                debugLog("\(providerName) host resolved to IP \(resolvedIP) (from \(host))", category: "LLM")
+            } else {
+                debugLog("\(providerName) hostname resolution returned no IPv4 address for '\(host)'", category: "LLM")
+            }
+        }
+        components.path = path
+        guard let url = components.url else {
+            throw LLMError.invalidResponse("\(providerName) validation URL is invalid.")
+        }
+        return url
     }
 
     /// Executes an LM Studio request with consistent debug logging around start, latency,
@@ -1448,19 +1477,19 @@ final class SettingsViewModel: ObservableObject {
                 category: "LLM"
             )
         }
-        try validateHTTP(response: response, data: data)
+        try validateHTTP(response: response, data: data, logName: "LM Studio")
         return data
     }
 
     /// Throws a user-facing error when an HTTP response is missing or unsuccessful.
-    private func validateHTTP(response: URLResponse, data: Data) throws {
+    private func validateHTTP(response: URLResponse, data: Data, logName: String) throws {
         guard let http = response as? HTTPURLResponse else {
             throw LLMError.invalidResponse("missing HTTP response")
         }
         guard (200..<300).contains(http.statusCode) else {
             let body = String(data: data, encoding: .utf8) ?? ""
             let bodyPreview = String(body.prefix(300)).replacingOccurrences(of: "\n", with: " ")
-            debugLog("LM Studio HTTP \(http.statusCode) bodyPreview=\(bodyPreview)", category: "LLM")
+            debugLog("\(logName) HTTP \(http.statusCode) bodyPreview=\(bodyPreview)", category: "LLM")
             if http.statusCode == 502 {
                 throw LLMError.invalidResponse(
                     "LM Studio returned HTTP 502 (proxy/intermediary path). Use direct LAN URL/IP and disable iCloud Private Relay / Limit IP Address Tracking for this Wi-Fi."
@@ -1559,9 +1588,43 @@ final class SettingsViewModel: ObservableObject {
         return try JSONDecoder().decode([UniFiClient].self, from: data)
     }
 
-    /// Normalizes an API key string by trimming surrounding whitespace.
-    private func normalizedKey(_ key: String) -> String {
+    /// Normalizes a general text field by trimming surrounding whitespace.
+    private func normalizedText(_ key: String) -> String {
         key.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Normalizes secret fields by trimming edges and removing embedded CR/LF from pasted values.
+    private func normalizedSecret(_ key: String) -> String {
+        normalizedText(key)
+            .replacingOccurrences(of: "\r", with: "")
+            .replacingOccurrences(of: "\n", with: "")
+    }
+
+    /// Persists or deletes one settings value in Keychain and logs the redacted stored result.
+    private func saveKeychainValue(_ value: String, key: KeychainHelper.Key, label: String, secret: Bool = false) {
+        if value.isEmpty {
+            let deleted = KeychainHelper.delete(key: key)
+            debugLog("\(label) keychain delete attempted (success=\(deleted))", category: "Settings")
+            return
+        }
+
+        let saved = KeychainHelper.save(key: key, string: value)
+        let storedValue = KeychainHelper.loadString(key: key) ?? ""
+        let matches = storedValue == value
+        let preview = secret ? redactedSecretPreview(storedValue) : storedValue
+        debugLog(
+            "\(label) keychain save attempted (success=\(saved), matches_saved_value=\(matches), stored=\(preview))",
+            category: "Settings"
+        )
+    }
+
+    /// Returns a short redacted preview for debug logs without exposing full secret values.
+    private func redactedSecretPreview(_ value: String) -> String {
+        guard !value.isEmpty else { return "<empty>" }
+        if value.count <= 8 {
+            return "<len=\(value.count)>"
+        }
+        return "\(value.prefix(4))...\(value.suffix(4)) <len=\(value.count)>"
     }
 
     /// Applies provider-specific transport guidance where needed while leaving other
