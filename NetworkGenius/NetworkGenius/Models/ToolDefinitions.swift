@@ -101,6 +101,70 @@ enum ToolCatalog {
             audience: .advanced
         ),
         ToolDefinition(
+            name: "list_policy_engine_groups",
+            description: "List Policy Engine client groups from UniFi's new Object Manager path.",
+            parameters: [
+                ToolParameter(name: "site_ref", type: "string", description: "Optional site reference. Default: default.", required: false),
+            ],
+            audience: .advanced
+        ),
+        ToolDefinition(
+            name: "create_policy_engine_group",
+            description: "Create a Policy Engine client group using explicit member MAC addresses.",
+            parameters: [
+                ToolParameter(name: "name", type: "string", description: "Group name.", required: true),
+                ToolParameter(name: "member_macs", type: "string", description: "Comma-separated client MAC addresses to include in the group.", required: true),
+                ToolParameter(name: "site_ref", type: "string", description: "Optional site reference. Default: default.", required: false),
+            ],
+            audience: .advanced
+        ),
+        ToolDefinition(
+            name: "update_policy_engine_group",
+            description: "Update a Policy Engine client group by id or name. If member_macs is omitted, existing members are preserved.",
+            parameters: [
+                ToolParameter(name: "group", type: "string", description: "Group id or exact group name.", required: true),
+                ToolParameter(name: "name", type: "string", description: "Optional new group name. Defaults to the current name.", required: false),
+                ToolParameter(name: "member_macs", type: "string", description: "Optional comma-separated replacement member MAC addresses.", required: false),
+                ToolParameter(name: "site_ref", type: "string", description: "Optional site reference. Default: default.", required: false),
+            ],
+            audience: .advanced
+        ),
+        ToolDefinition(
+            name: "delete_policy_engine_group",
+            description: "Delete a Policy Engine client group by id or name.",
+            parameters: [
+                ToolParameter(name: "group", type: "string", description: "Group id or exact group name.", required: true),
+                ToolParameter(name: "site_ref", type: "string", description: "Optional site reference. Default: default.", required: false),
+            ],
+            audience: .advanced
+        ),
+        ToolDefinition(
+            name: "list_policy_engine_objects",
+            description: "List Policy Engine Object Manager objects from UniFi's new object-oriented path.",
+            parameters: [
+                ToolParameter(name: "site_ref", type: "string", description: "Optional site reference. Default: default.", required: false),
+            ],
+            audience: .advanced
+        ),
+        ToolDefinition(
+            name: "summarize_policy_engine_objects",
+            description: "Return a compact summary of Policy Engine groups and objects, including target types and which Secure, Route, and QoS families are enabled.",
+            parameters: [
+                ToolParameter(name: "site_ref", type: "string", description: "Optional site reference. Default: default.", required: false),
+                ToolParameter(name: "limit", type: "integer", description: "How many sample objects to include (1-20). Default: 5.", required: false),
+            ],
+            audience: .advanced
+        ),
+        ToolDefinition(
+            name: "compare_policy_engine_paths",
+            description: "Compare the current counts and overlap across Policy Engine objects, traffic rules, client groups, and simple firewall app blocks.",
+            parameters: [
+                ToolParameter(name: "site_ref", type: "string", description: "Optional site reference. Default: default.", required: false),
+                ToolParameter(name: "limit", type: "integer", description: "How many sample names to include per path (1-10). Default: 3.", required: false),
+            ],
+            audience: .advanced
+        ),
+        ToolDefinition(
             name: "list_pending_devices",
             description: "List devices waiting to be adopted.",
             parameters: []
@@ -241,21 +305,24 @@ enum ToolCatalog {
             parameters: [
                 ToolParameter(name: "query", type: "string", description: "Client name/hostname/IP/MAC/id fragment.", required: true),
                 ToolParameter(name: "site_ref", type: "string", description: "Optional site reference. Default: default.", required: false),
-            ]
+            ],
+            audience: .advanced
         ),
         ToolDefinition(
             name: "resolve_dpi_application",
             description: "Resolve one DPI application by fuzzy name/id for app-block planning. Prefer this over list tools to avoid large responses.",
             parameters: [
                 ToolParameter(name: "query", type: "string", description: "Application name or id fragment.", required: true),
-            ]
+            ],
+            audience: .advanced
         ),
         ToolDefinition(
             name: "resolve_dpi_category",
             description: "Resolve one DPI category by fuzzy name/id for app-block planning. Prefer this over list tools to avoid large responses.",
             parameters: [
                 ToolParameter(name: "query", type: "string", description: "Category name or id fragment.", required: true),
-            ]
+            ],
+            audience: .advanced
         ),
         ToolDefinition(
             name: "list_dpi_applications",
@@ -263,7 +330,8 @@ enum ToolCatalog {
             parameters: [
                 ToolParameter(name: "search", type: "string", description: "Optional case-insensitive name/id filter.", required: false),
                 ToolParameter(name: "limit", type: "integer", description: "Max results (1-200). Default: 50.", required: false),
-            ]
+            ],
+            audience: .advanced
         ),
         ToolDefinition(
             name: "list_dpi_categories",
@@ -271,7 +339,8 @@ enum ToolCatalog {
             parameters: [
                 ToolParameter(name: "search", type: "string", description: "Optional case-insensitive name/id filter.", required: false),
                 ToolParameter(name: "limit", type: "integer", description: "Max results (1-200). Default: 50.", required: false),
-            ]
+            ],
+            audience: .advanced
         ),
         ToolDefinition(
             name: "plan_client_app_block",
@@ -282,14 +351,16 @@ enum ToolCatalog {
                 ToolParameter(name: "categories", type: "string", description: "Optional comma-separated DPI category names/ids.", required: false),
                 ToolParameter(name: "policy_name", type: "string", description: "Optional friendly rule name.", required: false),
                 ToolParameter(name: "site_ref", type: "string", description: "Optional site reference for apply path. Default: default.", required: false),
-            ]
+            ],
+            audience: .advanced
         ),
         ToolDefinition(
             name: "apply_client_app_block",
             description: "Apply a previously planned client app-block rule using approve_token.",
             parameters: [
                 ToolParameter(name: "approve_token", type: "string", description: "Token returned by plan_client_app_block.", required: true),
-            ]
+            ],
+            audience: .advanced
         ),
         ToolDefinition(
             name: "remove_client_app_block",
@@ -299,7 +370,8 @@ enum ToolCatalog {
                 ToolParameter(name: "apps", type: "string", description: "Optional comma-separated DPI app names/ids to remove.", required: false),
                 ToolParameter(name: "categories", type: "string", description: "Optional comma-separated DPI category names/ids to remove.", required: false),
                 ToolParameter(name: "site_ref", type: "string", description: "Optional site reference for apply path. Default: default.", required: false),
-            ]
+            ],
+            audience: .advanced
         ),
         ToolDefinition(
             name: "list_client_app_block",
@@ -307,7 +379,8 @@ enum ToolCatalog {
             parameters: [
                 ToolParameter(name: "client", type: "string", description: "Client selector (name/hostname/IP/MAC/id).", required: true),
                 ToolParameter(name: "site_ref", type: "string", description: "Optional site reference for lookup path. Default: default.", required: false),
-            ]
+            ],
+            audience: .advanced
         ),
         ToolDefinition(
             name: "list_clients_with_app_blocks",
@@ -315,7 +388,8 @@ enum ToolCatalog {
             parameters: [
                 ToolParameter(name: "limit", type: "integer", description: "How many blocked clients to return (1-100). Default: 20.", required: false),
                 ToolParameter(name: "site_ref", type: "string", description: "Optional site reference for lookup path. Default: default.", required: false),
-            ]
+            ],
+            audience: .advanced
         ),
         ToolDefinition(
             name: "ssh_collect_unifi_logs",

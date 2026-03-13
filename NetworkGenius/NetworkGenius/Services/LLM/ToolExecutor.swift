@@ -103,6 +103,28 @@ final class ToolExecutor {
             return try await queryService.query("dns-policies")
         case "list_vpn_servers":
             return try await queryService.query("vpn-servers")
+        case "list_policy_engine_groups":
+            return try await listPolicyEngineGroups(siteRef: toolCall.arguments["site_ref"])
+        case "create_policy_engine_group":
+            return try await createPolicyEngineGroup(
+                name: toolCall.arguments["name"],
+                memberMACsCSV: toolCall.arguments["member_macs"],
+                siteRef: toolCall.arguments["site_ref"]
+            )
+        case "update_policy_engine_group":
+            return try await updatePolicyEngineGroup(
+                groupSelector: toolCall.arguments["group"],
+                newName: toolCall.arguments["name"],
+                memberMACsCSV: toolCall.arguments["member_macs"],
+                siteRef: toolCall.arguments["site_ref"]
+            )
+        case "delete_policy_engine_group":
+            return try await deletePolicyEngineGroup(
+                groupSelector: toolCall.arguments["group"],
+                siteRef: toolCall.arguments["site_ref"]
+            )
+        case "list_policy_engine_objects":
+            return try await listPolicyEngineObjects(siteRef: toolCall.arguments["site_ref"])
         case "list_pending_devices":
             return try await queryService.query("pending-devices")
         case "get_device_details":
@@ -272,6 +294,16 @@ final class ToolExecutor {
             return try await wanGatewayHealth(
                 logMinutes: Int(toolCall.arguments["minutes"] ?? "")
             )
+        case "summarize_policy_engine_objects":
+            return try await summarizePolicyEngineObjects(
+                siteRef: toolCall.arguments["site_ref"],
+                rawLimit: Int(toolCall.arguments["limit"] ?? "")
+            )
+        case "compare_policy_engine_paths":
+            return try await comparePolicyEnginePaths(
+                siteRef: toolCall.arguments["site_ref"],
+                rawLimit: Int(toolCall.arguments["limit"] ?? "")
+            )
         default:
             return nil
         }
@@ -358,6 +390,221 @@ final class ToolExecutor {
         return formattedWANHealthSnapshot(gatewayLines: gatewayLines, minutes: minutes, wanLogs: wanLogs)
     }
 
+    /// Lists Policy Engine client groups from the new UniFi Object Manager path.
+    private func listPolicyEngineGroups(siteRef rawSiteRef: String?) async throws -> String {
+        let siteRef = normalizedSiteRef(rawSiteRef)
+        let payload = try await apiClient.getJSON(path: "/proxy/network/v2/api/site/\(siteRef)/network-members-groups")
+        let rows = rowsFromAnyPayload(payload)
+        debugLog("Policy Engine groups loaded (\(rows.count) rows, site_ref=\(siteRef))", category: "Tools")
+        let data = try JSONSerialization.data(withJSONObject: rows, options: [.prettyPrinted, .sortedKeys])
+        return String(data: data, encoding: .utf8) ?? "[]"
+    }
+
+    /// Creates a new Policy Engine client group using explicit member MAC addresses.
+    private func createPolicyEngineGroup(
+        name rawName: String?,
+        memberMACsCSV rawMemberMACs: String?,
+        siteRef rawSiteRef: String?
+    ) async throws -> String {
+        let siteRef = normalizedSiteRef(rawSiteRef)
+        let name = (rawName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else {
+            return "Error: create_policy_engine_group requires a non-empty 'name'."
+        }
+
+        let memberMACs = (rawMemberMACs ?? "")
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { !$0.isEmpty }
+        guard !memberMACs.isEmpty else {
+            return "Error: create_policy_engine_group requires 'member_macs'."
+        }
+
+        let payload: [String: Any] = [
+            "name": name,
+            "members": memberMACs,
+            "type": "CLIENTS",
+        ]
+        _ = try await apiClient.postJSON(path: "/proxy/network/v2/api/site/\(siteRef)/network-members-group", body: payload)
+        debugLog("Policy Engine group created (name=\(name), members=\(memberMACs.count), site_ref=\(siteRef))", category: "Tools")
+        return """
+        Created Policy Engine group:
+        - site_ref: \(siteRef)
+        - name: \(name)
+        - member_count: \(memberMACs.count)
+        - members: \(memberMACs.joined(separator: ", "))
+        """
+    }
+
+    /// Updates an existing Policy Engine client group by id or name.
+    private func updatePolicyEngineGroup(
+        groupSelector rawSelector: String?,
+        newName rawNewName: String?,
+        memberMACsCSV rawMemberMACs: String?,
+        siteRef rawSiteRef: String?
+    ) async throws -> String {
+        let siteRef = normalizedSiteRef(rawSiteRef)
+        guard let rawSelector else {
+            return "Error: update_policy_engine_group requires 'group'."
+        }
+        let groups = rowsFromAnyPayload(
+            try await apiClient.getJSON(path: "/proxy/network/v2/api/site/\(siteRef)/network-members-groups")
+        )
+        let group = try resolvePolicyEngineGroup(rawSelector, in: groups)
+        let groupID = firstString(in: group, keys: ["id", "_id"]) ?? ""
+        guard !groupID.isEmpty else {
+            return "Error: Selected group is missing an id."
+        }
+
+        let resolvedName = (rawNewName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = resolvedName.isEmpty ? (firstString(in: group, keys: ["name"]) ?? groupID) : resolvedName
+        let existingMembers = stringCandidates(in: group, keys: ["members"]).map { $0.lowercased() }
+        let requestedMembers = (rawMemberMACs ?? "")
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { !$0.isEmpty }
+        let memberMACs = requestedMembers.isEmpty ? existingMembers : requestedMembers
+        let payload: [String: Any] = [
+            "id": groupID,
+            "name": name,
+            "members": memberMACs,
+            "type": "CLIENTS",
+        ]
+
+        _ = try await apiClient.putJSON(
+            path: "/proxy/network/v2/api/site/\(siteRef)/network-members-group/\(groupID)",
+            body: payload
+        )
+        debugLog("Policy Engine group updated (group_id=\(groupID), name=\(name), members=\(memberMACs.count), site_ref=\(siteRef))", category: "Tools")
+        return """
+        Updated Policy Engine group:
+        - site_ref: \(siteRef)
+        - id: \(groupID)
+        - name: \(name)
+        - member_count: \(memberMACs.count)
+        - members: \(memberMACs.joined(separator: ", "))
+        """
+    }
+
+    /// Deletes an existing Policy Engine client group by id or name.
+    private func deletePolicyEngineGroup(
+        groupSelector rawSelector: String?,
+        siteRef rawSiteRef: String?
+    ) async throws -> String {
+        let siteRef = normalizedSiteRef(rawSiteRef)
+        guard let rawSelector else {
+            return "Error: delete_policy_engine_group requires 'group'."
+        }
+        let groups = rowsFromAnyPayload(
+            try await apiClient.getJSON(path: "/proxy/network/v2/api/site/\(siteRef)/network-members-groups")
+        )
+        let group = try resolvePolicyEngineGroup(rawSelector, in: groups)
+        let groupID = firstString(in: group, keys: ["id", "_id"]) ?? ""
+        guard !groupID.isEmpty else {
+            return "Error: Selected group is missing an id."
+        }
+        let name = firstString(in: group, keys: ["name"]) ?? groupID
+        _ = try await apiClient.deleteJSON(path: "/proxy/network/v2/api/site/\(siteRef)/network-members-group/\(groupID)")
+        debugLog("Policy Engine group deleted (group_id=\(groupID), name=\(name), site_ref=\(siteRef))", category: "Tools")
+        return """
+        Deleted Policy Engine group:
+        - site_ref: \(siteRef)
+        - id: \(groupID)
+        - name: \(name)
+        """
+    }
+
+    /// Lists Policy Engine Object Manager objects from the new UniFi object-oriented path.
+    private func listPolicyEngineObjects(siteRef rawSiteRef: String?) async throws -> String {
+        let siteRef = normalizedSiteRef(rawSiteRef)
+        let payload = try await apiClient.getJSON(path: "/proxy/network/v2/api/site/\(siteRef)/object-oriented-network-configs")
+        let rows = rowsFromAnyPayload(payload)
+        debugLog("Policy Engine objects loaded (\(rows.count) rows, site_ref=\(siteRef))", category: "Tools")
+        let data = try JSONSerialization.data(withJSONObject: rows, options: [.prettyPrinted, .sortedKeys])
+        return String(data: data, encoding: .utf8) ?? "[]"
+    }
+
+    /// Summarizes Policy Engine groups and objects without returning the full raw collections.
+    private func summarizePolicyEngineObjects(siteRef rawSiteRef: String?, rawLimit: Int?) async throws -> String {
+        let siteRef = normalizedSiteRef(rawSiteRef)
+        let limit = max(1, min(rawLimit ?? 5, 20))
+        let groupRows = rowsFromAnyPayload(
+            try await apiClient.getJSON(path: "/proxy/network/v2/api/site/\(siteRef)/network-members-groups")
+        )
+        let objectRows = rowsFromAnyPayload(
+            try await apiClient.getJSON(path: "/proxy/network/v2/api/site/\(siteRef)/object-oriented-network-configs")
+        )
+
+        var targetTypeCounts: [String: Int] = [:]
+        var secureCount = 0
+        var routeCount = 0
+        var qosCount = 0
+
+        for row in objectRows {
+            let targetType = firstString(in: row, keys: ["target_type"]) ?? "unknown"
+            targetTypeCounts[targetType, default: 0] += 1
+            if boolValue((row["secure"] as? [String: Any])?["enabled"]) == true { secureCount += 1 }
+            if boolValue((row["route"] as? [String: Any])?["enabled"]) == true { routeCount += 1 }
+            if boolValue((row["qos"] as? [String: Any])?["enabled"]) == true { qosCount += 1 }
+        }
+
+        let sampleLines = objectRows.prefix(limit).enumerated().map { index, row in
+            let name = firstString(in: row, keys: ["name", "id"]) ?? "unnamed"
+            let targetType = firstString(in: row, keys: ["target_type"]) ?? "unknown"
+            let features = policyEngineFeatureLabels(row)
+            return "\(index + 1). name=\(name), target_type=\(targetType), features=\(features.isEmpty ? "none" : features.joined(separator: ","))"
+        }
+
+        let targetTypeSummary = targetTypeCounts.keys.sorted().map { "\($0)=\(targetTypeCounts[$0] ?? 0)" }.joined(separator: ", ")
+        return """
+        Policy Engine summary:
+        - site_ref: \(siteRef)
+        - group_count: \(groupRows.count)
+        - object_count: \(objectRows.count)
+        - target_types: \(targetTypeSummary.isEmpty ? "none" : targetTypeSummary)
+        - secure_enabled: \(secureCount)
+        - route_enabled: \(routeCount)
+        - qos_enabled: \(qosCount)
+        \(sampleLines.joined(separator: "\n"))
+        """
+    }
+
+    /// Compares the current counts across Policy Engine objects, trafficrules, groups, and simple app blocks.
+    private func comparePolicyEnginePaths(siteRef rawSiteRef: String?, rawLimit: Int?) async throws -> String {
+        let siteRef = normalizedSiteRef(rawSiteRef)
+        let limit = max(1, min(rawLimit ?? 3, 10))
+        let groupRows = rowsFromAnyPayload(
+            try await apiClient.getJSON(path: "/proxy/network/v2/api/site/\(siteRef)/network-members-groups")
+        )
+        let objectRows = rowsFromAnyPayload(
+            try await apiClient.getJSON(path: "/proxy/network/v2/api/site/\(siteRef)/object-oriented-network-configs")
+        )
+        let trafficRuleRows = rowsFromAnyPayload(
+            try await apiClient.getJSON(path: "/proxy/network/v2/api/site/\(siteRef)/trafficrules")
+        )
+        let appBlockRows = rowsFromAnyPayload(
+            try await apiClient.getJSON(path: "/proxy/network/v2/api/site/\(siteRef)/firewall-app-blocks")
+        )
+
+        let sampleGroups = samplePolicyEngineNames(groupRows, limit: limit)
+        let sampleObjects = samplePolicyEngineNames(objectRows, limit: limit)
+        let sampleTrafficRules = samplePolicyEngineNames(trafficRuleRows, limit: limit)
+        let sampleAppBlocks = samplePolicyEngineNames(appBlockRows, limit: limit)
+
+        return """
+        Policy Engine path comparison:
+        - site_ref: \(siteRef)
+        - client_groups: \(groupRows.count)
+        - object_manager_objects: \(objectRows.count)
+        - trafficrules: \(trafficRuleRows.count)
+        - firewall_app_blocks: \(appBlockRows.count)
+        - sample_groups: \(sampleGroups.isEmpty ? "none" : sampleGroups.joined(separator: ", "))
+        - sample_objects: \(sampleObjects.isEmpty ? "none" : sampleObjects.joined(separator: ", "))
+        - sample_trafficrules: \(sampleTrafficRules.isEmpty ? "none" : sampleTrafficRules.joined(separator: ", "))
+        - sample_firewall_app_blocks: \(sampleAppBlocks.isEmpty ? "none" : sampleAppBlocks.joined(separator: ", "))
+        """
+    }
+
     /// Formats the gateway inventory section of the WAN snapshot so inventory extraction
     /// stays separate from the higher-level report layout.
     private func formattedGatewayLines(_ gateways: [[String: Any]]) -> [String] {
@@ -398,6 +645,52 @@ final class ToolExecutor {
             return true
         }
         return device.keys.contains("wan") || device.keys.contains("uplink")
+    }
+
+    /// Returns enabled feature labels for a Policy Engine object row.
+    private func policyEngineFeatureLabels(_ row: [String: Any]) -> [String] {
+        var labels: [String] = []
+        if boolValue((row["secure"] as? [String: Any])?["enabled"]) == true {
+            labels.append("secure")
+        }
+        if boolValue((row["route"] as? [String: Any])?["enabled"]) == true {
+            labels.append("route")
+        }
+        if boolValue((row["qos"] as? [String: Any])?["enabled"]) == true {
+            labels.append("qos")
+        }
+        return labels
+    }
+
+    /// Returns a few sample names from a Policy Engine-related row collection.
+    private func samplePolicyEngineNames(_ rows: [[String: Any]], limit: Int) -> [String] {
+        rows.prefix(limit).compactMap { firstString(in: $0, keys: ["name", "id"]) }
+    }
+
+    /// Resolves one Policy Engine group by id, exact name, or unique partial name.
+    private func resolvePolicyEngineGroup(_ selector: String, in groups: [[String: Any]]) throws -> [String: Any] {
+        let trimmed = selector.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw UniFiAPIError.invalidURL("group selector must not be empty")
+        }
+        if let exactID = groups.first(where: { firstString(in: $0, keys: ["id", "_id"]) == trimmed }) {
+            return exactID
+        }
+        if let exactName = groups.first(where: {
+            (firstString(in: $0, keys: ["name"]) ?? "").localizedCaseInsensitiveCompare(trimmed) == .orderedSame
+        }) {
+            return exactName
+        }
+        let partialMatches = groups.filter {
+            (firstString(in: $0, keys: ["name"]) ?? "").localizedCaseInsensitiveContains(trimmed)
+        }
+        if partialMatches.count == 1, let match = partialMatches.first {
+            return match
+        }
+        if partialMatches.count > 1 {
+            throw UniFiAPIError.invalidURL("multiple Policy Engine groups matched '\(trimmed)'")
+        }
+        throw UniFiAPIError.invalidURL("no Policy Engine group matched '\(trimmed)'")
     }
 
     /// Returns the first non-empty string found in the provided dictionary keys.
