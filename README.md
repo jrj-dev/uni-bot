@@ -3,26 +3,26 @@
 Local-first network assistant for UniFi environments.
 
 This repo contains two parts:
-- `NetworkGenius/`: iOS app (SwiftUI) for chat + voice network troubleshooting.
+- `UniBot/`: iOS app (SwiftUI) for chat + voice network troubleshooting.
 - `skills/unifi-network-local/`: CLI skill and scripts for direct UniFi/Loki/LM Studio workflows.
 
 ## Current Architecture
 
 ### iOS App Boundaries
 
-- `NetworkGenius/NetworkGenius/App/AppState.swift`
+- `UniBot/UniBot/App/AppState.swift`
   - persisted user settings and runtime toggles
   - current/legacy client-modification approval storage
-- `NetworkGenius/NetworkGenius/ViewModels/SettingsViewModel.swift`
+- `UniBot/UniBot/ViewModels/SettingsViewModel.swift`
   - settings editing, keychain writes, provider validation, guardrail client loading
   - should stay focused on settings workflows rather than tool execution
-- `NetworkGenius/NetworkGenius/ViewModels/ChatViewModel.swift`
+- `UniBot/UniBot/ViewModels/ChatViewModel.swift`
   - conversation state, startup validation, prompt assembly, and LLM/tool request orchestration
   - route methods are intentionally kept thin and delegate to helper methods for runtime rebuilds, request loops, and response delivery
-- `NetworkGenius/NetworkGenius/Services/LLM/ToolExecutor.swift`
+- `UniBot/UniBot/Services/LLM/ToolExecutor.swift`
   - top-level tool router for inventory, diagnostics, ranking, summaries, docs/logs, and guarded app-block flows
   - domain helpers should own parsing, scoring, payload shaping, and formatting instead of growing monolithic switch methods
-- `NetworkGenius/NetworkGenius/Services/UniFi/`
+- `UniBot/UniBot/Services/UniFi/`
   - UniFi API client, query service, and summary service
 
 ### Complexity Direction
@@ -36,7 +36,7 @@ That is the preferred pattern for future work in `ChatViewModel`, `SettingsViewM
 
 ## Repository Capabilities
 
-### iOS App (`NetworkGenius`)
+### iOS App (`UniBot`)
 
 - Chat assistant with tool use against local UniFi APIs.
 - LLM providers:
@@ -157,7 +157,7 @@ That is the preferred pattern for future work in `ChatViewModel`, `SettingsViewM
 ## Project Layout
 
 ```text
-NetworkGenius/                         iOS app project
+UniBot/                               iOS app project
 skills/unifi-network-local/            skill docs + scripts
 tests/                                 python tests and fixtures
 .env.local.example                     local env template for scripts
@@ -222,7 +222,7 @@ Notes:
 
 ## iOS App Setup
 
-1. Open `NetworkGenius/NetworkGenius.xcodeproj` in Xcode.
+1. Open `UniBot/UniBot.xcodeproj` in Xcode.
 2. Set your signing team.
 3. Build/run on simulator or device.
 4. In app Settings:
@@ -425,7 +425,7 @@ python3 -m unittest -v tests/test_unifi_network_local.py
 iOS build:
 
 ```bash
-xcodebuild -project NetworkGenius/NetworkGenius.xcodeproj -scheme NetworkGenius -destination 'platform=iOS Simulator,name=iPhone 17' build
+xcodebuild -project UniBot/UniBot.xcodeproj -scheme UniBot -destination 'platform=iOS Simulator,name=iPhone 17' build
 ```
 
 ## Security
