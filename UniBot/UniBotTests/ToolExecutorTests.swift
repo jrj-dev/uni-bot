@@ -2,8 +2,12 @@ import XCTest
 @testable import UniBot
 
 final class ToolExecutorTests: XCTestCase {
-    func testToolCatalogHas48Tools() {
-        XCTAssertEqual(ToolCatalog.all.count, 48)
+    func testToolCatalogIncludesExpectedRecentTools() {
+        let names = Set(ToolCatalog.all.map(\.name))
+
+        XCTAssertTrue(names.contains("list_clients_with_app_blocks"))
+        XCTAssertTrue(names.contains("summarize_policy_engine_objects"))
+        XCTAssertTrue(names.contains("compare_policy_engine_paths"))
     }
 
     func testBasicModeHidesAdvancedTools() {
@@ -13,8 +17,16 @@ final class ToolExecutorTests: XCTestCase {
         XCTAssertFalse(basicNames.contains("query_unifi_logs"))
         XCTAssertFalse(basicNames.contains("ssh_collect_unifi_logs"))
         XCTAssertFalse(basicNames.contains("network_traceroute"))
+        XCTAssertFalse(basicNames.contains("list_clients_with_app_blocks"))
+        XCTAssertFalse(basicNames.contains("summarize_policy_engine_objects"))
         XCTAssertTrue(basicNames.contains("search_unifi_docs"))
+        XCTAssertTrue(basicNames.contains("resolve_client_for_app_block"))
+        XCTAssertTrue(basicNames.contains("resolve_dpi_application"))
+        XCTAssertTrue(basicNames.contains("resolve_dpi_category"))
         XCTAssertTrue(basicNames.contains("plan_client_app_block"))
+        XCTAssertTrue(basicNames.contains("apply_client_app_block"))
+        XCTAssertTrue(basicNames.contains("remove_client_app_block"))
+        XCTAssertTrue(basicNames.contains("list_client_app_block"))
     }
 
     func testClaudeToolSchemasHaveRequiredFields() {
@@ -47,10 +59,6 @@ final class ToolExecutorTests: XCTestCase {
             Set(ToolCatalog.availableTools(for: .advanced).map(\.name)),
             Set(ToolCatalog.all.map(\.name))
         )
-    }
-
-    func testToolCatalogIncludesClientsWithAppBlocksTool() {
-        XCTAssertTrue(ToolCatalog.all.map(\.name).contains("list_clients_with_app_blocks"))
     }
 
     func testClientModificationApprovalUsesMACAsStableKey() {

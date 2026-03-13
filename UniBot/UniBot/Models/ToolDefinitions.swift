@@ -305,24 +305,21 @@ enum ToolCatalog {
             parameters: [
                 ToolParameter(name: "query", type: "string", description: "Client name/hostname/IP/MAC/id fragment.", required: true),
                 ToolParameter(name: "site_ref", type: "string", description: "Optional site reference. Default: default.", required: false),
-            ],
-            audience: .advanced
+            ]
         ),
         ToolDefinition(
             name: "resolve_dpi_application",
             description: "Resolve one DPI application by fuzzy name/id for app-block planning. Prefer this over list tools to avoid large responses.",
             parameters: [
                 ToolParameter(name: "query", type: "string", description: "Application name or id fragment.", required: true),
-            ],
-            audience: .advanced
+            ]
         ),
         ToolDefinition(
             name: "resolve_dpi_category",
             description: "Resolve one DPI category by fuzzy name/id for app-block planning. Prefer this over list tools to avoid large responses.",
             parameters: [
                 ToolParameter(name: "query", type: "string", description: "Category name or id fragment.", required: true),
-            ],
-            audience: .advanced
+            ]
         ),
         ToolDefinition(
             name: "list_dpi_applications",
@@ -351,16 +348,14 @@ enum ToolCatalog {
                 ToolParameter(name: "categories", type: "string", description: "Optional comma-separated DPI category names/ids.", required: false),
                 ToolParameter(name: "policy_name", type: "string", description: "Optional friendly rule name.", required: false),
                 ToolParameter(name: "site_ref", type: "string", description: "Optional site reference for apply path. Default: default.", required: false),
-            ],
-            audience: .advanced
+            ]
         ),
         ToolDefinition(
             name: "apply_client_app_block",
             description: "Apply a previously planned client app-block rule using approve_token.",
             parameters: [
                 ToolParameter(name: "approve_token", type: "string", description: "Token returned by plan_client_app_block.", required: true),
-            ],
-            audience: .advanced
+            ]
         ),
         ToolDefinition(
             name: "remove_client_app_block",
@@ -370,8 +365,7 @@ enum ToolCatalog {
                 ToolParameter(name: "apps", type: "string", description: "Optional comma-separated DPI app names/ids to remove.", required: false),
                 ToolParameter(name: "categories", type: "string", description: "Optional comma-separated DPI category names/ids to remove.", required: false),
                 ToolParameter(name: "site_ref", type: "string", description: "Optional site reference for apply path. Default: default.", required: false),
-            ],
-            audience: .advanced
+            ]
         ),
         ToolDefinition(
             name: "list_client_app_block",
@@ -379,8 +373,7 @@ enum ToolCatalog {
             parameters: [
                 ToolParameter(name: "client", type: "string", description: "Client selector (name/hostname/IP/MAC/id).", required: true),
                 ToolParameter(name: "site_ref", type: "string", description: "Optional site reference for lookup path. Default: default.", required: false),
-            ],
-            audience: .advanced
+            ]
         ),
         ToolDefinition(
             name: "list_clients_with_app_blocks",
