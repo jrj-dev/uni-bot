@@ -36,6 +36,10 @@ SITE_REF_QUERIES = {
     "events": "/proxy/network/api/s/{site_ref}/stat/event",
     "wlanconf": "/proxy/network/api/s/{site_ref}/rest/wlanconf",
     "networkconf": "/proxy/network/api/s/{site_ref}/rest/networkconf",
+    "traffic-rules": "/proxy/network/v2/api/site/{site_ref}/trafficrules",
+    "firewall-app-blocks": "/proxy/network/v2/api/site/{site_ref}/firewall-app-blocks",
+    "network-members-groups": "/proxy/network/v2/api/site/{site_ref}/network-members-groups",
+    "policy-engine-objects": "/proxy/network/v2/api/site/{site_ref}/object-oriented-network-configs",
 }
 RESOURCE_ID_QUERIES = {
     "device": (

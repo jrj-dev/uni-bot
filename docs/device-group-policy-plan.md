@@ -7,6 +7,7 @@ Goal: support UniFi-native device groups for traffic and app-block policies with
 - UniFi should be the source of truth for device groups.
 - The app and local scripts should read and target UniFi device groups, not persist their own grouping database.
 - Existing single-device app blocking remains the fallback path until native device-group policy support is traced and implemented.
+- During UniFi's current API migration, the repo should treat Policy Engine and `firewall-app-blocks` as parallel systems rather than forcing them into one abstraction too early.
 
 ## Why
 
@@ -88,6 +89,35 @@ This model should stay in-memory only unless UniFi itself is being updated.
 
 - Current app-block flow uses `POST /proxy/network/v2/api/site/{site_ref}/firewall-app-blocks`.
 - That flow already works well for single-device targeting through `client_macs`.
+- The current Policy Engine frontend also references `/proxy/network/v2/api/site/{site_ref}/trafficrules`.
+- Live frontend bundle capture also confirms Policy Engine client-group paths:
+  - `GET /proxy/network/v2/api/site/{site_ref}/network-members-groups`
+  - `POST /proxy/network/v2/api/site/{site_ref}/network-members-group`
+  - `PUT /proxy/network/v2/api/site/{site_ref}/network-members-group/{id}`
+  - `DELETE /proxy/network/v2/api/site/{site_ref}/network-members-group/{id}`
+- Live frontend bundle capture also confirms Object Manager object paths:
+  - `GET /proxy/network/v2/api/site/{site_ref}/object-oriented-network-configs`
+  - `POST /proxy/network/v2/api/site/{site_ref}/object-oriented-network-config`
+  - `PUT /proxy/network/v2/api/site/{site_ref}/object-oriented-network-config/{id}`
+  - `DELETE /proxy/network/v2/api/site/{site_ref}/object-oriented-network-config/{id}`
+- Captured Object Manager Secure variants now include:
+  - internet blocklist
+  - internet allowlist
+  - local quarantine
+  - no internet via `secure.internet.mode = TURN_OFF_INTERNET`
+- Captured non-Secure variants now include:
+  - route via `route.network_id` plus `kill_switch`
+  - route domain selectors via `route.all_traffic = false` plus `route.domains.enabled = true`
+  - route IP selectors via `route.all_traffic = false` plus `route.ip_addresses.enabled = true`
+  - qos via `qos.mode = LIMIT` plus `schedule`
+  - qos prioritize via `qos.mode = PRIORITIZE`
+  - qos with enabled download/upload limits plus `qos.network_id`
+  - qos prioritize-and-limit via `qos.mode = LIMIT_AND_PRIORITIZE`
+- Captured selector-specific Secure variants now include:
+  - domain blocklist via `secure.internet.domains.enabled = true`
+  - app blocklist via `secure.internet.apps.enabled = true`
+  - IP blocklist via `secure.internet.ip_addresses.enabled = true`
+- Device groups and richer Secure / Route / QoS behavior likely belong to Policy Engine, not the simple app-block collection.
 - The repo does not currently manage a local device-group store and should not add one for this feature.
 
 ## Open Questions

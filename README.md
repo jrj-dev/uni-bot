@@ -79,6 +79,10 @@ That is the preferred pattern for future work in `ChatViewModel`, `SettingsViewM
     - `ChatViewModel` orchestrates the conversation/tool loop
     - `ToolExecutor` routes the request
     - `UniFiAppBlockService` owns client resolution, payload shaping, collection merge/remove behavior, and replacement writes
+- UniFi Policy Engine transition state:
+  - `firewall-app-blocks` remains the working Simple App Blocking path for per-device/per-network app blocks
+  - the newer Policy Engine UI appears to layer on top of `trafficrules` plus separate group objects
+  - treat these as parallel APIs during migration rather than assuming one clean replacement path
 - LM Studio model loading in Settings via `/v1/models` with model picker.
 - Reasoning-output controls:
   - Prompt instruction to keep reasoning internal for LM Studio.
@@ -90,6 +94,37 @@ That is the preferred pattern for future work in `ChatViewModel`, `SettingsViewM
 - Query UniFi local integration APIs (read workflows).
 - Named queries for common resources (clients/devices/firewall/VPN/etc).
 - Legacy/private read-only UniFi wrappers for event feed, WLAN config, and network config.
+- Read-only wrappers for both parallel policy paths:
+  - `named_query.py traffic-rules`
+  - `named_query.py firewall-app-blocks`
+  - `named_query.py network-members-groups`
+  - `named_query.py policy-engine-objects`
+- Compact Policy Engine inspection helper:
+  - `policy_engine.py list-rules`
+  - `policy_engine.py summarize-rules`
+  - `policy_engine.py compare-paths`
+  - `policy_engine.py list-groups`
+  - `policy_engine.py create-group`
+  - `policy_engine.py update-group`
+  - `policy_engine.py delete-group`
+  - `policy_engine.py list-objects`
+  - `policy_engine.py create-object`
+  - `policy_engine.py update-object`
+  - `policy_engine.py delete-object`
+  - `policy_engine.py create-secure-blocklist-object`
+  - `policy_engine.py create-secure-allowlist-object`
+  - `policy_engine.py create-quarantine-object`
+  - `policy_engine.py create-no-internet-object`
+  - `policy_engine.py create-route-object`
+  - `policy_engine.py create-route-domain-object`
+  - `policy_engine.py create-route-ip-object`
+  - `policy_engine.py create-qos-object`
+  - `policy_engine.py create-qos-prioritize-object`
+  - `policy_engine.py create-qos-limits-object`
+  - `policy_engine.py create-qos-prioritize-limits-object`
+  - `policy_engine.py create-secure-domain-blocklist-object`
+  - `policy_engine.py create-secure-app-blocklist-object`
+  - `policy_engine.py create-secure-ip-blocklist-object`
 - Snapshot capture and summary workflows for offline analysis.
 - Loki query helpers:
   - `query_range`
@@ -218,6 +253,29 @@ python3 skills/unifi-network-local/scripts/unifi_request.py GET /proxy/network/i
 python3 skills/unifi-network-local/scripts/named_query.py clients --site-ref default
 python3 skills/unifi-network-local/scripts/query_summary.py overview --site-ref default
 python3 skills/unifi-network-local/scripts/named_query.py events --site-ref default
+python3 skills/unifi-network-local/scripts/named_query.py traffic-rules --site-ref default
+python3 skills/unifi-network-local/scripts/named_query.py firewall-app-blocks --site-ref default
+python3 skills/unifi-network-local/scripts/named_query.py network-members-groups --site-ref default
+python3 skills/unifi-network-local/scripts/named_query.py policy-engine-objects --site-ref default
+python3 skills/unifi-network-local/scripts/policy_engine.py summarize-rules --site-ref default --insecure
+python3 skills/unifi-network-local/scripts/policy_engine.py compare-paths --site-ref default --insecure
+python3 skills/unifi-network-local/scripts/policy_engine.py list-groups --site-ref default --insecure
+python3 skills/unifi-network-local/scripts/policy_engine.py create-group --site-ref default --name demo-group --member-mac aa:bb:cc:dd:ee:ff --insecure
+python3 skills/unifi-network-local/scripts/policy_engine.py list-objects --site-ref default --insecure
+python3 skills/unifi-network-local/scripts/policy_engine.py create-secure-blocklist-object --site-ref default --name demo-secure --target-type GROUPS --target-id <group-id> --insecure
+python3 skills/unifi-network-local/scripts/policy_engine.py create-secure-allowlist-object --site-ref default --name demo-allowlist --target-type GROUPS --target-id <group-id> --insecure
+python3 skills/unifi-network-local/scripts/policy_engine.py create-quarantine-object --site-ref default --name demo-quarantine --target-type GROUPS --target-id <group-id> --insecure
+python3 skills/unifi-network-local/scripts/policy_engine.py create-no-internet-object --site-ref default --name demo-no-internet --target-type GROUPS --target-id <group-id> --insecure
+python3 skills/unifi-network-local/scripts/policy_engine.py create-route-object --site-ref default --name demo-route --target-type GROUPS --target-id <group-id> --network-id <network-id> --insecure
+python3 skills/unifi-network-local/scripts/policy_engine.py create-route-domain-object --site-ref default --name demo-route-domain --target-type GROUPS --target-id <group-id> --domain example.com --insecure
+python3 skills/unifi-network-local/scripts/policy_engine.py create-route-ip-object --site-ref default --name demo-route-ip --target-type GROUPS --target-id <group-id> --ip-address 1.1.1.1 --insecure
+python3 skills/unifi-network-local/scripts/policy_engine.py create-qos-object --site-ref default --name demo-qos --target-type GROUPS --target-id <group-id> --insecure
+python3 skills/unifi-network-local/scripts/policy_engine.py create-qos-prioritize-object --site-ref default --name demo-qos-prioritize --target-type GROUPS --target-id <group-id> --insecure
+python3 skills/unifi-network-local/scripts/policy_engine.py create-qos-limits-object --site-ref default --name demo-qos-limits --target-type GROUPS --target-id <group-id> --network-id <network-id> --download-limit 10000 --upload-limit 10000 --insecure
+python3 skills/unifi-network-local/scripts/policy_engine.py create-qos-prioritize-limits-object --site-ref default --name demo-qos-prioritize-limits --target-type GROUPS --target-id <group-id> --download-limit 10000 --upload-limit 10000 --insecure
+python3 skills/unifi-network-local/scripts/policy_engine.py create-secure-domain-blocklist-object --site-ref default --name demo-domain-blocklist --target-type GROUPS --target-id <group-id> --domain example.com --insecure
+python3 skills/unifi-network-local/scripts/policy_engine.py create-secure-app-blocklist-object --site-ref default --name demo-app-blocklist --target-type GROUPS --target-id <group-id> --app-id 262392 --insecure
+python3 skills/unifi-network-local/scripts/policy_engine.py create-secure-ip-blocklist-object --site-ref default --name demo-ip-blocklist --target-type GROUPS --target-id <group-id> --ip-address 1.1.1.1 --insecure
 python3 skills/unifi-network-local/scripts/named_query.py wlanconf --site-ref default
 python3 skills/unifi-network-local/scripts/named_query.py networkconf --site-ref default
 python3 skills/unifi-network-local/scripts/app_block.py list-apps --search zoom

@@ -28,6 +28,35 @@ Use the bundled script to talk to the local UniFi Network API.
 - `list_network_events`: List recent legacy UniFi controller events from the site event feed. Parameters: none.
 - `list_wlan_configs`: List legacy UniFi WLAN config objects, including lower-level SSID settings. Parameters: none.
 - `list_network_configs`: List legacy UniFi network config objects, including lower-level LAN/VLAN/WAN details. Parameters: none.
+- `named_query.py traffic-rules`: List the newer Policy Engine traffic-rule collection from `/proxy/network/v2/api/site/{site_ref}/trafficrules`.
+- `named_query.py firewall-app-blocks`: Inspect the older Simple App Blocking collection from `/proxy/network/v2/api/site/{site_ref}/firewall-app-blocks`.
+- `named_query.py network-members-groups`: List Policy Engine client groups from `/proxy/network/v2/api/site/{site_ref}/network-members-groups`.
+- `named_query.py policy-engine-objects`: List Object Manager objects from `/proxy/network/v2/api/site/{site_ref}/object-oriented-network-configs`.
+- `policy_engine.py list-rules`: Print a compact read-only view of Policy Engine traffic rules.
+- `policy_engine.py summarize-rules`: Summarize Policy Engine rules by matching target, scope, schedule, and property family.
+- `policy_engine.py compare-paths`: Compare the newer `trafficrules` collection with the older `firewall-app-blocks` collection.
+- `policy_engine.py list-groups`: Print a compact read-only view of Policy Engine client groups.
+- `policy_engine.py create-group`: Dry-run or create a Policy Engine client group through `network-members-group`.
+- `policy_engine.py update-group`: Dry-run or update a Policy Engine client group through `network-members-group/{id}`.
+- `policy_engine.py delete-group`: Dry-run or delete a Policy Engine client group through `network-members-group/{id}`.
+- `policy_engine.py list-objects`: Print a compact read-only view of Object Manager objects.
+- `policy_engine.py create-object`: Dry-run or create an Object Manager object through `object-oriented-network-config`.
+- `policy_engine.py update-object`: Dry-run or update an Object Manager object through `object-oriented-network-config/{id}`.
+- `policy_engine.py delete-object`: Dry-run or delete an Object Manager object through `object-oriented-network-config/{id}`.
+- `policy_engine.py create-secure-blocklist-object`: Dry-run or create the first fully captured Secure internet blocklist object shape on the new Object Manager API.
+- `policy_engine.py create-secure-allowlist-object`: Dry-run or create the captured Secure internet allowlist object shape on the new Object Manager API.
+- `policy_engine.py create-quarantine-object`: Dry-run or create the captured Secure local quarantine object shape on the new Object Manager API.
+- `policy_engine.py create-no-internet-object`: Dry-run or create the captured Secure no-internet object shape on the new Object Manager API.
+- `policy_engine.py create-route-object`: Dry-run or create the captured Route object shape on the new Object Manager API.
+- `policy_engine.py create-route-domain-object`: Dry-run or create the captured Route domain-selector object shape on the new Object Manager API.
+- `policy_engine.py create-route-ip-object`: Dry-run or create the captured Route IP-selector object shape on the new Object Manager API.
+- `policy_engine.py create-qos-object`: Dry-run or create the captured QoS object shape on the new Object Manager API.
+- `policy_engine.py create-qos-prioritize-object`: Dry-run or create the captured QoS prioritize object shape on the new Object Manager API.
+- `policy_engine.py create-qos-limits-object`: Dry-run or create the captured QoS object shape with enabled download/upload limits on the new Object Manager API.
+- `policy_engine.py create-qos-prioritize-limits-object`: Dry-run or create the captured QoS prioritize-and-limit object shape on the new Object Manager API.
+- `policy_engine.py create-secure-domain-blocklist-object`: Dry-run or create the captured Secure domain blocklist object shape on the new Object Manager API.
+- `policy_engine.py create-secure-app-blocklist-object`: Dry-run or create the captured Secure app blocklist object shape on the new Object Manager API.
+- `policy_engine.py create-secure-ip-blocklist-object`: Dry-run or create the captured Secure IP-address blocklist object shape on the new Object Manager API.
 - `list_firewall_policies`: List firewall policies. Parameters: none.
 - `list_firewall_zones`: List firewall zones. Parameters: none.
 - `list_acl_rules`: List ACL rules. Parameters: none.
@@ -71,6 +100,10 @@ Use the bundled script to talk to the local UniFi Network API.
 - Avoid printing or storing the API key in logs, patches, or committed files.
 - For app/service suspension work, use `guarded_policy_toggle.py` instead of raw write calls.
 - Guarded writes are limited to existing allowlisted IDs and only toggle `enabled`; no create/delete/replace flows.
+- UniFi is currently in a mixed migration state:
+  - use `traffic-rules` to inspect the newer Policy Engine-backed rule model
+  - use `firewall-app-blocks` / `app_block.py` for the still-separate Simple App Blocking flow
+  - do not assume one path fully replaces the other unless the live controller proves it
 
 ## Required Environment
 
@@ -179,6 +212,16 @@ The live UniFi frontend bundle confirms that Simple App Blocking is saved throug
 
 - `GET /proxy/network/v2/api/site/{site_ref}/firewall-app-blocks`
 - `POST /proxy/network/v2/api/site/{site_ref}/firewall-app-blocks`
+
+The current Policy Engine UI also references the newer rule collection:
+
+- `GET /proxy/network/v2/api/site/{site_ref}/trafficrules`
+
+Treat these as parallel APIs for now:
+
+- `firewall-app-blocks` is the working Simple App Blocking path in this repo
+- `trafficrules` appears to back the newer object-oriented Policy Engine model
+- device groups and richer Secure / Route / QoS workflows should be traced and implemented against Policy Engine separately rather than forced through the simple app-block flow
 
 Apply and remove both use collection replacement semantics:
 
@@ -289,10 +332,39 @@ Examples:
 - `named_query.py firewall-policies-ordering --site-id <site-id>`
 - `named_query.py acl-rules --site-id <site-id>`
 - `named_query.py dns-policies --site-id <site-id>`
+- `named_query.py traffic-rules --site-ref <site-ref>`
+- `named_query.py firewall-app-blocks --site-ref <site-ref>`
+- `named_query.py network-members-groups --site-ref <site-ref>`
+- `named_query.py policy-engine-objects --site-ref <site-ref>`
 - `named_query.py traffic-matching-lists --site-id <site-id>`
 - `named_query.py hotspot-vouchers --site-id <site-id>`
 - `named_query.py device --site-id <site-id> --device-id <device-id>`
 - `named_query.py device-stats --site-id <site-id> --device-id <device-id>`
+- `policy_engine.py list-rules --site-ref <site-ref> --insecure`
+- `policy_engine.py summarize-rules --site-ref <site-ref> --insecure`
+- `policy_engine.py compare-paths --site-ref <site-ref> --insecure`
+- `policy_engine.py list-groups --site-ref <site-ref> --insecure`
+- `policy_engine.py create-group --site-ref <site-ref> --name <group-name> --member-mac <mac> --insecure`
+- `policy_engine.py update-group --site-ref <site-ref> --group-id <group-id> --name <group-name> --member-mac <mac> --insecure`
+- `policy_engine.py delete-group --site-ref <site-ref> --group-id <group-id> --insecure`
+- `policy_engine.py list-objects --site-ref <site-ref> --insecure`
+- `policy_engine.py create-object --site-ref <site-ref> --json '{"name":"Example","enabled":true,"target_type":"GROUPS","targets":["group-id"],"secure":{"enabled":true},"route":{"enabled":false},"qos":{"enabled":false}}' --insecure`
+- `policy_engine.py update-object --site-ref <site-ref> --object-id <object-id> --json '{"id":"<object-id>","name":"Example","enabled":true,"target_type":"GROUPS","targets":["group-id"],"secure":{"enabled":true},"route":{"enabled":false},"qos":{"enabled":false}}' --insecure`
+- `policy_engine.py delete-object --site-ref <site-ref> --object-id <object-id> --insecure`
+- `policy_engine.py create-secure-blocklist-object --site-ref <site-ref> --name <object-name> --target-type GROUPS --target-id <group-id> --insecure`
+- `policy_engine.py create-secure-allowlist-object --site-ref <site-ref> --name <object-name> --target-type GROUPS --target-id <group-id> --insecure`
+- `policy_engine.py create-quarantine-object --site-ref <site-ref> --name <object-name> --target-type GROUPS --target-id <group-id> --insecure`
+- `policy_engine.py create-no-internet-object --site-ref <site-ref> --name <object-name> --target-type GROUPS --target-id <group-id> --insecure`
+- `policy_engine.py create-route-object --site-ref <site-ref> --name <object-name> --target-type GROUPS --target-id <group-id> --network-id <network-id> --insecure`
+- `policy_engine.py create-route-domain-object --site-ref <site-ref> --name <object-name> --target-type GROUPS --target-id <group-id> --domain example.com --insecure`
+- `policy_engine.py create-route-ip-object --site-ref <site-ref> --name <object-name> --target-type GROUPS --target-id <group-id> --ip-address 1.1.1.1 --insecure`
+- `policy_engine.py create-qos-object --site-ref <site-ref> --name <object-name> --target-type GROUPS --target-id <group-id> --insecure`
+- `policy_engine.py create-qos-prioritize-object --site-ref <site-ref> --name <object-name> --target-type GROUPS --target-id <group-id> --insecure`
+- `policy_engine.py create-qos-limits-object --site-ref <site-ref> --name <object-name> --target-type GROUPS --target-id <group-id> --network-id <network-id> --download-limit 10000 --upload-limit 10000 --insecure`
+- `policy_engine.py create-qos-prioritize-limits-object --site-ref <site-ref> --name <object-name> --target-type GROUPS --target-id <group-id> --download-limit 10000 --upload-limit 10000 --insecure`
+- `policy_engine.py create-secure-domain-blocklist-object --site-ref <site-ref> --name <object-name> --target-type GROUPS --target-id <group-id> --domain example.com --insecure`
+- `policy_engine.py create-secure-app-blocklist-object --site-ref <site-ref> --name <object-name> --target-type GROUPS --target-id <group-id> --app-id 262392 --insecure`
+- `policy_engine.py create-secure-ip-blocklist-object --site-ref <site-ref> --name <object-name> --target-type GROUPS --target-id <group-id> --ip-address 1.1.1.1 --insecure`
 
 Run higher-level operational summaries for common questions:
 

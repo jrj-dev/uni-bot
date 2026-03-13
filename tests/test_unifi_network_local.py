@@ -223,6 +223,58 @@ class NamedQueryTests(unittest.TestCase):
 
         self.assertEqual(path, "/proxy/network/api/s/default/stat/event")
 
+    def test_resolve_path_for_traffic_rules_uses_site_ref(self) -> None:
+        module = load_module("named_query_test_traffic_rules_site_ref", "named_query.py")
+        args = SimpleNamespace(
+            query="traffic-rules",
+            site_id=None,
+            site_ref="default",
+            insecure=True,
+        )
+
+        path = module.resolve_path(args)
+
+        self.assertEqual(path, "/proxy/network/v2/api/site/default/trafficrules")
+
+    def test_resolve_path_for_firewall_app_blocks_uses_site_ref(self) -> None:
+        module = load_module("named_query_test_firewall_app_blocks_site_ref", "named_query.py")
+        args = SimpleNamespace(
+            query="firewall-app-blocks",
+            site_id=None,
+            site_ref="default",
+            insecure=True,
+        )
+
+        path = module.resolve_path(args)
+
+        self.assertEqual(path, "/proxy/network/v2/api/site/default/firewall-app-blocks")
+
+    def test_resolve_path_for_network_members_groups_uses_site_ref(self) -> None:
+        module = load_module("named_query_test_network_members_groups_site_ref", "named_query.py")
+        args = SimpleNamespace(
+            query="network-members-groups",
+            site_id=None,
+            site_ref="default",
+            insecure=True,
+        )
+
+        path = module.resolve_path(args)
+
+        self.assertEqual(path, "/proxy/network/v2/api/site/default/network-members-groups")
+
+    def test_resolve_path_for_policy_engine_objects_uses_site_ref(self) -> None:
+        module = load_module("named_query_test_policy_engine_objects_site_ref", "named_query.py")
+        args = SimpleNamespace(
+            query="policy-engine-objects",
+            site_id=None,
+            site_ref="default",
+            insecure=True,
+        )
+
+        path = module.resolve_path(args)
+
+        self.assertEqual(path, "/proxy/network/v2/api/site/default/object-oriented-network-configs")
+
     def test_resolve_path_for_wlanconf_uses_site_id_to_find_site_ref(self) -> None:
         module = load_module("named_query_test_wlanconf_site_id", "named_query.py")
         args = SimpleNamespace(
@@ -240,6 +292,712 @@ class NamedQueryTests(unittest.TestCase):
             path = module.resolve_path(args)
 
         self.assertEqual(path, "/proxy/network/api/s/default/rest/wlanconf")
+
+
+class PolicyEngineTests(unittest.TestCase):
+    def test_property_families_detects_enabled_blocks(self) -> None:
+        module = load_module("policy_engine_test_families", "policy_engine.py")
+
+        families = module.property_families(
+            {
+                "secure": {"enabled": True},
+                "route": {"enabled": False},
+                "qos": {"mode": "LIMIT"},
+            }
+        )
+
+        self.assertEqual(families, ["secure", "qos"])
+
+    def test_target_scope_joins_target_device_types(self) -> None:
+        module = load_module("policy_engine_test_scope", "policy_engine.py")
+
+        scope = module.target_scope(
+            {
+                "target_devices": [
+                    {"type": "CLIENT"},
+                    {"type": "NETWORK"},
+                    {"type": "CLIENT"},
+                ]
+            }
+        )
+
+        self.assertEqual(scope, "CLIENT,NETWORK")
+
+    def test_compare_paths_prints_parallel_api_note(self) -> None:
+        module = load_module("policy_engine_test_compare", "policy_engine.py")
+        traffic_rules = {
+            "data": [
+                {
+                    "_id": "rule-1",
+                    "name": "Block Social",
+                    "matching_target": "DOMAIN",
+                    "target_devices": [{"type": "CLIENT", "client_mac": "aa:bb"}],
+                    "schedule": {"mode": "ALWAYS"},
+                }
+            ]
+        }
+        app_blocks = {
+            "data": [
+                {
+                    "_id": "block-1",
+                    "name": "Block TikTok",
+                    "target_type": "APP_ID",
+                    "client_macs": ["aa:bb"],
+                    "app_ids": [262392],
+                    "app_category_ids": [],
+                }
+            ]
+        }
+
+        def fake_load_named_query(query: str, *, site_ref: str, insecure: bool) -> dict:
+            self.assertEqual(site_ref, "default")
+            self.assertTrue(insecure)
+            if query == "traffic-rules":
+                return traffic_rules
+            if query == "firewall-app-blocks":
+                return app_blocks
+            raise AssertionError(f"unexpected query: {query}")
+
+        stdout = io.StringIO()
+        with mock.patch.object(module, "load_named_query", side_effect=fake_load_named_query):
+            with contextlib.redirect_stdout(stdout):
+                exit_code = module.compare_paths("default", 5, True)
+
+        self.assertEqual(exit_code, 0)
+        output = stdout.getvalue()
+        self.assertIn("parallel APIs during migration", output)
+        self.assertIn("trafficrules_count: 1", output)
+        self.assertIn("firewall_app_blocks_count: 1", output)
+
+    def test_build_group_payload_matches_live_shape(self) -> None:
+        module = load_module("policy_engine_test_group_payload", "policy_engine.py")
+
+        payload = module.build_group_payload(
+            name="Kids Devices",
+            member_macs=["aa:bb:cc:dd:ee:ff"],
+            group_id_value="group-1",
+        )
+
+        self.assertEqual(
+            payload,
+            {
+                "id": "group-1",
+                "members": ["aa:bb:cc:dd:ee:ff"],
+                "name": "Kids Devices",
+                "type": "CLIENTS",
+            },
+        )
+
+    def test_create_group_dry_run_prints_network_members_group_path(self) -> None:
+        module = load_module("policy_engine_test_create_group", "policy_engine.py")
+        stdout = io.StringIO()
+
+        with contextlib.redirect_stdout(stdout):
+            exit_code = module.create_group(
+                "default",
+                "Kids Devices",
+                ["aa:bb:cc:dd:ee:ff"],
+                False,
+                True,
+            )
+
+        self.assertEqual(exit_code, 0)
+        output = stdout.getvalue()
+        self.assertIn("/proxy/network/v2/api/site/default/network-members-group", output)
+        self.assertIn("\"type\": \"CLIENTS\"", output)
+        self.assertIn("DRY-RUN ONLY", output)
+
+    def test_delete_group_dry_run_prints_delete_path(self) -> None:
+        module = load_module("policy_engine_test_delete_group", "policy_engine.py")
+        stdout = io.StringIO()
+
+        with contextlib.redirect_stdout(stdout):
+            exit_code = module.delete_group("default", "group-1", False, True)
+
+        self.assertEqual(exit_code, 0)
+        output = stdout.getvalue()
+        self.assertIn("\"method\": \"DELETE\"", output)
+        self.assertIn("/proxy/network/v2/api/site/default/network-members-group/group-1", output)
+
+    def test_parse_json_object_requires_object_payload(self) -> None:
+        module = load_module("policy_engine_test_parse_json_object", "policy_engine.py")
+
+        with self.assertRaises(SystemExit) as exc:
+            module.parse_json_object('["bad"]')
+
+        self.assertEqual(str(exc.exception), "expected JSON object payload")
+
+    def test_create_object_dry_run_prints_object_oriented_path(self) -> None:
+        module = load_module("policy_engine_test_create_object", "policy_engine.py")
+        stdout = io.StringIO()
+
+        with contextlib.redirect_stdout(stdout):
+            exit_code = module.create_object(
+                "default",
+                '{"name":"Example","enabled":true,"target_type":"GROUPS","targets":["group-1"],"secure":{"enabled":true},"route":{"enabled":false},"qos":{"enabled":false}}',
+                False,
+                True,
+            )
+
+        self.assertEqual(exit_code, 0)
+        output = stdout.getvalue()
+        self.assertIn("/proxy/network/v2/api/site/default/object-oriented-network-config", output)
+        self.assertIn("\"target_type\": \"GROUPS\"", output)
+        self.assertIn("DRY-RUN ONLY", output)
+
+    def test_delete_object_dry_run_prints_delete_path(self) -> None:
+        module = load_module("policy_engine_test_delete_object", "policy_engine.py")
+        stdout = io.StringIO()
+
+        with contextlib.redirect_stdout(stdout):
+            exit_code = module.delete_object("default", "object-1", False, True)
+
+        self.assertEqual(exit_code, 0)
+        output = stdout.getvalue()
+        self.assertIn("\"method\": \"DELETE\"", output)
+        self.assertIn("/proxy/network/v2/api/site/default/object-oriented-network-config/object-1", output)
+
+    def test_build_secure_blocklist_object_matches_captured_shape(self) -> None:
+        module = load_module("policy_engine_test_secure_blocklist", "policy_engine.py")
+
+        payload = module.build_secure_blocklist_object(
+            name="demo-secure",
+            target_type="GROUPS",
+            target_ids=["group-1"],
+        )
+
+        self.assertEqual(payload["name"], "demo-secure")
+        self.assertEqual(payload["target_type"], "GROUPS")
+        self.assertEqual(payload["targets"], ["group-1"])
+        self.assertTrue(payload["secure"]["enabled"])
+        self.assertEqual(payload["secure"]["internet"]["mode"], "BLOCKLIST")
+        self.assertTrue(payload["secure"]["internet"]["everything"])
+        self.assertEqual(payload["secure"]["internet"]["schedule"]["mode"], "ALWAYS")
+        self.assertFalse(payload["route"]["enabled"])
+        self.assertFalse(payload["qos"]["enabled"])
+        self.assertEqual(payload["qos"]["download_limit"]["limit"], 10000)
+
+    def test_create_secure_blocklist_object_dry_run_prints_path(self) -> None:
+        module = load_module("policy_engine_test_create_secure_blocklist", "policy_engine.py")
+        stdout = io.StringIO()
+
+        with contextlib.redirect_stdout(stdout):
+            exit_code = module.create_secure_blocklist_object(
+                "default",
+                "demo-secure",
+                "GROUPS",
+                ["group-1"],
+                False,
+                True,
+            )
+
+        self.assertEqual(exit_code, 0)
+        output = stdout.getvalue()
+        self.assertIn("/proxy/network/v2/api/site/default/object-oriented-network-config", output)
+        self.assertIn("\"mode\": \"BLOCKLIST\"", output)
+        self.assertIn("\"target_type\": \"GROUPS\"", output)
+
+    def test_build_secure_allowlist_object_matches_captured_shape(self) -> None:
+        module = load_module("policy_engine_test_secure_allowlist", "policy_engine.py")
+
+        payload = module.build_secure_allowlist_object(
+            name="demo-allowlist",
+            target_type="GROUPS",
+            target_ids=["group-1"],
+        )
+
+        self.assertEqual(payload["name"], "demo-allowlist")
+        self.assertEqual(payload["secure"]["internet"]["mode"], "ALLOWLIST")
+        self.assertTrue(payload["secure"]["internet"]["everything"])
+        self.assertEqual(payload["secure"]["internet"]["schedule"]["mode"], "ALWAYS")
+        self.assertFalse(payload["route"]["enabled"])
+        self.assertFalse(payload["qos"]["enabled"])
+
+    def test_create_secure_allowlist_object_dry_run_prints_path(self) -> None:
+        module = load_module("policy_engine_test_create_secure_allowlist", "policy_engine.py")
+        stdout = io.StringIO()
+
+        with contextlib.redirect_stdout(stdout):
+            exit_code = module.create_secure_allowlist_object(
+                "default",
+                "demo-allowlist",
+                "GROUPS",
+                ["group-1"],
+                False,
+                True,
+            )
+
+        self.assertEqual(exit_code, 0)
+        output = stdout.getvalue()
+        self.assertIn("/proxy/network/v2/api/site/default/object-oriented-network-config", output)
+        self.assertIn("\"mode\": \"ALLOWLIST\"", output)
+        self.assertIn("\"target_type\": \"GROUPS\"", output)
+
+    def test_build_quarantine_object_adds_local_quarantine(self) -> None:
+        module = load_module("policy_engine_test_quarantine_object", "policy_engine.py")
+
+        payload = module.build_quarantine_object(
+            name="demo-quarantine",
+            target_type="GROUPS",
+            target_ids=["group-1"],
+        )
+
+        self.assertEqual(payload["secure"]["local"]["mode"], "QUARANTINE")
+        self.assertEqual(payload["secure"]["internet"]["mode"], "BLOCKLIST")
+        self.assertFalse(payload["route"]["enabled"])
+        self.assertFalse(payload["qos"]["enabled"])
+
+    def test_create_quarantine_object_dry_run_prints_path(self) -> None:
+        module = load_module("policy_engine_test_create_quarantine", "policy_engine.py")
+        stdout = io.StringIO()
+
+        with contextlib.redirect_stdout(stdout):
+            exit_code = module.create_quarantine_object(
+                "default",
+                "demo-quarantine",
+                "GROUPS",
+                ["group-1"],
+                False,
+                True,
+            )
+
+        self.assertEqual(exit_code, 0)
+        output = stdout.getvalue()
+        self.assertIn("/proxy/network/v2/api/site/default/object-oriented-network-config", output)
+        self.assertIn("\"mode\": \"QUARANTINE\"", output)
+        self.assertIn("\"target_type\": \"GROUPS\"", output)
+
+    def test_build_no_internet_object_matches_captured_shape(self) -> None:
+        module = load_module("policy_engine_test_no_internet_object", "policy_engine.py")
+
+        payload = module.build_no_internet_object(
+            name="demo-no-internet",
+            target_type="GROUPS",
+            target_ids=["group-1"],
+        )
+
+        self.assertEqual(payload["name"], "demo-no-internet")
+        self.assertEqual(payload["target_type"], "GROUPS")
+        self.assertEqual(payload["targets"], ["group-1"])
+        self.assertTrue(payload["secure"]["enabled"])
+        self.assertEqual(payload["secure"]["internet"]["mode"], "TURN_OFF_INTERNET")
+        self.assertEqual(payload["secure"]["internet"]["schedule"]["mode"], "ALWAYS")
+        self.assertNotIn("everything", payload["secure"]["internet"])
+        self.assertFalse(payload["route"]["enabled"])
+        self.assertFalse(payload["qos"]["enabled"])
+
+    def test_create_no_internet_object_dry_run_prints_path(self) -> None:
+        module = load_module("policy_engine_test_create_no_internet", "policy_engine.py")
+        stdout = io.StringIO()
+
+        with contextlib.redirect_stdout(stdout):
+            exit_code = module.create_no_internet_object(
+                "default",
+                "demo-no-internet",
+                "GROUPS",
+                ["group-1"],
+                False,
+                True,
+            )
+
+        self.assertEqual(exit_code, 0)
+        output = stdout.getvalue()
+        self.assertIn("/proxy/network/v2/api/site/default/object-oriented-network-config", output)
+        self.assertIn("\"mode\": \"TURN_OFF_INTERNET\"", output)
+        self.assertIn("\"target_type\": \"GROUPS\"", output)
+
+    def test_build_route_object_matches_captured_shape(self) -> None:
+        module = load_module("policy_engine_test_route_object", "policy_engine.py")
+
+        payload = module.build_route_object(
+            name="demo-route",
+            target_type="GROUPS",
+            target_ids=["group-1"],
+            network_id="network-1",
+        )
+
+        self.assertEqual(payload["name"], "demo-route")
+        self.assertEqual(payload["route"]["enabled"], True)
+        self.assertEqual(payload["route"]["all_traffic"], True)
+        self.assertEqual(payload["route"]["kill_switch"], True)
+        self.assertEqual(payload["route"]["network_id"], "network-1")
+        self.assertFalse(payload["secure"]["enabled"])
+        self.assertFalse(payload["qos"]["enabled"])
+
+    def test_create_route_object_dry_run_prints_path(self) -> None:
+        module = load_module("policy_engine_test_create_route", "policy_engine.py")
+        stdout = io.StringIO()
+
+        with contextlib.redirect_stdout(stdout):
+            exit_code = module.create_route_object(
+                "default",
+                "demo-route",
+                "GROUPS",
+                ["group-1"],
+                "network-1",
+                False,
+                True,
+            )
+
+        self.assertEqual(exit_code, 0)
+        output = stdout.getvalue()
+        self.assertIn("/proxy/network/v2/api/site/default/object-oriented-network-config", output)
+        self.assertIn("\"network_id\": \"network-1\"", output)
+        self.assertIn("\"kill_switch\": true", output)
+
+    def test_build_qos_object_matches_captured_shape(self) -> None:
+        module = load_module("policy_engine_test_qos_object", "policy_engine.py")
+
+        payload = module.build_qos_object(
+            name="demo-qos",
+            target_type="GROUPS",
+            target_ids=["group-1"],
+        )
+
+        self.assertEqual(payload["name"], "demo-qos")
+        self.assertTrue(payload["qos"]["enabled"])
+        self.assertTrue(payload["qos"]["all_traffic"])
+        self.assertEqual(payload["qos"]["mode"], "LIMIT")
+        self.assertEqual(payload["qos"]["schedule"]["mode"], "ALWAYS")
+        self.assertFalse(payload["secure"]["enabled"])
+        self.assertFalse(payload["route"]["enabled"])
+        self.assertNotIn("network_id", payload["qos"])
+
+    def test_create_qos_object_dry_run_prints_path(self) -> None:
+        module = load_module("policy_engine_test_create_qos", "policy_engine.py")
+        stdout = io.StringIO()
+
+        with contextlib.redirect_stdout(stdout):
+            exit_code = module.create_qos_object(
+                "default",
+                "demo-qos",
+                "GROUPS",
+                ["group-1"],
+                False,
+                True,
+            )
+
+        self.assertEqual(exit_code, 0)
+        output = stdout.getvalue()
+        self.assertIn("/proxy/network/v2/api/site/default/object-oriented-network-config", output)
+        self.assertIn("\"mode\": \"LIMIT\"", output)
+        self.assertIn("\"schedule\": {", output)
+
+    def test_build_qos_prioritize_object_matches_captured_shape(self) -> None:
+        module = load_module("policy_engine_test_qos_prioritize_object", "policy_engine.py")
+
+        payload = module.build_qos_prioritize_object(
+            name="demo-qos-prioritize",
+            target_type="GROUPS",
+            target_ids=["group-1"],
+        )
+
+        self.assertTrue(payload["qos"]["enabled"])
+        self.assertEqual(payload["qos"]["mode"], "PRIORITIZE")
+        self.assertEqual(payload["qos"]["schedule"]["mode"], "ALWAYS")
+        self.assertFalse(payload["qos"]["download_limit"]["enabled"])
+        self.assertFalse(payload["qos"]["upload_limit"]["enabled"])
+
+    def test_create_qos_prioritize_object_dry_run_prints_path(self) -> None:
+        module = load_module("policy_engine_test_create_qos_prioritize", "policy_engine.py")
+        stdout = io.StringIO()
+
+        with contextlib.redirect_stdout(stdout):
+            exit_code = module.create_qos_prioritize_object(
+                "default",
+                "demo-qos-prioritize",
+                "GROUPS",
+                ["group-1"],
+                False,
+                True,
+            )
+
+        self.assertEqual(exit_code, 0)
+        output = stdout.getvalue()
+        self.assertIn("\"mode\": \"PRIORITIZE\"", output)
+        self.assertIn("\"schedule\": {", output)
+
+    def test_build_qos_limits_object_matches_captured_shape(self) -> None:
+        module = load_module("policy_engine_test_qos_limits_object", "policy_engine.py")
+
+        payload = module.build_qos_limits_object(
+            name="demo-qos-limits",
+            target_type="GROUPS",
+            target_ids=["group-1"],
+            network_id="network-1",
+            download_limit=10000,
+            upload_limit=10000,
+        )
+
+        self.assertTrue(payload["qos"]["enabled"])
+        self.assertEqual(payload["qos"]["network_id"], "network-1")
+        self.assertTrue(payload["qos"]["download_limit"]["enabled"])
+        self.assertEqual(payload["qos"]["download_limit"]["limit"], 10000)
+        self.assertTrue(payload["qos"]["upload_limit"]["enabled"])
+        self.assertEqual(payload["qos"]["upload_limit"]["limit"], 10000)
+
+    def test_create_qos_limits_object_dry_run_prints_path(self) -> None:
+        module = load_module("policy_engine_test_create_qos_limits", "policy_engine.py")
+        stdout = io.StringIO()
+
+        with contextlib.redirect_stdout(stdout):
+            exit_code = module.create_qos_limits_object(
+                "default",
+                "demo-qos-limits",
+                "GROUPS",
+                ["group-1"],
+                "network-1",
+                10000,
+                10000,
+                False,
+                True,
+            )
+
+        self.assertEqual(exit_code, 0)
+        output = stdout.getvalue()
+        self.assertIn("\"network_id\": \"network-1\"", output)
+        self.assertIn("\"download_limit\": {", output)
+        self.assertIn("\"upload_limit\": {", output)
+
+    def test_build_qos_prioritize_limits_object_matches_captured_shape(self) -> None:
+        module = load_module("policy_engine_test_qos_prioritize_limits_object", "policy_engine.py")
+
+        payload = module.build_qos_prioritize_limits_object(
+            name="demo-qos-prioritize-limits",
+            target_type="GROUPS",
+            target_ids=["group-1"],
+            download_limit=10000,
+            upload_limit=10000,
+        )
+
+        self.assertTrue(payload["qos"]["enabled"])
+        self.assertEqual(payload["qos"]["mode"], "LIMIT_AND_PRIORITIZE")
+        self.assertTrue(payload["qos"]["download_limit"]["enabled"])
+        self.assertEqual(payload["qos"]["download_limit"]["limit"], 10000)
+        self.assertTrue(payload["qos"]["upload_limit"]["enabled"])
+        self.assertEqual(payload["qos"]["upload_limit"]["limit"], 10000)
+        self.assertEqual(payload["qos"]["schedule"]["mode"], "ALWAYS")
+        self.assertNotIn("network_id", payload["qos"])
+
+    def test_create_qos_prioritize_limits_object_dry_run_prints_path(self) -> None:
+        module = load_module("policy_engine_test_create_qos_prioritize_limits", "policy_engine.py")
+        stdout = io.StringIO()
+
+        with contextlib.redirect_stdout(stdout):
+            exit_code = module.create_qos_prioritize_limits_object(
+                "default",
+                "demo-qos-prioritize-limits",
+                "GROUPS",
+                ["group-1"],
+                10000,
+                10000,
+                False,
+                True,
+            )
+
+        self.assertEqual(exit_code, 0)
+        output = stdout.getvalue()
+        self.assertIn("\"mode\": \"LIMIT_AND_PRIORITIZE\"", output)
+        self.assertIn("\"download_limit\": {", output)
+        self.assertIn("\"upload_limit\": {", output)
+
+    def test_build_secure_domain_blocklist_object_matches_captured_shape(self) -> None:
+        module = load_module("policy_engine_test_domain_blocklist_object", "policy_engine.py")
+
+        payload = module.build_secure_domain_blocklist_object(
+            name="demo-domain-blocklist",
+            target_type="GROUPS",
+            target_ids=["group-1"],
+            domains=["example.com"],
+        )
+
+        self.assertTrue(payload["secure"]["enabled"])
+        self.assertFalse(payload["secure"]["internet"]["everything"])
+        self.assertTrue(payload["secure"]["internet"]["domains"]["enabled"])
+        self.assertEqual(payload["secure"]["internet"]["domains"]["values"], ["example.com"])
+        self.assertFalse(payload["qos"]["enabled"])
+        self.assertFalse(payload["route"]["enabled"])
+
+    def test_create_secure_domain_blocklist_object_dry_run_prints_path(self) -> None:
+        module = load_module("policy_engine_test_create_domain_blocklist", "policy_engine.py")
+        stdout = io.StringIO()
+
+        with contextlib.redirect_stdout(stdout):
+            exit_code = module.create_secure_domain_blocklist_object(
+                "default",
+                "demo-domain-blocklist",
+                "GROUPS",
+                ["group-1"],
+                ["example.com"],
+                False,
+                True,
+            )
+
+        self.assertEqual(exit_code, 0)
+        output = stdout.getvalue()
+        self.assertIn("\"everything\": false", output)
+        self.assertIn("\"values\": [", output)
+        self.assertIn("example.com", output)
+
+    def test_build_route_domain_object_matches_captured_shape(self) -> None:
+        module = load_module("policy_engine_test_route_domain_object", "policy_engine.py")
+
+        payload = module.build_route_domain_object(
+            name="demo-route-domain",
+            target_type="GROUPS",
+            target_ids=["group-1"],
+            network_id="network-1",
+            domains=["example.com"],
+        )
+
+        self.assertTrue(payload["route"]["enabled"])
+        self.assertFalse(payload["route"]["all_traffic"])
+        self.assertEqual(payload["route"]["network_id"], "network-1")
+        self.assertTrue(payload["route"]["domains"]["enabled"])
+        self.assertEqual(payload["route"]["domains"]["values"], ["example.com"])
+        self.assertFalse(payload["route"]["ip_addresses"]["enabled"])
+
+    def test_create_route_domain_object_dry_run_prints_path(self) -> None:
+        module = load_module("policy_engine_test_create_route_domain", "policy_engine.py")
+        stdout = io.StringIO()
+
+        with contextlib.redirect_stdout(stdout):
+            exit_code = module.create_route_domain_object(
+                "default",
+                "demo-route-domain",
+                "GROUPS",
+                ["group-1"],
+                "network-1",
+                ["example.com"],
+                False,
+                True,
+            )
+
+        self.assertEqual(exit_code, 0)
+        output = stdout.getvalue()
+        self.assertIn("\"all_traffic\": false", output)
+        self.assertIn("\"network_id\": \"network-1\"", output)
+        self.assertIn("example.com", output)
+
+    def test_build_route_ip_object_matches_captured_shape(self) -> None:
+        module = load_module("policy_engine_test_route_ip_object", "policy_engine.py")
+
+        payload = module.build_route_ip_object(
+            name="demo-route-ip",
+            target_type="GROUPS",
+            target_ids=["group-1"],
+            network_id="network-1",
+            ip_addresses=["1.1.1.1"],
+        )
+
+        self.assertTrue(payload["route"]["enabled"])
+        self.assertFalse(payload["route"]["all_traffic"])
+        self.assertEqual(payload["route"]["network_id"], "network-1")
+        self.assertFalse(payload["route"]["domains"]["enabled"])
+        self.assertTrue(payload["route"]["ip_addresses"]["enabled"])
+        self.assertEqual(payload["route"]["ip_addresses"]["values"], ["1.1.1.1"])
+
+    def test_create_route_ip_object_dry_run_prints_path(self) -> None:
+        module = load_module("policy_engine_test_create_route_ip", "policy_engine.py")
+        stdout = io.StringIO()
+
+        with contextlib.redirect_stdout(stdout):
+            exit_code = module.create_route_ip_object(
+                "default",
+                "demo-route-ip",
+                "GROUPS",
+                ["group-1"],
+                "network-1",
+                ["1.1.1.1"],
+                False,
+                True,
+            )
+
+        self.assertEqual(exit_code, 0)
+        output = stdout.getvalue()
+        self.assertIn("\"all_traffic\": false", output)
+        self.assertIn("\"network_id\": \"network-1\"", output)
+        self.assertIn("1.1.1.1", output)
+
+    def test_build_secure_app_blocklist_object_matches_captured_shape(self) -> None:
+        module = load_module("policy_engine_test_app_blocklist_object", "policy_engine.py")
+
+        payload = module.build_secure_app_blocklist_object(
+            name="demo-app-blocklist",
+            target_type="GROUPS",
+            target_ids=["group-1"],
+            app_ids=[262392],
+        )
+
+        self.assertTrue(payload["secure"]["enabled"])
+        self.assertFalse(payload["secure"]["internet"]["everything"])
+        self.assertTrue(payload["secure"]["internet"]["apps"]["enabled"])
+        self.assertEqual(payload["secure"]["internet"]["apps"]["values"], [262392])
+        self.assertFalse(payload["secure"]["internet"]["domains"]["enabled"])
+        self.assertFalse(payload["secure"]["internet"]["ip_addresses"]["enabled"])
+        self.assertFalse(payload["qos"]["enabled"])
+        self.assertFalse(payload["route"]["enabled"])
+
+    def test_create_secure_app_blocklist_object_dry_run_prints_path(self) -> None:
+        module = load_module("policy_engine_test_create_app_blocklist", "policy_engine.py")
+        stdout = io.StringIO()
+
+        with contextlib.redirect_stdout(stdout):
+            exit_code = module.create_secure_app_blocklist_object(
+                "default",
+                "demo-app-blocklist",
+                "GROUPS",
+                ["group-1"],
+                [262392],
+                False,
+                True,
+            )
+
+        self.assertEqual(exit_code, 0)
+        output = stdout.getvalue()
+        self.assertIn("\"everything\": false", output)
+        self.assertIn("\"apps\": {", output)
+        self.assertIn("262392", output)
+
+    def test_build_secure_ip_blocklist_object_matches_captured_shape(self) -> None:
+        module = load_module("policy_engine_test_ip_blocklist_object", "policy_engine.py")
+
+        payload = module.build_secure_ip_blocklist_object(
+            name="demo-ip-blocklist",
+            target_type="GROUPS",
+            target_ids=["group-1"],
+            ip_addresses=["1.1.1.1"],
+        )
+
+        self.assertTrue(payload["secure"]["enabled"])
+        self.assertFalse(payload["secure"]["internet"]["everything"])
+        self.assertTrue(payload["secure"]["internet"]["ip_addresses"]["enabled"])
+        self.assertEqual(payload["secure"]["internet"]["ip_addresses"]["values"], ["1.1.1.1"])
+        self.assertFalse(payload["secure"]["internet"]["apps"]["enabled"])
+        self.assertFalse(payload["secure"]["internet"]["domains"]["enabled"])
+        self.assertFalse(payload["qos"]["enabled"])
+        self.assertFalse(payload["route"]["enabled"])
+
+    def test_create_secure_ip_blocklist_object_dry_run_prints_path(self) -> None:
+        module = load_module("policy_engine_test_create_ip_blocklist", "policy_engine.py")
+        stdout = io.StringIO()
+
+        with contextlib.redirect_stdout(stdout):
+            exit_code = module.create_secure_ip_blocklist_object(
+                "default",
+                "demo-ip-blocklist",
+                "GROUPS",
+                ["group-1"],
+                ["1.1.1.1"],
+                False,
+                True,
+            )
+
+        self.assertEqual(exit_code, 0)
+        output = stdout.getvalue()
+        self.assertIn("\"everything\": false", output)
+        self.assertIn("\"ip_addresses\": {", output)
+        self.assertIn("1.1.1.1", output)
 
     def test_resolve_path_for_networkconf_requires_site_scope(self) -> None:
         module = load_module("named_query_test_networkconf_scope", "named_query.py")
