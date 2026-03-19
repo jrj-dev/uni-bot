@@ -8,6 +8,7 @@ struct ChatInputBar: View {
 
     @State private var text = ""
     @State private var isPushToTalkActive = false
+    @State private var pushToTalkTimeoutTask: Task<Void, Never>?
 
     var body: some View {
         HStack(spacing: 12) {
@@ -92,12 +93,20 @@ struct ChatInputBar: View {
 
         isPushToTalkActive = true
         speechService.startListening()
+
+        pushToTalkTimeoutTask = Task {
+            try? await Task.sleep(nanoseconds: 30_000_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run { endPushToTalkAndSubmit() }
+        }
     }
 
     /// Stops push-to-talk recording and submits the captured transcript.
     private func endPushToTalkAndSubmit() {
         guard isPushToTalkActive else { return }
         isPushToTalkActive = false
+        pushToTalkTimeoutTask?.cancel()
+        pushToTalkTimeoutTask = nil
         text = ""
         Task {
             let spoken = await speechService.stopListening().trimmingCharacters(in: .whitespacesAndNewlines)
