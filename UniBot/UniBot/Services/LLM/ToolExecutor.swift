@@ -272,6 +272,18 @@ final class ToolExecutor {
                 limit: Int(toolCall.arguments["limit"] ?? ""),
                 siteRef: toolCall.arguments["site_ref"]
             )
+        case "block_client":
+            return try await appBlockService.blockClient(
+                queryService: queryService,
+                clientSelector: toolCall.arguments["client"],
+                siteRef: toolCall.arguments["site_ref"]
+            )
+        case "unblock_client":
+            return try await appBlockService.unblockClient(
+                queryService: queryService,
+                clientSelector: toolCall.arguments["client"],
+                siteRef: toolCall.arguments["site_ref"]
+            )
         default:
             return nil
         }
@@ -4329,6 +4341,76 @@ private struct UniFiAppBlockService {
     /// Returns a string with surrounding whitespace removed, or an empty string for nil.
     private func trimmedString(_ value: String?) -> String {
         (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // MARK: - Network-level client block (stamgr)
+
+    /// Sends a stamgr command (block-sta or unblock-sta) to apply a network-level block/unblock.
+    private func stamgrCommand(_ cmd: String, mac: String, siteRef: String) async throws {
+        let path = "/proxy/network/api/s/\(siteRef)/cmd/stamgr"
+        _ = try await apiClient.postJSON(path: path, body: ["cmd": cmd, "mac": mac])
+    }
+
+    /// Blocks a client at the network level (same as the 'Block' button on the UniFi client screen).
+    func blockClient(
+        queryService: UniFiQueryService,
+        clientSelector rawClientSelector: String?,
+        siteRef rawSiteRef: String?
+    ) async throws -> String {
+        let clientSelector = (rawClientSelector ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clientSelector.isEmpty else {
+            return "Error: block_client requires 'client'."
+        }
+        let siteRef = normalizedSiteRef(rawSiteRef)
+        let clients = try await resolveClientsForAppBlock(queryService: queryService, siteRef: siteRef)
+        let client = try resolveClient(clientSelector, in: clients)
+        guard isClientAllowed(client) else {
+            let display = clientDisplayName(client)
+            return "Error: Client '\(display)' is not approved for modifications. Update Settings -> Client Modify Whitelist."
+        }
+        let mac = normalize(client["mac"] as? String ?? client["macAddress"] as? String ?? "")
+        guard !mac.isEmpty else {
+            return "Error: Could not resolve client MAC for network block."
+        }
+        try await stamgrCommand("block-sta", mac: mac, siteRef: siteRef)
+        return """
+        Client network-blocked:
+        - client: \(clientDisplayName(client))
+        - mac: \(mac)
+        - site_ref: \(siteRef)
+        - note: This is a device-level block (same as UniFi client screen Block button). All internet access is cut off.
+        """
+    }
+
+    /// Removes a network-level block for a client (same as the 'Unblock' button on the UniFi client screen).
+    func unblockClient(
+        queryService: UniFiQueryService,
+        clientSelector rawClientSelector: String?,
+        siteRef rawSiteRef: String?
+    ) async throws -> String {
+        let clientSelector = (rawClientSelector ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clientSelector.isEmpty else {
+            return "Error: unblock_client requires 'client'."
+        }
+        let siteRef = normalizedSiteRef(rawSiteRef)
+        let clients = try await resolveClientsForAppBlock(queryService: queryService, siteRef: siteRef)
+        let client = try resolveClient(clientSelector, in: clients)
+        guard isClientAllowed(client) else {
+            let display = clientDisplayName(client)
+            return "Error: Client '\(display)' is not approved for modifications. Update Settings -> Client Modify Whitelist."
+        }
+        let mac = normalize(client["mac"] as? String ?? client["macAddress"] as? String ?? "")
+        guard !mac.isEmpty else {
+            return "Error: Could not resolve client MAC for network unblock."
+        }
+        try await stamgrCommand("unblock-sta", mac: mac, siteRef: siteRef)
+        return """
+        Client network-unblocked:
+        - client: \(clientDisplayName(client))
+        - mac: \(mac)
+        - site_ref: \(siteRef)
+        - note: Device-level block removed (same as UniFi client screen Unblock button).
+        """
     }
 }
 

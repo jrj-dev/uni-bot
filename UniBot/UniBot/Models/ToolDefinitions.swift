@@ -385,6 +385,22 @@ enum ToolCatalog {
             audience: .advanced
         ),
         ToolDefinition(
+            name: "block_client",
+            description: "Network-block a client at the device level, cutting off all internet access. This is the same as pressing 'Block' on the UniFi client screen. Distinct from app-block rules (which block specific apps/categories). Use this when the user says a client is 'blocked' without specifying apps, or when unblocking fails to find an app-block rule.",
+            parameters: [
+                ToolParameter(name: "client", type: "string", description: "Client selector (name/hostname/IP/MAC/id).", required: true),
+                ToolParameter(name: "site_ref", type: "string", description: "Optional site reference. Default: default.", required: false),
+            ]
+        ),
+        ToolDefinition(
+            name: "unblock_client",
+            description: "Remove a network-level device block for a client, restoring internet access. This is the same as pressing 'Unblock' on the UniFi client screen. Use this when the user wants to unblock a client and remove_client_app_block found no app-block rules, or when the client was blocked via the UniFi app UI.",
+            parameters: [
+                ToolParameter(name: "client", type: "string", description: "Client selector (name/hostname/IP/MAC/id).", required: true),
+                ToolParameter(name: "site_ref", type: "string", description: "Optional site reference. Default: default.", required: false),
+            ]
+        ),
+        ToolDefinition(
             name: "ssh_collect_unifi_logs",
             description: "Run an approved, read-only SSH log command on a UniFi device. Requires explicit approval token before execution.",
             parameters: [
