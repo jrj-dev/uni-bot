@@ -433,3 +433,7 @@ xcodebuild -project UniBot/UniBot.xcodeproj -scheme UniBot -destination 'platfor
 - Do not commit real secrets, snapshot exports, or local network identifiers.
 - Use Keychain for app secrets and `.env.local` for script secrets.
 - Keep local-only hostnames/IPs out of committed docs where possible.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
